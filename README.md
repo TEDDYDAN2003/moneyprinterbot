@@ -1,4 +1,4 @@
-# XAUUSDm 1-Minute Wickless Structure Trading Bot (MT5 + Telegram + Backtester)
+﻿# XAUUSDm 1-Minute Wickless Structure Trading Bot (MT5 + Telegram + Backtester)
 
 A modular Python trading system for Gold (`XAUUSDm`) that translates your **Pine Script v6 `Wickless Structure Strategy`** into a tick-precision MetaTrader 5 Desktop execution bot with **multi-entry scaling**, **tick-monitored dollar TP/SL auto-closing** (e.g., close at `+$15.00` profit or a configured `$` loss), **Telegram remote control**, an **External Indicator Price Bridge**, and an **event-driven Backtester & Parameter Optimizer**.
 
