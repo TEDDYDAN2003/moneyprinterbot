@@ -1,0 +1,7 @@
+MetaTrader5>=5.0.45
+python-telegram-bot>=21.6
+PyYAML>=6.0.2
+python-dotenv>=1.0.1
+pandas>=2.2.0
+numpy>=1.26.4
+optuna>=4.0.0

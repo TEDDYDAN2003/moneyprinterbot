@@ -1,0 +1,165 @@
+mt5:
+  symbol: "XAUUSDm"
+  timeframe: "M1"
+  magic_number: 771001
+  tick_poll_interval_ms: 150
+  max_spread_points: 300       # Spread observed around 240; 300 gives buffer for live tick fluctuation
+  slippage_points: 20
+  bars_history_count: 500
+  auto_reconnect: true
+
+strategy:
+  # Modes:
+  #   "wickless_structure" -> Built-in Pine Script v6 Wickless Structure Strategy port
+  #   "structure_momentum" -> Confirmed M1 BOS/CHOCH pullbacks with M5/M15 alignment
+  #   "external_bridge"    -> Watches Entry/SL/TP prices from signals/external_signals.json or webhook
+  #   "hybrid"             -> Runs Wickless Structure AND accepts External Bridge signals
+  mode: "structure_momentum"
+
+  # ── Wickless candle rules (untouched for wickless) ──
+  tol_ticks: 0.0
+  min_body_ticks: 0.0
+
+  # ── Entry rules ──
+  # Options: "retest_limit", "retest_rejection", "immediate"
+  entry_mode: "immediate"      # Set to "immediate" to execute on current market designs without waiting
+  pip_size: 0.0                # 0 = auto (0.1 for XAU, else 10 * mintick)
+  zone_pips: 7.0               # Entry zone beyond the open edge (pips)
+  need_reject: false           # Disabled to prevent blocking entries on missing rejection candle
+  retest_bars: 4
+  cancel_on_flip: true
+
+  # ── Market structure (f_structure) ──
+  use_structure: true
+  internal_len: 2              # Fast swing detection for agile momentum
+  external_len: 5
+  choch_zone_bars: 15
+  require_external_alignment: false
+
+  # ── Consolidation ──
+  use_consolidation: true
+  consol_range_atr: true
+  consol_bars: 20
+  consol_mult: 3.5
+  consol_mixed_swings: true
+  consol_small_body_ratio: 0.35
+  consol_small_body_fraction: 0.60
+  consol_alternation_fraction: 0.55
+  block_in_consolidation: false # Disabled: prevents skipping trades when Gold M1 enters tight ranges
+
+  # ── Trade plan ──
+  pace_mode: "fast"            # Options: "fast" (6 trades at once), "medium" (3 trades), "slow" (1 trade)
+  use_sr_zones: true           # Detect M1 Support & Resistance zones from recent price action
+  sr_lookback_bars: 30         # Rolling window for Support floor & Resistance ceiling
+  sr_zone_pct: 0.30            # Lower 30% = Support (buy bounces); Upper 30% = Resistance (sell rejections)
+  allow_longs: true
+  allow_shorts: true
+  sl_live: true
+  sl_buffer_ticks: 0.0
+  tp_mode: "fixed_rr"
+  rr_value: 0.1667             # 1.00 / 6.00 = 0.1667 (1:6 RR)
+  min_rr: 0.10
+  fixed_tp_distance: 0.0       # Auto-calculated from target_tp_usd
+  fixed_sl_distance: 0.0       # Auto-calculated from target_sl_usd
+  target_tp_usd: 1.00          # Auto-calculate TP level on entry to net +$1.00 USD profit
+  target_sl_usd: 6.00          # Auto-calculate SL level on entry to cap max loss at -$6.00 USD
+
+  # ── Tick-level micro confirmation ──
+  tick_confirm_enabled: false  # Disabled to eliminate tick-momentum rejections
+  tick_impulse_window: 5
+
+  # ── Confirmed structure/momentum mode ──
+  htf_timeframes: [5, 15]
+  htf_internal_len: 2
+  htf_external_len: 5
+  require_bos_or_choch: false  # Do not wait for rare BOS; trade current market momentum
+  allow_m1_fallback: true
+  m1_fallback_max_lot: 0.05    # Aligned with 0.05 lot size (prevents lot capping)
+  allow_m1_countertrend_fallback: true
+  allow_m1_exploration: true   # Trades current M1 candle direction aligned with internal trend
+  pullback_bars: 5
+  pullback_pips: 7.0
+  rejection_required: false    # Do not wait for rejection candle
+  momentum_min_points: 0.0
+  momentum_min_ratio: 0.0
+  max_spread_points: 300
+  min_atr: 0.0
+  max_atr: 0.0
+  block_high_volatility: false
+  manual_news_windows: []
+  ma_period: 20
+  ma_slope_bars: 3
+  require_ma_slope: false      # Do not wait for MA slope alignment
+  use_fvg_zones: false         # Do not wait for FVG retests
+  use_liquidity_sweeps: false
+  require_fvg_or_sweep: false
+  sweep_lookback_bars: 10
+  fvg_min_points: 0.0
+
+risk:
+  sizing_mode: "fixed_lot"
+  risk_per_trade_pct: 1.0
+  fixed_lot: 0.05              # Default lot size requested: 0.05
+  min_lot: 0.01
+  max_lot_per_trade: 0.05
+
+  # ── Multi-entry scaling ──
+  allow_scaling: true
+  max_open_positions: 12       # Allows opening batches of 6 in fast mode
+  max_total_lots: 2.00
+  max_total_risk_pct: 100.0    # High ceiling for demo experimentation
+  scale_only_in_profit: false  # Does not block additional trades if prior trade isn't in profit yet
+  scale_min_profit_r: 0.0
+  profit_streak_scaling_enabled: false
+  profit_streak_step_wins: 2
+  profit_streak_add_lots: 0.01
+  profit_streak_max_lot: 0.05
+  profit_streak_positions_start: 3
+  profit_streak_positions_step_wins: 2
+  profit_streak_positions_add: 1
+  profit_streak_positions_max: 10
+
+  # ── Dynamic stop protection ──
+  move_to_be_at_r: 0.0         # 0 = disabled
+  trailing_atr_mult: 0.0       # 0 = disabled
+  max_trades_per_day: 0        # 0 = unlimited trades for demo
+  max_consecutive_losses: 0    # 0 = unlimited (no trade freeze)
+  loss_cooldown_minutes: 0     # 0 = disabled
+
+dollar_exits:
+  # Real-time tick-monitored USD profit & loss auto-closers
+  enabled: true
+  trade_tp_usd: 1.00           # Auto-close trade immediately when realized +$1.00 USD profit
+  trade_sl_usd: 6.00           # Auto-close trade immediately if loss drops to -$6.00 USD
+  trade_tp_usd_per_lot: 0.0    # 0 = use exact trade_tp_usd ($1.00)
+  trade_sl_usd_per_lot: 0.0    # 0 = use exact trade_sl_usd ($6.00)
+  stagnation_enabled: false    # Disabled: prevents early closing during normal fluctuations
+  stagnation_min_minutes: 15
+  stagnation_pnl_band_usd: 0.25
+  stagnation_flip_count: 6
+  basket_tp_usd: 0.0
+  basket_sl_usd: 0.0
+  daily_max_profit_usd: 500.0  # High ceiling so demo bot keeps running
+  daily_max_loss_usd: 250.0
+
+sessions:
+  enabled: false               # Disabled: allows 24-hour execution whenever market is active
+  allowed_utc_hours:
+    - [0, 24]
+
+external_bridge:
+  signal_file: "signals/external_signals.json"
+  webhook_enabled: false
+  webhook_host: "127.0.0.1"
+  webhook_port: 8787
+  default_expiry_minutes: 15
+
+telegram:
+  enabled: true
+  notify_structure_shifts: true
+  notify_setups: true
+  notify_fills_and_closes: true
+
+logging:
+  market_intel_enabled: true
+  market_intel_path: "reports/market_intel.jsonl"
