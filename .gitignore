@@ -11,3 +11,8 @@ coverage/
 .env*
 !.env.example
 reports/*.jsonl
+data/*
+!data/.gitkeep
+models/*
+!models/.gitkeep
+reports/*.parquet

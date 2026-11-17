@@ -25,6 +25,9 @@ def build_features(frame: pd.DataFrame, timeframe_minutes: int) -> pd.DataFrame:
         raise ValueError("timeframe_minutes must be positive")
     source = validate_ohlcv(frame)
     result = pd.DataFrame(index=source.index)
+    result["open"] = source["open"]
+    result["high"] = source["high"]
+    result["low"] = source["low"]
     result["close"] = source["close"]
     result["return_1"] = source["close"].pct_change()
     result["range"] = source["high"] - source["low"]

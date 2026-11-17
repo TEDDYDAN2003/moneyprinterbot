@@ -9,7 +9,7 @@ import pandas as pd
 
 from bot.config.loader import load_yaml
 from bot.config.schema import validate_config
-from bot.data.downloader import load_ohlcv_csv
+from bot.data.downloader import fetch_mt5_m1, load_ohlcv, save_ohlcv_parquet
 from bot.features.pipeline import build_multitimeframe_features
 from bot.labeling.triple_barrier import triple_barrier_labels
 from bot.models.baseline import LogisticBaseline
@@ -20,6 +20,11 @@ def main() -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
     validate = subparsers.add_parser("validate-config")
     validate.add_argument("--config", default="config.yaml")
+    download = subparsers.add_parser("download")
+    download.add_argument("--symbol", default="XAUUSDm")
+    download.add_argument("--years", type=int, default=3)
+    download.add_argument("--out", default="data/bars/xauusdm_m1.parquet")
+    download.add_argument("--allow-partial", action="store_true")
     feature_parser = subparsers.add_parser("features")
     feature_parser.add_argument("--csv", required=True)
     feature_parser.add_argument("--out", required=True)
@@ -36,8 +41,15 @@ def main() -> int:
         print(json.dumps(config.model_dump(), indent=2, default=str))
         return 0
     if args.command == "features":
-        bars = load_ohlcv_csv(args.csv)
+        bars = load_ohlcv(args.csv)
         build_multitimeframe_features(bars).to_parquet(args.out)
+        return 0
+    if args.command == "download":
+        save_ohlcv_parquet(
+            fetch_mt5_m1(args.symbol, args.years, allow_partial=args.allow_partial),
+            args.out,
+        )
+        print(f"saved {args.out}")
         return 0
     if args.command == "label":
         frame = pd.read_parquet(args.features)
