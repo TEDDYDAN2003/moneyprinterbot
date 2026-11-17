@@ -1,0 +1,7 @@
+2026-11-17 09:03:14,197 | WARNING | bot.telegram_bot | Telegram disabled or TELEGRAM_BOT_TOKEN missing; running headless engine loop.
+2026-11-17 09:03:14,590 | INFO    | bot.mt5_adapter | Connected to MT5 terminal for symbol XAUUSDm.
+2026-11-17 09:03:14,621 | INFO    | bot.engine | LiveTradingEngine started (XAUUSDm M1, poll=0.15s).
+2026-11-17 09:03:18,228 | INFO    | bot.structure_momentum_strategy | Structure momentum setup skipped: intrabar_pending_cancelled_by_consolidation_or_htf_zone
+2026-11-17 09:03:20,598 | INFO    | bot.structure_momentum_strategy | Structure momentum setup skipped: intrabar_pending_cancelled_by_consolidation_or_htf_zone
+2026-11-17 09:03:27,984 | INFO    | bot.structure_momentum_strategy | Structure momentum setup skipped: intrabar_pending_cancelled_by_consolidation_or_htf_zone
+2026-11-17 09:03:34,465 | INFO    | bot.structure_momentum_strategy | Structure momentum setup skipped: intrabar_pending_cancelled_by_consolidation_or_htf_zone

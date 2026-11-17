@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xauusd-adaptive-bot"
+version = "0.1.0"
+description = "Leakage-safe, multi-timeframe XAUUSD research and execution system"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy",
+  "pandas",
+  "pydantic>=2",
+  "pyyaml",
+]
+
+[project.optional-dependencies]
+research = ["lightgbm", "optuna", "pyarrow", "scikit-learn", "shap"]
+live = ["MetaTrader5", "river"]
+test = ["pytest", "hypothesis"]
+
+[project.scripts]
+xauusd-bot = "bot.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
