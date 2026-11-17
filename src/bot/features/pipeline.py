@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import pandas as pd
 
-from bot.data.bar_builder import validate_ohlcv
+from bot.data.bar_builder import build_timeframes, validate_ohlcv
+from bot.time.sessions import session_flags
 
 
 def _atr(frame: pd.DataFrame, period: int) -> pd.Series:
@@ -39,4 +40,28 @@ def build_features(frame: pd.DataFrame, timeframe_minutes: int) -> pd.DataFrame:
         source["close"] < source["open"]
     ).astype("int8")
     result["timeframe_minutes"] = timeframe_minutes
+    return result
+
+
+def build_multitimeframe_features(
+    m1: pd.DataFrame, timeframes: tuple[int, ...] = (1, 3, 5, 10, 15)
+) -> pd.DataFrame:
+    """Align completed higher-timeframe features to each M1 close.
+
+    A higher-timeframe feature is shifted by one completed bar before it is
+    forward-filled, so a decision never sees the still-forming higher bar.
+    """
+    if 1 not in timeframes:
+        raise ValueError("The base timeframe must include 1 minute")
+    source = validate_ohlcv(m1)
+    bars = build_timeframes(source, timeframes)
+    base = build_features(bars[1], 1)
+    result = base.copy()
+    for minute in timeframes:
+        if minute == 1:
+            continue
+        higher = build_features(bars[minute], minute).shift(1)
+        higher = higher.add_prefix(f"tf{minute}_")
+        result = result.join(higher.reindex(result.index, method="ffill"))
+    result = result.join(session_flags(result.index))
     return result
