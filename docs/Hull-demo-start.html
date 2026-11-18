@@ -40,7 +40,8 @@
 <script>
 'use strict';
 const counts = {slow: [1, 1], medium: [3, 4], fast: [6, 7]};
-const presets = [ ['XAUUSD','0.09'], ['EURUSD','0.01'], ['GBPUSD','0.01'], ['USDJPY','0.01'], ['NAS100USD','0.01'], ['1HZ100V','0.01'] ];
+const presets = [ ['XAUUSD','0.09'], ['EURUSD','0.05'], ['GBPUSD','0.05'], ['USDJPY','1.3'], ['USTEC100','1'], ['US30','1'], ['1HZ100V','0.01'] ];
+const presetKeys = {USTEC100:'NAS100USD', US30:'US30'};
 const trio = new Set(['XAUUSD', 'EURUSD', 'GBPUSD']);
 const id = name => document.getElementById(name);
 const body = id('profiles');
@@ -49,12 +50,13 @@ const copyLine = id('copy-line'), copyRows = id('copy-rows'), feedback = id('fee
 
 for (const [key, lot] of presets) {
   const row = body.insertRow();
-  row.dataset.key = key;
+  row.dataset.key = presetKeys[key] || key;
+  const displayKey = key;
   // key and lot come from the fixed preset list, never from a message or URL.
-  row.innerHTML = `<td><label><input class="use" type="checkbox"> ${key}</label></td>
-    <td><input class="lot" type="number" min="0.00000001" step="any" aria-label="${key} lot per ticket"></td>
-    <td><input class="tp" type="number" min="0.00000001" step="any" aria-label="${key} target USD per ticket"></td>
-    <td><select aria-label="${key} rate"><option>slow</option><option>medium</option><option>fast</option></select></td><td class="batch"></td>`;
+  row.innerHTML = `<td><label><input class="use" type="checkbox"> ${displayKey}</label></td>
+    <td><input class="lot" type="number" min="0.00000001" step="any" aria-label="${displayKey} lot per ticket"></td>
+    <td><input class="tp" type="number" min="0.00000001" step="any" aria-label="${displayKey} target USD per ticket"></td>
+    <td><select aria-label="${displayKey} rate"><option>slow</option><option>medium</option><option>fast</option></select></td><td class="batch"></td>`;
   row.querySelector('.use').checked = key === 'XAUUSD'; // Never implicitly select the trio.
   row.querySelector('.lot').value = lot;
   row.querySelector('.tp').value = '10';
@@ -107,11 +109,12 @@ async function copyField(field, message) {
 copyLine.addEventListener('click', () => copyField(lineBox, 'Start line copied. Paste it into your Windows agent.'));
 copyRows.addEventListener('click', () => copyField(rowsBox, 'Selected rows copied, including the chosen rates.'));
 id('trio').addEventListener('click', () => {
+  const defaultLots = {XAUUSD:'0.09', EURUSD:'0.05', GBPUSD:'0.05'};
   for (const row of body.rows) {
     const selected = trio.has(row.dataset.key);
     row.querySelector('.use').checked = selected;
     if (!selected) continue;
-    row.querySelector('.lot').value = row.dataset.key === 'XAUUSD' ? '0.09' : '0.01';
+    row.querySelector('.lot').value = defaultLots[row.dataset.key];
     row.querySelector('.tp').value = '10';
     row.querySelector('select').value = 'slow';
   }

@@ -243,6 +243,23 @@ class Desk:
             retcode=getattr(res, "retcode", None),
         )
 
+    def close_opposite(self, name, reading):
+        """Close all owned positions against a fresh opposite Hull label."""
+        if not self.armed or not reading.side:
+            return 0
+        ps, _ = snapshot(self.mt)
+        closed = 0
+        for pos in ps:
+            if pos.symbol != name or not self.owned(pos):
+                continue
+            pos_side = 1 if pos.type == self.mt.POSITION_TYPE_BUY else -1
+            if pos_side != reading.side:
+                self.close_owned(pos, "opposite_hull_label")
+                closed += 1
+        if closed:
+            self.persist()
+        return closed
+
     def supervise(self):
         if not self.armed:
             return

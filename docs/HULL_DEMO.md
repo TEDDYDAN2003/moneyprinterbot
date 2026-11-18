@@ -6,6 +6,8 @@ This is a **Python companion for MT5 Desktop on Windows**, not an `.ex5` file. I
 
 With your supplied defaults, `a = WMA(2 × WMA(hl2,12) − WMA(hl2,24),5)` and `b = WMA(3 × WMA(close,4) − WMA(close,6) − WMA(close,12),12)`. BUY when `b > a` now **and** `b < a` on the previous close; SELL for the reverse. An equal value is not a crossover. Missing WMA windows do not become zeros. Look only at completed candles (`copy_rates_from_pos` starts at index **1**, not live index 0). Startup / long-gap history is warm-up only. The first fresh observed quote at or after the signal close is eligible, not a retrospective fill at the label or candle wick.
 
+When `hull.indicator.exit_opposite` is `true` (the default), a fresh opposite Hull label closes every owned protected ticket for that symbol before the reversal batch is submitted. This is immediate label reversal, not a wait for the old target or a stop. Historical startup labels are discarded by the stream warm-up and do not open or close tickets.
+
 The chart **labels** and its **simulation entries** are different. The active profile follows all raw labels; neither the EMA 200, trendlines, a zone retest nor another momentum condition can change the direction. Broker/risk checks can prevent a ticket; it is still a logged label. Optional `signal: ema_plan` adds a close-side EMA filter (first-close-seeded EMA, long warm-up); it is not the selected behavior. This execution path intentionally does **not** use the chart simulator's 10%-of-equity sizing, 1.5R target, opposite-signal exit or graphics.
 
 ## Which candle supplies the stop?

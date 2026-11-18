@@ -21,6 +21,8 @@ models/*
 !models/.gitkeep
 reports/*.parquet
 research/directional_scalping/results/
+config.demo.local.yaml
+src/*.egg-info/
 reports/zone_runtime/
 reports/zone_replay*/
 

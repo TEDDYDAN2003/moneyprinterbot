@@ -257,6 +257,17 @@ def test_fill_retargets_to_actual_open_and_target_is_not_a_momentum_exit(factory
     assert not mt.positions and mt.requests[-1]["position"] == 1
 
 
+def test_opposite_hull_label_closes_held_side_before_reversal(factory):
+    mt, d, _ = factory("slow")
+    buy = replace(sig(side=1), close_s=T - 1)
+    assert d.batch("XAUUSDm", buy) == "demo_batch_sent"
+    assert len(mt.positions) == 1
+
+    sell = replace(sig(sl=2000.05, side=-1), close_s=T)
+    assert d.close_opposite("XAUUSDm", sell) == 1
+    assert not mt.positions
+
+
 def test_protection_entry_age_foreign_positions_and_kill_ownership(factory):
     mt, d, _ = factory()
     mt.q.time_msc -= 10000

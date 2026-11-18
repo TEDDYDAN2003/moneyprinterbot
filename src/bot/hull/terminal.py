@@ -285,6 +285,17 @@ def run(
                         if not data_ok or not history_ok:
                             why = "data_or_deal_history_unavailable"
                         elif picked:
+                            if h.indicator.exit_opposite:
+                                reversed_closed = d.close_opposite(name, picked)
+                                if reversed_closed:
+                                    emit(
+                                        "opposite_label_exit",
+                                        symbol=name,
+                                        tf=picked.tf,
+                                        signal=picked.close_s,
+                                        closed_positions=reversed_closed,
+                                        next_side="BUY" if picked.side == 1 else "SELL",
+                                    )
                             why = d.batch(name, picked)
                         emit(
                             "label_decision",

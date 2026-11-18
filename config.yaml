@@ -308,6 +308,7 @@ hull:
     hull_len: 24
     source: hl2
     signal: labels        # every strict closed-bar cross; no EMA/zone/momentum gate
+    exit_opposite: true   # close owned opposite-side tickets, then start the Hull reversal
     ema_length: 200
     stop: local_pullback  # recent preceding wicks, not a market-structure HH/HL
     pullback_bars: 7      # capped at the preceding opposite crossover; excludes signal bar
@@ -327,8 +328,9 @@ hull:
     max_entry_age_s: 8
   symbols:                # suggested sizes only; invalid broker lots are refused
     XAUUSD:   {aliases: [XAUUSDm, XAUUSD, GOLD], lots: 0.09, target_usd: 10, rate: slow, pip_size: 0.01, max_spread: 0.300}
-    EURUSD:   {aliases: [EURUSDm, EURUSD], lots: 0.01, target_usd: 10, rate: slow, pip_size: 0.0001, max_spread: 0.00020}
-    GBPUSD:   {aliases: [GBPUSDm, GBPUSD], lots: 0.01, target_usd: 10, rate: slow, pip_size: 0.0001, max_spread: 0.00030}
-    USDJPY:   {aliases: [USDJPYm, USDJPY], lots: 0.01, target_usd: 10, rate: slow, pip_size: 0.01, max_spread: 0.025}
-    NAS100USD: {aliases: [NAS100USD, NAS100, US100, USTEC, USTECm], lots: 0.01, target_usd: 10, rate: slow, pip_size: 1, max_spread: 3.0}
+    EURUSD:   {aliases: [EURUSDm, EURUSD], lots: 0.05, target_usd: 10, rate: slow, pip_size: 0.0001, max_spread: 0.00020}
+    GBPUSD:   {aliases: [GBPUSDm, GBPUSD], lots: 0.05, target_usd: 10, rate: slow, pip_size: 0.0001, max_spread: 0.00030}
+    USDJPY:   {aliases: [USDJPYm, USDJPY], lots: 1.3, target_usd: 10, rate: slow, pip_size: 0.01, max_spread: 0.025}
+    NAS100USD: {broker_symbol: USTEC_x100m, aliases: [NAS100USD, NAS100, US100, USTEC, USTECm, USTEC_x100m], lots: 1, target_usd: 10, rate: slow, pip_size: 1, max_spread: 3.0}
+    US30:     {broker_symbol: US30m, aliases: [US30, US30m, 'Wall Street 30', 'US Wall Street 30'], lots: 1, target_usd: 10, rate: slow, pip_size: 1, max_spread: 3.0}
     1HZ100V:   {aliases: [1HZ100V, 'Volatility 100 (1s) Index'], session: continuous, lots: 0.01, target_usd: 10, rate: slow, pip_size: 0.01}

@@ -20,6 +20,7 @@ class Indicator(Strict):
     hull_len: int = Field(24, ge=2, le=500)
     source: Literal["open", "high", "low", "close", "hl2", "hlc3", "ohlc4"] = "hl2"
     signal: Literal["labels", "ema_plan"] = "labels"
+    exit_opposite: bool = True
     ema_length: int = Field(200, ge=1, le=2000)
     stop: Literal["local_pullback", "confirmed_pivot"] = "local_pullback"
     pullback_bars: int = Field(7, ge=1, le=100)
