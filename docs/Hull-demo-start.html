@@ -13,9 +13,10 @@
 <section class="panel" aria-labelledby="pick-title">
 <h2 id="pick-title">1 · Choose profiles</h2>
 <p><span class="chip">M1</span> <span class="chip">M2</span> <span class="chip">M5</span> One observer. Only checked rows will be copied.</p>
-<button class="secondary preset" type="button" id="trio">Use XAUUSD, EURUSD &amp; GBPUSD · all slow</button>
+<button class="secondary preset" type="button" id="trio">trio-slow · gold 0.09, EUR/GBP 0.01 lot per ticket</button>
+<button class="secondary preset" type="button" id="trio-config">Configured trio · gold 0.10, EUR/GBP 1.00 lot per ticket</button>
 <div class="scroll"><table id="profile-table"><thead><tr><th>Use / symbol</th><th>Lot per ticket</th><th>TP USD / ticket</th><th>Rate</th><th>Batch if all fill</th></tr></thead><tbody id="profiles"></tbody></table></div>
-<p class="note">Slow = 1 ticket; medium = 3–4; fast = 6–7. Batch totals are estimates, <strong>not</strong> per-ticket inputs. The account’s risk and exposure limits may veto the batch. Targets are not guaranteed profits.</p>
+<p class="note">Slow = <strong>10 tickets</strong>; medium = 3–4; fast = 6–7. Batch totals are estimates, <strong>not</strong> per-ticket inputs. The account’s risk and exposure limits may veto the batch. Targets are not guaranteed profits.</p>
 </section>
 <section class="panel" aria-labelledby="send-title">
 <h2 id="send-title">2 · Paste this into your desktop agent</h2>
@@ -31,7 +32,7 @@
 </section>
 <section class="panel" aria-labelledby="agent-title">
 <h2 id="agent-title">3 · What the agent does next</h2>
-<p><strong>Desktop agent:</strong> always consult this page and the root <code>README.md</code> for a Hull startup. Use the operator’s pasted profiles, not this page’s defaults. Run the checks and verify the USD hedging demo terminal, then launch one M1/M2/M5 <strong>observer only</strong> with those exact profiles. Report its log path. On ambiguous rows or failed checks, stop and ask.</p>
+<p><strong>Desktop agent:</strong> always consult this page and the root <code>README.md</code> for a Hull startup. Use the operator’s pasted profiles, not this page’s defaults. Check the pulled commit and the observer’s startup version as described in the README. Verify the USD hedging demo terminal, then launch one M1/M2/M5 <strong>observer only</strong> with those exact profiles. Report its log path. On ambiguous rows or failed checks, stop and ask.</p>
 <details><summary>Read-only preflight command for these profiles</summary><pre id="cmd">Select at least one valid profile.</pre></details>
 <p class="note">Only a separate, explicit <strong>ARM DEMO</strong> from the operator can authorize demo orders after rechecking the account and profiles. A table, a start line or this page is not authorization.</p>
 </section>
@@ -108,18 +109,19 @@ async function copyField(field, message) {
 }
 copyLine.addEventListener('click', () => copyField(lineBox, 'Start line copied. Paste it into your Windows agent.'));
 copyRows.addEventListener('click', () => copyField(rowsBox, 'Selected rows copied, including the chosen rates.'));
-id('trio').addEventListener('click', () => {
-  const defaultLots = {XAUUSD:'0.10', EURUSD:'1', GBPUSD:'1'};
+function selectSlowTrio(lots) {
   for (const row of body.rows) {
     const selected = trio.has(row.dataset.key);
     row.querySelector('.use').checked = selected;
     if (!selected) continue;
-    row.querySelector('.lot').value = defaultLots[row.dataset.key];
+    row.querySelector('.lot').value = lots[row.dataset.key];
     row.querySelector('.tp').value = '10';
     row.querySelector('select').value = 'slow';
   }
   update();
-});
+}
+id('trio').addEventListener('click', () => selectSlowTrio({XAUUSD:'0.09', EURUSD:'0.01', GBPUSD:'0.01'}));
+id('trio-config').addEventListener('click', () => selectSlowTrio(Object.fromEntries(presets)));
 body.addEventListener('input', update); body.addEventListener('change', update);
 update();
 </script></body></html>

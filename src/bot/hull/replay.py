@@ -20,6 +20,7 @@ from bot.zones.hours import Hours
 from bot.zones.orders import EquityGuard
 from bot.zones.replay import file_hash, iso_ms
 
+from .entry_clock import QUOTE_POLICY, check_quote
 from .orders import Block, Exposure, Grid, count_for, make_plan, select_labels
 from .signal import ENTRY_AUDIT_FIELDS, Hull, Reading
 from .structure import ENTRY_POLICY
@@ -79,9 +80,7 @@ class Account:
             self.guard.start = equity
             self.guard.day_halt = False
         self.guard.peak = max(self.guard.peak, equity)
-        self.guard.dd_halt |= (
-            self.guard.peak - equity >= self.lim.drawdown_usd - 1e-8
-        )
+        self.guard.dd_halt |= self.guard.peak - equity >= self.lim.drawdown_usd - 1e-8
         return "drawdown_halt" if self.guard.dd_halt else ""
 
     def close(self, why, ms, px):
@@ -171,11 +170,14 @@ class Account:
                     "opposite_hull_label", ms, bid if self.pos[1].side == 1 else ask
                 )
             if d:
+                # The ordered feed starts each minute with its first actual tick.
+                # Use the historic tick clock, never today's wall time or a bar-open fill.
+                timing = check_quote(d.close_s, now, self.lim, ms, bid, ask)
                 why = (
                     "symbol_busy"
                     if self.pos
-                    else "stale_label_or_quote"
-                    if not d.close_s <= now <= d.close_s + self.lim.max_entry_age_s
+                    else timing.reason
+                    if timing.reason != "ready"
                     else halt
                     or (
                         self.hours.status(now)[0]
@@ -333,6 +335,7 @@ def study(minutes, cfg, h, p, frames, lo, hi, unit, contract, conversion, rates,
         "rates": {},
         "timeframes": frames,
         "entry_policy": ENTRY_POLICY,
+        "entry_quote_policy": QUOTE_POLICY,
         "per_ticket_target": p.target_usd,
         "profile": p.model_dump(),
         "indicator": h.indicator.model_dump(),

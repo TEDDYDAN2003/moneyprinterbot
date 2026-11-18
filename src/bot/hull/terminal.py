@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 import time
 from contextlib import ExitStack
 from dataclasses import asdict
@@ -15,6 +16,7 @@ from bot.zones.engine import Bar
 
 from .config import COUNTS, FRAMES
 from .desk import Desk, identity_check, resolve
+from .entry_clock import QUOTE_POLICY, WAITING, poll_delay, utc
 from .orders import Grid, select_labels
 from .signal import Hull
 from .structure import ENTRY_POLICY
@@ -25,7 +27,8 @@ def describe(r):
         **asdict(r),
         **r.entry_audit(),
         "direction": "BUY" if r.label == 1 else "SELL" if r.label == -1 else "NONE",
-        "signal_close_utc": datetime.fromtimestamp(r.close_s, UTC).isoformat(),
+        "bar_open_utc": utc(r.close_s - 60 * r.tf),
+        "signal_close_utc": utc(r.close_s),
         "anchor_bar_utc": datetime.fromtimestamp(r.anchor_s, UTC).isoformat()
         if r.anchor_s is not None
         else None,
@@ -121,6 +124,114 @@ def sync_deals(d, now):
     return True
 
 
+def source_build():
+    """Identify the actual imported checkout once; never require Git or network to scan."""
+    module = Path(__file__).resolve()
+    root = module.parents[3]
+    head = None
+    if (root / ".git").exists() and (root / "src/bot/hull/terminal.py") == module:
+        try:
+            r = subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "--verify", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+            candidate = r.stdout.strip()
+            if (
+                r.returncode == 0
+                and len(candidate) in (40, 64)
+                and all(c in "0123456789abcdef" for c in candidate)
+            ):
+                head = candidate
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return {"source_module": str(module), "checkout_head_at_start": head}
+
+
+def dispatch(d, name, labels, *, data_ok, history_ok, rewarmed):
+    """Handle fresh labels once; a pending tick-read never replays an opposite exit."""
+    window = d.waiting.get(name)
+    unavailable = not (data_ok and history_ok)
+    if window is not None:
+        stamp = window.reading.close_s
+        # A native lane normally emits only once. Never replay its exit or reset
+        # the window if the same closed reading is presented twice.
+        labels = [
+            r for r in labels if r.close_s != stamp or r.tf not in window.observed_lanes
+        ]
+        if unavailable or rewarmed or any(r.side and r.close_s > stamp for r in labels):
+            reason = (
+                "data_or_deal_history_unavailable"
+                if unavailable
+                else "first_quote_wait_rewarmed"
+                if rewarmed
+                else "first_quote_wait_superseded"
+            )
+            d.cancel_wait(name, reason)
+            window = None
+    if not labels and window is None:
+        return
+    original, entry, why = select_labels(labels)
+    raw_tf = original.tf if original else None
+    if unavailable:
+        why = "data_or_deal_history_unavailable"
+    else:
+        # This is intentionally the original, pre-structure opposite-label selector.
+        if original is not None and d.h.indicator.exit_opposite:
+            closed = d.close_opposite(name, original)
+            if closed:
+                d.emit(
+                    "opposite_label_exit",
+                    symbol=name,
+                    tf=raw_tf,
+                    signal=original.close_s,
+                    closed_positions=closed,
+                    next_side="BUY" if original.side == 1 else "SELL",
+                )
+        if window is not None:
+            # MT5 may publish two native lanes for the SAME close on different polls.
+            # Arbitrate those immutable readings before the first usable quote only.
+            # No older label, later price or duplicate can grant a second reservation.
+            if labels:
+                same = [r for r in labels if r.close_s == window.reading.close_s]
+                _, pick, why = select_labels([window.reading, *same])
+                if pick is None:
+                    d.cancel_wait(name, why)  # conflicting qualified directions
+                    return
+                window.observed_lanes.update(r.tf for r in same)
+                window.reading = pick
+            why = d.resume_first_quote(name)
+            if why != WAITING:
+                d.emit(
+                    "label_decision",
+                    symbol=name,
+                    tf=window.reading.tf,
+                    raw_selected_tf=window.raw_tf,
+                    close_s=window.reading.close_s,
+                    polls=window.polls,
+                    outcome=why,
+                )
+            return
+        if entry is not None:
+            why = d.batch(
+                name,
+                entry,
+                raw_tf=raw_tf,
+                observed_lanes=(r.tf for r in labels if r.close_s == entry.close_s),
+            )
+    if why != WAITING:
+        d.emit(
+            "label_decision",
+            symbol=name,
+            tf=entry.tf if entry else None,
+            raw_selected_tf=raw_tf,
+            close_s=entry.close_s if entry else max(v.close_s for v in labels),
+            outcome=why,
+        )
+
+
 def run(
     cfg,
     h,
@@ -193,6 +304,8 @@ def run(
             "account_expert_allowed": bool(a.trade_expert and a.trade_allowed),
             "timeframes": list(frames),
             "entry_policy": ENTRY_POLICY,
+            "entry_quote_policy": QUOTE_POLICY,
+            **source_build(),
             "specs": specs,
             "limits": limits.model_dump(),
             "indicator": h.indicator.model_dump(),
@@ -256,6 +369,7 @@ def run(
                 )  # coexistence with old checkout in this directory
             state = json.loads(path.read_text()) if armed and path.exists() else {}
             d = Desk(mt, cfg, h, syms, identity, state, path, emit, armed)
+            locks.callback(d.cancel_all_waits)
             streams = {
                 (name, tf): Stream(tf, h.indicator, p.pip_size)
                 for name, (_, p) in syms.items()
@@ -276,45 +390,41 @@ def run(
                 for name in syms:
                     ds = []
                     data_ok = True
+                    rewarmed = False
                     for tf in frames:
                         reading, why = streams[name, tf].refresh(mt, name, time.time())
+                        rewarmed |= why == "warmup_only"
                         if why == "history_unavailable":
                             data_ok = False
                             emit("data_unavailable", symbol=name, tf=tf)
                         if reading and reading.label:
                             ds.append(reading)
-                            emit("closed_label", symbol=name, **describe(reading))
-                    if ds:
-                        original, entry, why = select_labels(ds)
-                        if not data_ok or not history_ok:
-                            why = "data_or_deal_history_unavailable"
-                        else:
-                            # Preserve the configured exit on the PRE-filter candidate.
-                            if original is not None and h.indicator.exit_opposite:
-                                reversed_closed = d.close_opposite(name, original)
-                                if reversed_closed:
-                                    emit(
-                                        "opposite_label_exit",
-                                        symbol=name,
-                                        tf=original.tf,
-                                        signal=original.close_s,
-                                        closed_positions=reversed_closed,
-                                        next_side="BUY"
-                                        if original.side == 1
-                                        else "SELL",
-                                    )
-                            if entry is not None:
-                                why = d.batch(name, entry)
-                        emit(
-                            "label_decision",
-                            symbol=name,
-                            tf=entry.tf if entry else None,
-                            raw_selected_tf=original.tf if original else None,
-                            close_s=max(v.close_s for v in ds),
-                            outcome=why,
-                        )
+                            emit(
+                                "closed_label",
+                                symbol=name,
+                                detected_lag_ms=round(
+                                    (time.time() - reading.close_s) * 1000, 3
+                                ),
+                                **describe(reading),
+                            )
+                    dispatch(
+                        d,
+                        name,
+                        ds,
+                        data_ok=data_ok,
+                        history_ok=history_ok,
+                        rewarmed=rewarmed,
+                    )
                 if iterations is None or num < iterations:
-                    time.sleep(poll)
+                    time.sleep(
+                        poll_delay(
+                            time.time(),
+                            frames,
+                            poll,
+                            limits.max_entry_age_s,
+                            bool(d.waiting),
+                        )
+                    )
     finally:
         mt.shutdown()
 

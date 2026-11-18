@@ -2,191 +2,19 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
-from pathlib import Path
 from types import SimpleNamespace as NS
 
 import pytest
-from hull_cases import PATH, known_range, sequence
+from hull_cases import PATH, sequence
+from hull_mt import MT, ROOT, T, sig
 
 from bot.config.loader import load_yaml
 from bot.execution.demo_runner import DemoSafetyError
 from bot.hull.config import HullConfig, selection
-from bot.hull.desk import Desk, identity_check, resolve
+from bot.hull.desk import identity_check, resolve
+from bot.hull.entry_clock import WAITING
 from bot.hull.orders import Block, Grid, target
-from bot.hull.signal import Reading
 from bot.hull.terminal import Stream, run
-
-T = 1794312000  # Tue 12:00 UTC
-ROOT = Path(__file__).resolve().parents[1]
-
-
-class MT:
-    ACCOUNT_TRADE_MODE_DEMO = 0
-    ACCOUNT_MARGIN_MODE_RETAIL_HEDGING = 2
-    POSITION_TYPE_BUY = ORDER_TYPE_BUY = 0
-    ORDER_TYPE_SELL = 1
-    TRADE_ACTION_DEAL = 1
-    TRADE_ACTION_SLTP = 6
-    ORDER_TIME_GTC = 0
-    ORDER_FILLING_FOK = 0
-    TRADE_RETCODE_DONE = 10009
-    SYMBOL_TRADE_MODE_DISABLED = 0
-    SYMBOL_TRADE_MODE_CLOSEONLY = 3
-    SYMBOL_TRADE_MODE_SHORTONLY = 2
-    SYMBOL_TRADE_MODE_LONGONLY = 1
-    TIMEFRAME_M1 = 1
-    TIMEFRAME_M2 = 2
-    TIMEFRAME_M5 = 5
-
-    def __init__(self):
-        self.a = NS(
-            connected=True,
-            login=1,
-            server="t",
-            trade_mode=0,
-            margin_mode=2,
-            currency="USD",
-            trade_allowed=True,
-            trade_expert=True,
-            equity=10000.0,
-            margin_free=9000.0,
-        )
-        self.i = NS(
-            name="XAUUSDm",
-            trade_tick_size=0.001,
-            point=0.001,
-            digits=3,
-            volume_min=0.01,
-            volume_max=100.0,
-            volume_step=0.01,
-            trade_stops_level=0,
-            trade_freeze_level=0,
-            trade_mode=4,
-            filling_mode=1,
-            trade_contract_size=100,
-            currency_profit="USD",
-        )
-        self.q = NS(time_msc=T * 1000 + 100, bid=2000.0, ask=2000.1)
-        self.positions = []
-        self.orders = []
-        self.catalog = [self.i]
-        self.requests = []
-        self.retprice = None
-        self.bad = False
-
-    def account_info(self):
-        return self.a
-
-    def terminal_info(self):
-        return self.a
-
-    def symbol_info(self, n):
-        return self.i
-
-    def symbol_select(self, *args):
-        return True
-
-    def symbols_get(self):
-        return self.catalog
-
-    def symbol_info_tick(self, n):
-        return self.q
-
-    def positions_get(self, ticket=None):
-        return [p for p in self.positions if ticket is None or p.ticket == ticket]
-
-    def orders_get(self):
-        return self.orders
-
-    def order_calc_profit(self, tp, n, l, a, b):
-        return (1 if tp == 0 else -1) * (b - a) * l * 100
-
-    def order_calc_margin(self, *args):
-        return 80.0
-
-    def order_check(self, r):
-        return NS(retcode=0, margin_free=8900.0)
-
-    def order_send(self, r):
-        self.requests.append(dict(r))
-        ret = NS(retcode=10009)
-        if self.bad:
-            return None
-        if "position" in r:
-            p = self.positions_get(ticket=r["position"])[0]
-            if r["action"] == 6:
-                p.sl = r["sl"]
-                p.tp = r["tp"]
-            else:
-                self.positions.remove(p)
-            return ret
-        i = len(self.requests)
-        fill = self.retprice or r["price"]
-        p = NS(
-            ticket=i,
-            magic=r["magic"],
-            symbol=r["symbol"],
-            type=r["type"],
-            sl=r["sl"],
-            tp=r["tp"],
-            volume=r["volume"],
-            price_open=fill,
-            profit=0.0,
-        )
-        self.positions.append(p)
-        return NS(retcode=10009, volume=r["volume"], price=fill, deal=i)
-
-
-def sig(sl=1999.95, side=1):
-    return Reading(
-        T,
-        1,
-        2000.0,
-        2000.0,
-        2001.0,
-        2002.0,
-        0.4,
-        side,
-        side,
-        "ready",
-        sl + side * 0.04,
-        T - 120,
-        sl,
-        T - 300,
-        4,
-        None,
-        None,
-        known_range(side, 2000.0, T),
-    )
-
-
-@pytest.fixture
-def factory(tmp_path, monkeypatch):
-    cfg = load_yaml(ROOT / "config.yaml")
-    cfg["run"]["mode"] = "demo"
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("bot.hull.desk.time.time", lambda: T + 0.3)
-
-    def go(rate="slow", armed=True, state=None, mt=None):
-        mt = mt or MT()
-        h = HullConfig.model_validate(cfg["hull"])
-        prof = selection(h, ["XAUUSD"], rate=rate)
-        syms = resolve(mt, prof)
-        logs = []
-        desk = Desk(
-            mt,
-            cfg,
-            h,
-            syms,
-            (1, "t"),
-            state or {},
-            tmp_path / "state.json",
-            lambda event, **kw: logs.append((event, kw)),
-            armed,
-        )
-        return mt, desk, logs
-
-    return go
 
 
 @pytest.mark.parametrize(
@@ -200,9 +28,9 @@ def factory(tmp_path, monkeypatch):
     ],
 )
 def test_exact_batch_range_per_ticket_tp_dynamic_sl_no_five_dollar_clip(
-    factory, rate, sl, legs
+    hull_desk, rate, sl, legs
 ):
-    mt, d, logs = factory(rate)
+    mt, d, logs = hull_desk(rate)
     s = sig(sl)
     assert d.batch("XAUUSDm", s) == "demo_batch_sent"
     assert len(mt.positions) == legs
@@ -218,8 +46,8 @@ def test_exact_batch_range_per_ticket_tp_dynamic_sl_no_five_dollar_clip(
     assert any(x[0] == "batch_preview" for x in logs)
 
 
-def test_nothing_sent_if_batch_minimum_does_not_fit(factory):
-    mt, d, log = factory("fast")
+def test_nothing_sent_if_batch_minimum_does_not_fit(hull_desk):
+    mt, d, log = hull_desk("fast")
     d.lim = d.lim.model_copy(update={"max_open_risk_usd": 0.1})
     assert d.batch("XAUUSDm", sig(1999.1)) == "portfolio_risk_limit"
     veto = next(data for name, data in log if name == "risk_veto")
@@ -227,14 +55,14 @@ def test_nothing_sent_if_batch_minimum_does_not_fit(factory):
     assert not mt.requests
 
 
-def test_shadow_and_unknown_ack_never_resubmit(factory):
-    mt, d, _ = factory(armed=False)
+def test_shadow_and_unknown_ack_never_resubmit(hull_desk):
+    mt, d, _ = hull_desk(armed=False)
     assert d.batch("XAUUSDm", sig()) == "shadow_plan_only" and not mt.requests
-    mt, d, _ = factory("fast")
+    mt, d, _ = hull_desk("fast")
     mt.bad = True
     assert "manual_hold" in d.batch("XAUUSDm", sig())
     assert len(mt.requests) == 1
-    _, d2, _ = factory("fast", state=json.loads(d.path.read_text()), mt=mt)
+    _, d2, _ = hull_desk("fast", state=json.loads(d.path.read_text()), mt=mt)
     assert d2.batch("XAUUSDm", sig()) == "already_consumed"
     assert (
         d2.batch("XAUUSDm", replace(sig(), close_s=T + 60))
@@ -243,8 +71,8 @@ def test_shadow_and_unknown_ack_never_resubmit(factory):
     assert len(mt.requests) == 1
 
 
-def test_fill_retargets_to_actual_open_and_target_is_not_a_momentum_exit(factory):
-    mt, d, _ = factory()
+def test_fill_retargets_to_actual_open_and_target_is_not_a_momentum_exit(hull_desk):
+    mt, d, _ = hull_desk()
     mt.retprice = 2000.12
     assert d.batch("XAUUSDm", sig()) == "demo_batch_sent"
     assert (
@@ -262,8 +90,8 @@ def test_fill_retargets_to_actual_open_and_target_is_not_a_momentum_exit(factory
     assert len(mt.positions) == 9
 
 
-def test_opposite_hull_label_closes_held_side_before_reversal(factory):
-    mt, d, _ = factory("slow")
+def test_opposite_hull_label_closes_held_side_before_reversal(hull_desk):
+    mt, d, _ = hull_desk("slow")
     buy = replace(sig(side=1), close_s=T - 1)
     assert d.batch("XAUUSDm", buy) == "demo_batch_sent"
     assert len(mt.positions) == 10
@@ -273,30 +101,31 @@ def test_opposite_hull_label_closes_held_side_before_reversal(factory):
     assert not mt.positions
 
 
-def test_protection_entry_age_foreign_positions_and_kill_ownership(factory):
-    mt, d, _ = factory()
+def test_protection_entry_age_foreign_positions_and_kill_ownership(hull_desk):
+    mt, d, _ = hull_desk()
     mt.q.time_msc -= 10000
-    assert d.batch("XAUUSDm", sig()) == "stale_label_or_quote"
-    mt, d, _ = factory()
+    assert d.batch("XAUUSDm", sig()) == WAITING
+    assert not mt.requests and "XAUUSDm" in d.waiting
+    mt, d, _ = hull_desk()
     mt.positions = [NS(ticket=1, symbol="XAUUSDm", magic=99, sl=1, tp=2)]
     assert d.batch("XAUUSDm", sig()) == "foreign_or_unprotected_exposure"
     d.kill.touch()
     d.supervise()
     assert not mt.requests
-    mt, d, _ = factory()
+    mt, d, _ = hull_desk()
     assert d.batch("XAUUSDm", sig()) == "kill"
     d.kill.unlink()
-    mt, d, _ = factory()
+    mt, d, _ = hull_desk()
     mt.i.trade_stops_level = 200
     assert (
         d.batch("XAUUSDm", sig()) == "swing_breached_or_too_close" and not mt.requests
     )
-    mt, d, _ = factory()
+    mt, d, _ = hull_desk()
     mt.orders.append(1)
     assert d.batch("XAUUSDm", sig()) == "pending_orders_present"
 
 
-def test_conflicting_broker_aliases_bad_lots_or_real_account_fail_closed(factory):
+def test_conflicting_broker_aliases_bad_lots_or_real_account_fail_closed(hull_desk):
     cfg = load_yaml(ROOT / "config.yaml")
     h = HullConfig.model_validate(cfg["hull"])
     p = selection(h)
@@ -359,8 +188,8 @@ def test_stream_ignores_forming_bar_and_never_replays_startup_labels():
     )
 
 
-def test_uncertain_second_leg_does_not_retry_or_open_remaining_tickets(factory):
-    mt, d, _ = factory("fast")
+def test_uncertain_second_leg_does_not_retry_or_open_remaining_tickets(hull_desk):
+    mt, d, _ = hull_desk("fast")
     send = mt.order_send
 
     def second_fails(r):
@@ -374,8 +203,8 @@ def test_uncertain_second_leg_does_not_retry_or_open_remaining_tickets(factory):
     assert d.batch("XAUUSDm", sig()) == "already_consumed"
 
 
-def test_final_quote_changed_between_precheck_and_send(factory):
-    mt, d, _ = factory("medium")
+def test_final_quote_changed_between_precheck_and_send(hull_desk):
+    mt, d, _ = hull_desk("medium")
     base = mt.order_check
 
     def revised(req):
@@ -408,8 +237,8 @@ def test_preflight_resolves_only_requested_symbols_and_never_sends(
     assert answer["mode"] == "READ ONLY" and not list(tmp_path.glob("reports/*"))
 
 
-def test_drawdown_halt_blocks_new_batch_without_resetting_swing(factory):
-    mt, d, _ = factory()
+def test_drawdown_halt_blocks_new_batch_without_resetting_swing(hull_desk):
+    mt, d, _ = hull_desk()
     d.mark(mt.a, T)
     mt.a.equity -= 80
     assert d.batch("XAUUSDm", sig()) == "drawdown_halt" and not mt.requests
@@ -543,8 +372,8 @@ def test_cli_native_m2_entry_filter_and_independent_exit(
 
 
 @pytest.mark.parametrize("bias", [1, -1])
-def test_actual_hull_label_beyond_confirmed_bos_opens_protected_batch(factory, bias):
-    mt, desk, _ = factory()
+def test_actual_hull_label_beyond_confirmed_bos_opens_protected_batch(hull_desk, bias):
+    mt, desk, _ = hull_desk()
     row = sequence(bias, closes=PATH[:21], end_s=T)[-1]
     assert row.label == row.entry_side == -bias and row.structure.event == "bos"
     mt.q.bid = row.close
@@ -558,10 +387,10 @@ def test_actual_hull_label_beyond_confirmed_bos_opens_protected_batch(factory, b
 
 @pytest.mark.parametrize("bad_close", [False, True])
 @pytest.mark.parametrize("bias", [1, -1])
-def test_bos_close_and_executable_quote_both_must_pass(factory, bias, bad_close):
+def test_bos_close_and_executable_quote_both_must_pass(hull_desk, bias, bad_close):
     row = sequence(bias, closes=PATH[:21], end_s=T)[-1]
     edge = row.structure.broken.price
-    mt, desk, _ = factory()
+    mt, desk, _ = hull_desk()
     ask_offset = 0.1 if row.side == 1 else 0.0
     # Close valid but executable quote exactly on BOS; or close invalid but
     # quote comes back inside. Neither case may result in a single ticket.
@@ -579,8 +408,8 @@ def test_bos_close_and_executable_quote_both_must_pass(factory, bias, bad_close)
     assert not mt.requests and desk.batch("XAUUSDm", row) == "already_consumed"
 
 
-def test_each_batch_leg_rechecks_frozen_zone_and_does_not_top_up(factory):
-    mt, desk, _ = factory("medium")
+def test_each_batch_leg_rechecks_frozen_zone_and_does_not_top_up(hull_desk):
+    mt, desk, _ = hull_desk("medium")
     d = sig()
     # First ask=2000.10 at the inclusive midpoint; next ask a tick beyond it.
     s = replace(

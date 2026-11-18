@@ -37,7 +37,12 @@ def register(sub):
             p.add_argument(
                 "--arm-demo", "--arm-orders", dest="armed", action="store_true"
             )
-            p.add_argument("--poll-seconds", type=float, default=1.0)
+            p.add_argument(
+                "--poll-seconds",
+                type=float,
+                default=1.0,
+                help="normal poll interval (0.25–10 s); poll faster around a selected bar close",
+            )
             p.add_argument("--max-iterations", type=int)
         if name == "hull-replay":
             p.add_argument("--ticks", nargs="+", required=True)

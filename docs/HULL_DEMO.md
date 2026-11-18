@@ -10,6 +10,12 @@ A raw label now needs the **[internal structure entry filter](HULL_STRUCTURE.md)
 
 When `hull.indicator.exit_opposite` is `true` (the existing default), the terminal still requests closes of owned opposite-side tickets on the **original selected Hull label** before any replacement entry. That selection does not use the new entry filter. Startup labels are warm-up only, never orders or exits. The chart's raw labels are not the chart simulator's EMA-gated trades. The scanner keeps the optional `signal: ema_plan` prefilter but does not use the chart simulator's 10%-of-equity sizing, 1.5R target or graphics.
 
+## How to read an entry timeline
+
+- **Bar open is not signal close.** An M1 bar stamped 19:52 opens then; its signal can first be known at 19:53:00, in the same time basis. The logs use UTC. With the shipped limits, the last permitted check is 19:53:08, inclusive. A usable tick must satisfy `signal close ≤ tick time ≤ check time ≤ deadline` and be no more than 4 s old. Keep the terminal host clock synchronized; never shift timestamps to manufacture freshness.
+- The scanner wakes around native closes and aims to poll every 250 ms during the entry window (MT5/OS latency can be longer). If its first quote is absent, from before close, or already too old, the selected entry can wait **in this running process only** while other symbols continue. On the first fresh quote it checks the actual BUY ask or SELL bid, the frozen structure band and the full plan. Outside the band, excessive spread, risk, busy symbol, malformed/future-dated quote or broker rejection are **not** reasons to try again. A late tick is never backdated. No retry after a send, no partial top-up, no replay on restart, no repeated opposite exit just because another quote was sampled.
+- In `shadow.jsonl` / `demo.jsonl`, find `closed_label` for the symbol, timeframe and `signal_close_utc`. `reason: ready` refers to the raw signal; `entry_side` / `entry_reason` tell you if the closed bar qualified. For a selected entry, `entry_quote_check` gives `tick_utc`, raw broker `tick_time_msc`, `checked_at_utc`, age, deadline, bid/ask, and `stage`. `disposition: wait` is not a veto; `fresh_quote` confirms timing only. `label_decision.outcome` gives the final result: e.g. `shadow_plan_only`, `spread_cap`, `quote_outside_buy_below_bear_bos`, or `entry_window_expired`. At expiry, `tick_status` distinguishes a missing or pre-close quote from a valid but late check. An actual broker fill needs a demo deal, not just a `batch_preview`.
+
 ## Which candle supplies the stop?
 
 The blue arrows in your screenshots indicate the preceding local pullback, not necessarily a textbook HL/LH. The default `local_pullback` turns that into a checkable rule:
@@ -27,7 +33,7 @@ The lot and target are **per position**. Each ticket is submitted with its own h
 
 | Rate | Requested count per eligible label | At 0.09 lot and $10 each |
 |---|---:|---|
-| Slow | 10 | configured lot × 10 / $100 in target profits |
+| Slow | 10 | 0.90 lot / $100 gross target |
 | Medium | 4 if it fits, else 3 | 0.27–0.36 lot / $30–$40 |
 | Fast | 7 if it fits, else 6 | 0.54–0.63 lot / $60–$70 |
 
@@ -44,7 +50,7 @@ Or apply one set of overrides: `--symbols EURUSD GBPUSD --lots 0.01 --target-usd
 
 ## Windows demo checklist
 
-1. Install 64-bit Windows Python 3.11+ supported by the MT5 package. Start MT5 and log in locally to a dedicated **USD hedging DEMO** account. Stop older bot processes; reconcile their outstanding positions manually. Don't change permissions on a real account. In the project root:
+1. Install 64-bit Windows Python 3.11+ supported by the MT5 package. Start MT5 and log in locally to a dedicated **USD hedging DEMO** account. Identify running scanners and exposure first. Never interrupt an armed/unknown process, modify its checkout or touch manual positions; stop and ask. Follow the [checkout/version check](../README.md#check-the-checkout-before-reusing-an-observer). Don't change permissions on a real account. In the project root:
    ```powershell
    python -m pip install -e ".[test]" MetaTrader5 tzdata
    python -m pytest -q
@@ -58,6 +64,6 @@ Or apply one set of overrides: `--symbols EURUSD GBPUSD --lots 0.01 --target-usd
    python -m bot.cli trade-all --config config.demo.local.yaml --profile XAUUSD:0.09:10:slow --arm-demo
    ```
    Paper is the shipped default. No `--arm-demo` = no sends. A real, contest, non-USD, netting, disconnected or changed account cannot arm. All examples are operator instructions: the development sandbox did not connect to a terminal or place orders.
-4. Entry caps in `hull.limits`: **7 open tickets, 0.63 gross lots, $15 total modeled open risk**, $30 daily loss block, $75 peak drawdown block, margin and order-rate limits. The old $5 **per-leg** cap is gone; the **account** budget was not automatically raised. A 0.09-lot gold sell risking $7.21 can pass alone but six similar tickets risk ~$43.25 and must be skipped under $15. At this lot, medium/fast may legitimately produce no executions. Actual losses can exceed modeled risk. Do not loosen these safeguards just to make a test trade. A new account-specific Hull journal is independent of the archived zone state.
+4. The checked-in demo limits (from the scaled profiles, **not changed by the quote-timing fix**) are **60 open tickets, 54 gross lots, $1,000 modeled open risk**, $75 peak-equity drawdown halt, at least 60% free margin and 40 sends/minute. The current Hull guard is drawdown-based; it does **not** enforce a separate daily loss stop (`daily_loss_usd` ships as 0). Do not rely on that field for a daily stop. Read the effective preflight limits and verify the **whole batch** fits; there is no fixed $5 per-ticket stop. Actual losses can exceed modeled risk. Do not raise a limit, resize a ticket or move SL to force an entry.
 5. Logs: `reports/hull_runtime/<account-hash>/{shadow,demo}.jsonl`; recorded broker deals separate profit, fee, commission and swap. Durable intent, per-ticket goals, equity high-water and manual hold live in `~/.moneyprinterbot/hull/<account-hash>/state.json`. An OS lock prevents two armed Hull scanners under the same Windows user from trading the same account. Foreign positions or pending orders block new batches. A rejected/uncertain/partial send may need manual reconciliation; **do not delete state to retry**. Check actual tickets/deals, full size and protection, preserve a backup, then remove only a resolved `manual_hold` while stopped. Keep symbol whitelist/magic unchanged while tickets are open.
 6. Ctrl+C stops the software; broker SL/TP remain attached. The `KILL` file in the **bot's working directory** blocks new orders and requests closure of owned, allowlisted positions while the scanner is running and quotes/permissions permit. No ordinary session or momentum exit; configured session/rollover gates block new entries only. Review market-specific hours, especially CFDs/synthetics. Software exits cannot work while disconnected.

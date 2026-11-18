@@ -13,11 +13,23 @@ HULL START trio-slow
 HULL START XAUUSD:0.09:10:slow EURUSD:0.01:10:slow GBPUSD:0.01:10:slow
 ```
 
-`trio-slow` is an explicit shortcut for **only** those three profiles. It does not change `config.yaml` or add those symbols to other requests. Format: `SYMBOL:LOTS_PER_TICKET:TP_USD_PER_TICKET:RATE`. Slow = 1 ticket, medium = 3–4, fast = 6–7 **if the entire batch fits**. Lot and TP are **not** the batch totals.
+`trio-slow` is an explicit shortcut for **only** those three profiles. It does not change `config.yaml` or add those symbols to other requests. Format: `SYMBOL:LOTS_PER_TICKET:TP_USD_PER_TICKET:RATE`. The current demo profiles request **10 tickets on slow** (not one), 3–4 on medium, and 6–7 on fast if the batch fits. Lot and TP are **per ticket**. For `trio-slow`, that means up to 0.90 lot on a gold signal or 0.10 lot on a selected FX signal, each targeting $100 gross across ten tickets. The general EURUSD/GBPUSD presets use **1.00 lot per ticket**; they are not the `trio-slow` shortcut.
 
 ## Standing instructions for the desktop agent
 
 **On every start, restart, profile change or arming request, first open/read `docs/Hull-demo-start.html` in this checkout and follow this README.** If you cannot render the page, read its source; if it or the Hull CLI is missing, stop and get the updated checkout. Use the operator’s pasted selection, **not** whichever boxes are checked by default on a freshly opened page. The page formats text only; it cannot connect to MT5 or start a process.
+
+### Check the checkout before reusing an observer
+
+A pull does **not** update a running Python process. Check the process and exposure first. **Do not pull over an armed scanner, stop it, or start a second scanner** to apply an update. Report it to the operator instead. On a safe, clean `main` in the VS Code terminal:
+
+```powershell
+git status --short --branch
+git pull --ff-only origin main
+git rev-parse HEAD
+```
+
+Stop if the checkout is dirty, on another branch, diverged or the pull fails. Do not reset, force, or discard local work. After preflight, match the **latest** observer `started.summary.checkout_head_at_start` against `git rev-parse HEAD`, check `source_module` points into this checkout, and verify `entry_policy: internal_structure_v1` and `entry_quote_policy: first_fresh_post_close_tick_v1`. For a non-Git install the SHA may be null: verify the source/version before reuse. An older `started` record or `git status` alone does not prove the running version.
 
 ### 1. Read the request
 
@@ -51,7 +63,7 @@ HULL START XAUUSD:0.09:10:slow EURUSD:0.01:10:slow GBPUSD:0.01:10:slow
 
    No `--arm-demo`, no `--arm-orders`, no `--timeframe` override. One scanner watches **M1, M2 and M5 together**. Verify it is running and report its process ID and actual `reports/hull_runtime/<account-hash>/shadow.jsonl` path. If you lack desktop access or launch fails, say so; do not claim it started.
 
-**What the scanner will do:** log every closed Hull label, but open a batch only for a [structure-qualified entry](docs/HULL_STRUCTURE.md) on that symbol and timeframe. Trend BUYs need a confirmed HH → HL lower-half entry; trend SELLs mirror it. Countertrend SELLs require a confirmed post-BOS HH and price strictly above the old broken high; countertrend BUYs mirror it below the broken low. The existing `exit_opposite` setting remains independent of these entry checks. The previous local wick still supplies SL; each ticket keeps its own lot and cash TP. No M15. **Never** raise limits, move the stop or change lots to force a fill. See [the operating guide](docs/HULL_DEMO.md) for rates, protections and demo checks.
+**What the scanner will do:** log every closed Hull label, but open a batch only for a [structure-qualified entry](docs/HULL_STRUCTURE.md) on that symbol and timeframe. Trend BUYs need a confirmed HH → HL lower-half entry; trend SELLs mirror it. Countertrend SELLs require a confirmed post-BOS HH and price strictly above the old broken high; countertrend BUYs mirror it below the broken low. When the last quote predates the candle close, the observer keeps the qualified label only until its original deadline; it does not wait for a better price or repeat an order. See [the quote timeline and log fields](docs/HULL_DEMO.md#how-to-read-an-entry-timeline). The existing `exit_opposite` setting remains independent of these entry checks. The previous local wick still supplies SL; each ticket keeps its own lot and cash TP. No M15. **Never** raise limits, move the stop or change lots to force a fill. See [the operating guide](docs/HULL_DEMO.md) for rates, protections and demo checks.
 
 ### 3. Demo orders require a separate instruction
 

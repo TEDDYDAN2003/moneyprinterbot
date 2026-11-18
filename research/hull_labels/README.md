@@ -14,9 +14,9 @@ python research/hull_labels/compare_chart.py --bars data/chart_M2.csv --tf 2 --l
 
 Use `--last-live` only if the last row is still forming. Remove it if every row is closed. This compares chart labels, not similarity of broker fills. To regenerate the test fixture: `node research/hull_labels/chart_reference.cjs` (Node is not needed to run the bot or its Python tests).
 
-## Structure-filtered execution (current)
+## Structure-filtered execution
 
-[Entry specification](../../docs/HULL_STRUCTURE.md) · [checked results](structure_check/summary.json) · [all raw labels with causal structure and entry reasons](structure_check/labels.csv). The scanner preserves the raw chart labels, not automatic entries on every label. Run `python research/hull_labels/reproduce.py --cache data/public_xau_ticks --out reports/hull_replay_structure` against the pinned weeks 45–46. Counts at the label close are before quote, batch and risk vetoes. The replay applies the configured opposite-label exit independently of entry qualification. Compare the same feed, time window and limits; this short sample does not establish a trading edge.
+[Entry specification](../../docs/HULL_STRUCTURE.md) · [checked results](structure_check/summary.json) · [all raw labels with causal structure and entry reasons](structure_check/labels.csv). The scanner preserves the raw chart labels, not automatic entries on every label. The checked-in `structure_check/` figures are from `ec5d3db` with the then-current 1-ticket slow profile and $15 aggregate risk cap, **not** a replay with today’s scaled demo limits. To reproduce those counts and economics use that revision in a separate research checkout. To evaluate the checked-out code, run `python research/hull_labels/reproduce.py --cache data/public_xau_ticks --out reports/hull_replay_structure` against the pinned weeks 45–46. Counts at the label close are before quote, batch and risk vetoes. The replay applies the configured opposite-label exit independently of entry qualification. Compare the same feed, time window and limits; this short sample does not establish a trading edge.
 
 ## Archived pre-structure ordered-quote smoke comparison
 

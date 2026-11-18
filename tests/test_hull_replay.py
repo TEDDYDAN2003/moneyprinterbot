@@ -141,3 +141,30 @@ def test_replay_original_opposite_exit_separate_from_structure_entry(
         assert (a.pos[1].side if a.pos else 0) == (-bias if valid else 0)
     else:
         assert not a.rows and a.pos[1].side == bias
+
+
+@pytest.mark.parametrize("lag_ms,allowed", [(8000, True), (8001, False)])
+def test_replay_uses_first_actual_tick_and_same_inclusive_deadline(lag_ms, allowed):
+    cfg = load_yaml(Path(__file__).resolve().parents[1] / "config.yaml")
+    h = HullConfig.model_validate(cfg["hull"])
+    r = sequence(1, closes=PATH[:21], end_s=T)[-1]
+    x = r.close
+    ms = T * 1000 + lag_ms
+    a = Account(
+        h.symbols["XAUUSD"].model_copy(update={"lots": 0.01}),
+        h.limits,
+        Grid(0.001, 0.001, 3, 0, 0.01, 100, 0.01),
+        lambda side, lot, entry, px: side * lot * 100 * (px - entry),
+        Hours(cfg),
+        10000,
+        exit_opposite=True,
+    )
+    m = Minute(
+        Bar(T, x, x, x, x), np.array([ms]), np.array([x]), np.array([x + 0.1]), True
+    )
+    a.step(m, [r])
+    assert bool(a.pos) == allowed
+    if allowed:
+        assert a.pos[3] == ms
+    else:
+        assert a.count["entry_window_expired"] == 1 and not a.sends
