@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class RunConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
-    mode: Literal["backtest", "paper", "live"] = "paper"
+    mode: Literal["backtest", "paper", "auto", "demo", "live"] = "auto"
     symbol: str = "XAUUSD"
     seed: int = 42
 

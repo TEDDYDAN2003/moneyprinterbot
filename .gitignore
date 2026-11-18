@@ -11,8 +11,13 @@ coverage/
 .env*
 !.env.example
 reports/*.jsonl
+reports/demo_pilot_state.json
+reports/demo_pilot_state.json.tmp
+reports/demo_pilot_state.lock
+reports/demo_pilot_state_*
 data/*
 !data/.gitkeep
 models/*
 !models/.gitkeep
 reports/*.parquet
+research/directional_scalping/results/
