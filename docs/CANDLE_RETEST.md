@@ -1,5 +1,7 @@
 # Candle / retest scanner • observe first
 
+> **Archived operating guide.** `trade` and `trade-all` now run the [Hull M1/M2/M5 scanner](HULL_DEMO.md), not the strategy below. The historical replay commands remain available.
+
 **Keep `run.mode: paper` and `zones.price_action.demo_opt_in: false`.** The implemented rules can put the actual stop beyond the reaction candle without silently increasing the lot or risk allowance. The independent-feed study did **not** establish a profitable strategy. [Results, trade examples and limitations](../research/candle_retest/REPORT.md) · [Original zone engine and per-symbol configuration](ZONE_PILOT.md).
 
 ## What the scanner knows and when

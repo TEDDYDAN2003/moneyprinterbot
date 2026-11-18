@@ -4,6 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from bot.hull.config import HullConfig
 from bot.zones.config import ZoneConfig
 
 
@@ -18,14 +19,15 @@ class DataConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
     history_years: int = Field(default=3, ge=1)
     base_timeframe: str = "M1"
-    timeframes: list[str] = ["M1", "M3", "M5", "M10", "M15"]
+    timeframes: list[str] = ["M1", "M2", "M5"]
 
 
 class RootConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
     run: RunConfig = RunConfig()
     data: DataConfig = DataConfig()
-    zones: ZoneConfig | None = None
+    zones: ZoneConfig | None = None  # archived experiments
+    hull: HullConfig | None = None
 
 
 def validate_config(data: dict) -> RootConfig:

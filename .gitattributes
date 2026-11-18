@@ -1,3 +1,5 @@
 # Preserve the byte digests of replay code and the reproducible evidence on Windows.
 src/bot/zones/*.py text eol=lf
 research/candle_retest/** text eol=lf
+src/bot/hull/*.py text eol=lf
+research/hull_labels/** text eol=lf

@@ -26,3 +26,7 @@ reports/zone_replay*/
 
 # Local broker candle experiments and private replay output
 reports/candle_replay*/
+
+reports/hull_runtime/
+reports/hull_replay*/
+config.demo.local.yaml

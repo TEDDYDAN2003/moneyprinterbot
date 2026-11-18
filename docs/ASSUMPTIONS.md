@@ -1,6 +1,6 @@
 # Assumptions
 
-**Current zone pilot:** see [implemented strategy and runtime contracts](ZONE_PILOT.md). The notes below describe the earlier research foundation.
+**Active implementation:** see [Hull labels, verified USD-demo execution and runtime contracts](HULL_DEMO.md). The notes below are archived, not the active strategy.
 
 
 - The existing implementation was explicitly removed before the redesign.

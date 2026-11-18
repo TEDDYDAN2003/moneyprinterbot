@@ -1,12 +1,11 @@
-# Moneyprinterbot • zone-reaction pilot
+# Moneyprinterbot · Hull label demo scanner
 
-**Active implementation:** a paper-by-default M1/M5/M15 liquidity-zone scanner, per-symbol cash controls and an offline bid/ask replay. Only XAUUSD is enabled. The gold experiment uses 0.09 lot, a $10 reference TP and a $5 maximum modeled initial loss per leg, with spread retained and zero modeled commission/slippage. It did **not** demonstrate a profitable edge.
+**Active:** one read-only-by-default MT5 Desktop companion for **M1, M2 and M5**. It follows closed-bar BUY/SELL labels from the supplied Hull indicator, puts the actual stop beyond the preceding local pullback wick, and attaches a fixed USD take profit **per ticket**. No M15 or momentum exit. No live-money trading path in the CLI.
 
-- **[Candle/retest scanner, actual wick stops, managed exits and read-only MT5 tick export](docs/CANDLE_RETEST.md)**
-- [Candle experiment: fixed vs wick vs hold, including losing and empty windows](research/candle_retest/REPORT.md)
-- [Original zone design, per-symbol configuration and safeguards](docs/ZONE_PILOT.md)
-- [Code audit, XAUUSD comparison and trade ledgers](research/zone_pilot/REPORT.md)
-- `python -m bot.cli trade-all` observes; `python -m bot.cli zones-replay --help` lists offline options. Real-money orders are disabled.
+- **[Windows setup, sizing, protections and stop rule](docs/HULL_DEMO.md)** · **[Copy/paste start prompt for your desktop AI agent](docs/HULL_START_PROMPT.md)** · [Offline profile & prompt builder](docs/Hull-demo-start.html)
+- [JavaScript calculation check, gold smoke replay and ledgers](research/hull_labels/README.md). Matching indicator labels does not establish profitable execution.
+- `python -m bot.cli hull-preflight --profile XAUUSD:0.09:10:slow` checks a connected demo without sending. `trade-all` without `--arm-demo` only observes. Other profiles must be explicitly selected.
+- Prior studies retained for reproducibility, **not** the active execution path: [candle/retest](research/candle_retest/REPORT.md) · [zone pilot](research/zone_pilot/REPORT.md).
 
 ---
 

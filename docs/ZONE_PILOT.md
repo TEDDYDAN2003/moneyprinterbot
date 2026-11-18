@@ -1,5 +1,7 @@
 # Zone pilot • quickstart & operating rules
 
+> **Archived operating guide.** `trade` and `trade-all` now run the [Hull M1/M2/M5 scanner](HULL_DEMO.md), not the strategy below. The historical replay commands remain available.
+
 > **Current default:** `reaction_managed` in shadow. [Candle/retest rules and the XAUUSDm tick exporter](CANDLE_RETEST.md). The immediate-entry rules and `zones-replay` below describe the v1 control. For the challenger, `--arm-demo` alone is not sufficient.
 
 **Experiment only.** The fixed-cash zone rule lost money on the independent gold replay. Keep `run.mode: paper`. There is no live-money execution path in the CLI. No Pine indicator, TradingView subscription, external signals, hosted database, or ML model is needed. See [the measured comparison](../research/zone_pilot/REPORT.md) before considering a demo order.

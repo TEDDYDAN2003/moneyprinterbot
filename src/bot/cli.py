@@ -2,9 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
-import sys
-import time
 from pathlib import Path
 
 import numpy as np
@@ -38,40 +35,9 @@ def main() -> int:
     train_parser = subparsers.add_parser("train")
     train_parser.add_argument("--dataset", required=True)
     train_parser.add_argument("--out", required=True)
-    demo = subparsers.add_parser(
-        "trade",
-        aliases=["demo"],
-        help="observe MT5; account orders require --arm-orders",
-    )
-    demo.add_argument("--config", default="config.yaml")
-    demo.add_argument(
-        "--timeframe",
-        choices=("M1", "M5", "M15"),
-        default=None,
-        help="legacy worker only; zone mode always uses M1/M5/M15 together",
-    )
-    demo.add_argument("--poll-seconds", type=float, default=None)
-    demo.add_argument("--max-iterations", type=int)
-    demo.add_argument(
-        "--arm-orders",
-        "--arm-demo",
-        dest="arm_orders",
-        action="store_true",
-        help="allow protected orders on a verified demo account only",
-    )
-    trade_all = subparsers.add_parser(
-        "trade-all", help="scan enabled symbols using M1, M5 and M15 zones"
-    )
-    trade_all.add_argument("--config", default="config.yaml")
-    trade_all.add_argument("--poll-seconds", type=float, default=None)
-    trade_all.add_argument("--max-iterations", type=int)
-    trade_all.add_argument(
-        "--arm-orders",
-        "--arm-demo",
-        dest="arm_orders",
-        action="store_true",
-        help="allow protected orders on a verified demo account only",
-    )
+    from bot.hull.cli import register as register_hull
+
+    register_hull(subparsers)
     replay = subparsers.add_parser(
         "zones-replay", help="offline costed replay; never connects to MT5"
     )
@@ -151,90 +117,29 @@ def main() -> int:
         run_price_test(args, load_yaml(args.config))
         return 0
     if args.command == "export-ticks":
-        from bot.zones.export import run_export
+        raw = load_yaml(args.config)
+        if "hull" in raw:
+            from bot.hull.terminal import export_quotes
 
-        run_export(args, load_yaml(args.config))
+            export_quotes(args, raw)
+        else:
+            from bot.zones.export import run_export
+
+            run_export(args, raw)
         return 0
     if args.command == "zones-replay":
         from bot.zones.replay import run_replay
 
         run_replay(args, load_yaml(args.config))
         return 0
-    if args.command in {"trade", "demo", "trade-all"}:
-        raw = load_yaml(args.config)
-        zone_cfg = validate_config(raw).zones
-        if zone_cfg and zone_cfg.enabled:
-            if getattr(args, "timeframe", None) is not None:
-                parser.error(
-                    "Zone mode uses one scanner for all three source timeframes; omit --timeframe"
-                )
-            from bot.zones.monitor import monitor
+    if args.command in {"trade", "demo", "trade-all", "hull-preflight", "hull-replay"}:
+        from bot.hull.cli import handle
 
-            monitor(
-                raw,
-                armed=args.arm_orders,
-                poll=args.poll_seconds,
-                iterations=args.max_iterations,
-            )
-            return 0
-        if args.arm_orders:
-            parser.error(
-                "Legacy execution is shadow-only in this release; enable zones for demo orders"
-            )
+        return handle(args)
     if args.command == "validate-config":
         config = validate_config(load_yaml(Path(args.config)))
         print(json.dumps(config.model_dump(), indent=2, default=str))
         return 0
-    if args.command in {"trade", "demo"}:
-        config = load_yaml(Path(args.config))
-        validate_config(config)
-        from bot.execution.demo_runner import run_demo
-
-        run_demo(
-            config,
-            args.timeframe or "M1",
-            armed=args.arm_orders,
-            poll_seconds=2.0 if args.poll_seconds is None else args.poll_seconds,
-            max_iterations=args.max_iterations,
-        )
-        return 0
-    if args.command == "trade-all":
-        children = []
-        for timeframe in ("M1", "M5", "M15"):
-            command = [
-                sys.executable,
-                "-m",
-                "bot.cli",
-                "trade",
-                "--config",
-                args.config,
-                "--timeframe",
-                timeframe,
-                "--poll-seconds",
-                str(2.0 if args.poll_seconds is None else args.poll_seconds),
-            ]
-            if args.max_iterations is not None:
-                command.extend(("--max-iterations", str(args.max_iterations)))
-            if args.arm_orders:
-                command.append("--arm-orders")
-            children.append(subprocess.Popen(command))
-        try:
-            while any(child.poll() is None for child in children):
-                failed = [child for child in children if child.poll() not in (None, 0)]
-                if failed:
-                    for child in children:
-                        if child.poll() is None:
-                            child.terminate()
-                    return 1
-                time.sleep(0.25)
-        except KeyboardInterrupt:
-            for child in children:
-                if child.poll() is None:
-                    child.terminate()
-            for child in children:
-                child.wait()
-            return 130
-        return max((child.returncode or 0) for child in children)
     if args.command == "features":
         bars = load_ohlcv(args.csv)
         build_multitimeframe_features(bars).to_parquet(args.out)

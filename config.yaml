@@ -1,5 +1,5 @@
 run:
-  mode: paper                 # no orders; the zone scanner only arms in explicit demo mode
+  mode: paper                 # no orders; Hull scanner requires explicit demo mode AND arming
   symbol: XAUUSD
   broker_symbol_suffix: "m"   # read-only MT5 check found XAUUSDm on the current account
   timezone_broker: "Etc/GMT-2"   # broker server tz; verify in Phase 1
@@ -16,7 +16,7 @@ mt5:
 data:
   history_years: 3
   base_timeframe: M1
-  timeframes: [M1, M3, M5, M10, M15]
+  timeframes: [M1, M2, M5]
   store_ticks: true
   tick_retention_days: 120
   quality:
@@ -37,7 +37,7 @@ sessions:                      # all times UTC; DST handled by tz-aware definiti
   rollover_blackout: {start: "21:55", end: "23:05", tz: UTC}
 
 timeframe_roles:
-  entry_tf: [M1, M3, M5, M10, M15] # one bot per entry timeframe
+  entry_tf: [M1, M2, M5]            # historical feature config; active scanner only M1/M2/M5
   small_tf: [M1, M3, M5]           # internal structure
   medium_tf: [M10, M15]
   large_tf: [H1, H4, D1]       # external trend and major levels
@@ -259,7 +259,7 @@ reporting:
 # New default strategy: ONE scanner, one M1 clock, three sources of levels.
 # Values below are independent of the legacy pilot settings above.
 zones:
-  enabled: true
+  enabled: false  # archived replay profiles only; trading commands now route exclusively to Hull
   price_action:
     policy: reaction_managed  # SHADOW: sweep pocket, otherwise band; candles inform exits. baseline = v1.
     ttl_seconds: 180         # second return must occur after the reaction close
@@ -299,3 +299,36 @@ zones:
       {enabled: false, broker_symbol: USDJPYm, lots: 0.01, tp_usd: 10.0, sl_usd: 5.0,
        legs: 1, contract_size: 100000, conversion: base_usd, point: 0.001, tick_size: 0.001,
        max_spread: 0.020, assumed_spread: 0.010, slippage: 0.0, commission: 0.0, round_step: 0.5}
+
+# ACTIVE demo entry path. Indicator source = the user's Hull BUY/SELL labels.
+hull:
+  enabled: [XAUUSD]  # opt in other keys via --symbols or repeated --profile
+  magic: 26111825
+  indicator:
+    hull_len: 24
+    source: hl2
+    signal: labels        # every strict closed-bar cross; no EMA/zone/momentum gate
+    ema_length: 200
+    stop: local_pullback  # recent preceding wicks, not a market-structure HH/HL
+    pullback_bars: 7      # capped at the preceding opposite crossover; excludes signal bar
+    swing_len: 3          # optional literal confirmed_pivot mode only
+    atr_length: 14
+    atr_buffer: 0.1
+    extra_pips: 0
+  limits:
+    max_positions: 7
+    max_total_lots: 0.63  # allows 7 x 0.09; shared across symbols
+    max_open_risk_usd: 15 # retained ACCOUNT limit, NOT $5/leg; never auto-raised
+    daily_loss_usd: 30
+    drawdown_usd: 75
+    min_free_margin_pct: 60
+    max_orders_minute: 40
+    max_quote_age_s: 4
+    max_entry_age_s: 8
+  symbols:                # suggested sizes only; invalid broker lots are refused
+    XAUUSD:   {aliases: [XAUUSDm, XAUUSD, GOLD], lots: 0.09, target_usd: 10, rate: slow, pip_size: 0.01, max_spread: 0.300}
+    EURUSD:   {aliases: [EURUSDm, EURUSD], lots: 0.01, target_usd: 10, rate: slow, pip_size: 0.0001, max_spread: 0.00020}
+    GBPUSD:   {aliases: [GBPUSDm, GBPUSD], lots: 0.01, target_usd: 10, rate: slow, pip_size: 0.0001, max_spread: 0.00030}
+    USDJPY:   {aliases: [USDJPYm, USDJPY], lots: 0.01, target_usd: 10, rate: slow, pip_size: 0.01, max_spread: 0.025}
+    NAS100USD: {aliases: [NAS100USD, NAS100, US100, USTEC, USTECm], lots: 0.01, target_usd: 10, rate: slow, pip_size: 1, max_spread: 3.0}
+    1HZ100V:   {aliases: [1HZ100V, 'Volatility 100 (1s) Index'], session: continuous, lots: 0.01, target_usd: 10, rate: slow, pip_size: 0.01}

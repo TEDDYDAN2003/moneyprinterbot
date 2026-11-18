@@ -1,3 +1,3 @@
 # Runbook
 
-Use [the zone pilot operating guide](ZONE_PILOT.md). The supplied configuration is paper-only. Explicitly armed orders are allowed only on a verified USD hedging demo account. Do not use the archived README specification as operating instructions.
+Use [the Hull demo guide](HULL_DEMO.md) and [desktop-agent prompt](HULL_START_PROMPT.md). Trading commands dispatch to the M1/M2/M5 Hull scanner only. Older zone and candle instructions describe archived experiments.
