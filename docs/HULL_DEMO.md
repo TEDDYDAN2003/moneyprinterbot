@@ -27,7 +27,7 @@ The lot and target are **per position**. Each ticket is submitted with its own h
 
 | Rate | Requested count per eligible label | At 0.09 lot and $10 each |
 |---|---:|---|
-| Slow | 1 | 0.09 lot / $10 in target profits |
+| Slow | 10 | configured lot × 10 / $100 in target profits |
 | Medium | 4 if it fits, else 3 | 0.27–0.36 lot / $30–$40 |
 | Fast | 7 if it fits, else 6 | 0.54–0.63 lot / $60–$70 |
 

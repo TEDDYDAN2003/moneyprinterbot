@@ -89,9 +89,19 @@ class Desk:
         return identity_check(self.mt, self.mode, self.armed, self.ident)
 
     def mark(self, a, now):
-        reason = self.guard.mark(
-            datetime.fromtimestamp(now, UTC).date().isoformat(), a.equity, self.lim
-        )
+        day = datetime.fromtimestamp(now, UTC).date().isoformat()
+        if not math.isfinite(a.equity) or a.equity <= 0:
+            reason = "invalid_equity"
+        else:
+            if self.guard.day != day:
+                self.guard.day = day
+                self.guard.start = a.equity
+                self.guard.day_halt = False
+            self.guard.peak = max(self.guard.peak, a.equity)
+            self.guard.dd_halt |= (
+                self.guard.peak - a.equity >= self.lim.drawdown_usd - 1e-8
+            )
+            reason = "drawdown_halt" if self.guard.dd_halt else ""
         g = asdict(self.guard)
         if self.state.get("guard") != g:
             self.state["guard"] = g

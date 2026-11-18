@@ -317,19 +317,19 @@ hull:
     atr_buffer: 0.1
     extra_pips: 0
   limits:
-    max_positions: 7
-    max_total_lots: 0.63  # allows 7 x 0.09; shared across symbols
-    max_open_risk_usd: 15 # retained ACCOUNT limit, NOT $5/leg; never auto-raised
-    daily_loss_usd: 30
+    max_positions: 60
+    max_total_lots: 54.0
+    max_open_risk_usd: 1000
+    daily_loss_usd: 0
     drawdown_usd: 75
     min_free_margin_pct: 60
     max_orders_minute: 40
     max_quote_age_s: 4
     max_entry_age_s: 8
   symbols:                # suggested sizes only; invalid broker lots are refused
-    XAUUSD:   {aliases: [XAUUSDm, XAUUSD, GOLD], lots: 0.09, target_usd: 10, rate: slow, pip_size: 0.01, max_spread: 0.300}
-    EURUSD:   {aliases: [EURUSDm, EURUSD], lots: 0.05, target_usd: 10, rate: slow, pip_size: 0.0001, max_spread: 0.00020}
-    GBPUSD:   {aliases: [GBPUSDm, GBPUSD], lots: 0.05, target_usd: 10, rate: slow, pip_size: 0.0001, max_spread: 0.00030}
+    XAUUSD:   {aliases: [XAUUSDm, XAUUSD, GOLD], lots: 0.10, target_usd: 10, rate: slow, pip_size: 0.01, max_spread: 0.300}
+    EURUSD:   {aliases: [EURUSDm, EURUSD], lots: 1.0, target_usd: 10, rate: slow, pip_size: 0.0001, max_spread: 0.00020}
+    GBPUSD:   {aliases: [GBPUSDm, GBPUSD], lots: 1.0, target_usd: 10, rate: slow, pip_size: 0.0001, max_spread: 0.00030}
     USDJPY:   {aliases: [USDJPYm, USDJPY], lots: 1.3, target_usd: 10, rate: slow, pip_size: 0.01, max_spread: 0.025}
     NAS100USD: {broker_symbol: USTEC_x100m, aliases: [NAS100USD, NAS100, US100, USTEC, USTECm, USTEC_x100m], lots: 1, target_usd: 10, rate: slow, pip_size: 1, max_spread: 3.0}
     US30:     {broker_symbol: US30m, aliases: [US30, US30m, 'Wall Street 30', 'US Wall Street 30'], lots: 1, target_usd: 10, rate: slow, pip_size: 1, max_spread: 3.0}

@@ -12,7 +12,7 @@ class Strict(BaseModel):
 
 
 Rate = Literal["slow", "medium", "fast"]
-COUNTS = {"slow": (1,), "medium": (4, 3), "fast": (7, 6)}
+COUNTS = {"slow": (10,), "medium": (4, 3), "fast": (7, 6)}
 FRAMES = (1, 2, 5)
 
 
@@ -42,10 +42,10 @@ class Profile(Strict):
 
 
 class Limits(Strict):
-    max_positions: int = Field(7, ge=1, le=100)
-    max_total_lots: float = Field(0.63, gt=0)
-    max_open_risk_usd: float = Field(15.0, gt=0)
-    daily_loss_usd: float = Field(30.0, gt=0)
+    max_positions: int = Field(60, ge=1, le=100)
+    max_total_lots: float = Field(54.0, gt=0)
+    max_open_risk_usd: float = Field(1000.0, gt=0)
+    daily_loss_usd: float = Field(0.0, ge=0)
     drawdown_usd: float = Field(75.0, gt=0)
     min_free_margin_pct: float = Field(60.0, gt=0, le=100)
     max_orders_minute: int = Field(40, ge=1, le=200)

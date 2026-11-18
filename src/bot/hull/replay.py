@@ -67,6 +67,19 @@ class Account:
         self.labels = Counter()
         self.sends = []
 
+    def guard_halt(self, day, equity):
+        if not math.isfinite(equity) or equity <= 0:
+            return "invalid_equity"
+        if self.guard.day != day:
+            self.guard.day = day
+            self.guard.start = equity
+            self.guard.day_halt = False
+        self.guard.peak = max(self.guard.peak, equity)
+        self.guard.dd_halt |= (
+            self.guard.peak - equity >= self.lim.drawdown_usd - 1e-8
+        )
+        return "drawdown_halt" if self.guard.dd_halt else ""
+
     def close(self, why, ms, px):
         d, p, n, stamp = self.pos
         per = self.cash(p.side, p.lots, p.entry, px)
@@ -128,7 +141,7 @@ class Account:
         bid = float(m.bid[0])
         ask = float(m.ask[0])
         self.barriers(m, 0, 1)
-        halt = self.guard.mark(day, self.equity(bid, ask), self.lim)
+        halt = self.guard_halt(day, self.equity(bid, ask))
         labels = [v for v in ds if v.label]
         self.labels.update(
             f"M{d.tf}:{'BUY' if d.label == 1 else 'SELL'}" for d in labels
@@ -136,6 +149,11 @@ class Account:
         if labels:
             d, why = choose(labels)
             if d:
+                if self.pos and self.pos[1].side != d.side:
+                    old = self.pos[1]
+                    exit_px = bid if old.side == 1 else ask
+                    self.close("opposite_hull_label", ms, exit_px)
+                    why = "opposite_label_exit"
                 why = (
                     "symbol_busy"
                     if self.pos
@@ -170,7 +188,7 @@ class Account:
                         why = str(exc)
             self.count[why] += 1
         self.barriers(m, 0 if self.pos and self.pos[3] == ms else 1, len(m.ms))
-        self.guard.mark(day, self.equity(float(m.bid[-1]), float(m.ask[-1])), self.lim)
+        self.guard_halt(day, self.equity(float(m.bid[-1]), float(m.ask[-1])))
 
     def finish(self, last):
         if self.pos:
