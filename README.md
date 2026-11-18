@@ -1,4 +1,16 @@
-﻿# AGENT PROMPT: XAUUSD Adaptive Multi-Mode Trading System (MetaTrader 5 + Python)
+# Moneyprinterbot • zone-reaction pilot
+
+**Active implementation:** a paper-by-default M1/M5/M15 liquidity-zone scanner, per-symbol cash controls and an offline bid/ask replay. Only XAUUSD is enabled. The historical experiment uses 0.09 lot, $10 TP and $5 SL per leg, with spread retained and zero modeled commission/slippage. It did **not** demonstrate a profitable edge.
+
+- [Setup, configuration, demo safeguards and CSV formats](docs/ZONE_PILOT.md)
+- [Code audit, XAUUSD comparison and trade ledgers](research/zone_pilot/REPORT.md)
+- `python -m bot.cli trade-all` observes; `python -m bot.cli zones-replay --help` lists offline options. Real-money orders are disabled.
+
+---
+
+The specification below is the **archived project brief**, not the current runbook or a statement that all proposed phases were implemented.
+
+# AGENT PROMPT: XAUUSD Adaptive Multi-Mode Trading System (MetaTrader 5 + Python)
 
 > Paste this whole document into your coding agent. Execute phases **in order**. Do not skip a phase's acceptance gate. Ask nothing unless blocked; make the stated defaults and record assumptions in `docs/ASSUMPTIONS.md`.
 

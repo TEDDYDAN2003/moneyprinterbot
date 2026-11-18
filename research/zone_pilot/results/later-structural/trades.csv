@@ -1,0 +1,1 @@
+batch,leg,signal_close_utc,entry_utc,exit_utc,side,timeframe,setup,zone_id,pool,level,width,momentum,objective,lots,entry_quote,modeled_entry,stop,target,exit_fill,cost_floor_usd,clears_structure,structural_stop,risk_at_structure_usd,max_lots_for_structure,exit,net_usd

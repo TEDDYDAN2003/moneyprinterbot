@@ -1,5 +1,8 @@
 # Architecture
 
+**Current zone pilot:** see [implemented strategy and runtime contracts](ZONE_PILOT.md). The notes below describe the earlier research foundation.
+
+
 The system follows one deterministic path:
 
 `data -> completed bars -> features -> labels/models -> decision -> risk governor -> execution -> management -> reports`

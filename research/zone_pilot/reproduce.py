@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 from urllib.request import urlopen
 
 REV = "3ef0f9a5940898a3f690140481500730a3fe178a"

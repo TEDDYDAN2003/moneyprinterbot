@@ -1,0 +1,186 @@
+{
+  "strategy": "legacy",
+  "instrument": "XAUUSD",
+  "start_utc": "2026-10-29T00:00:00.000+00:00",
+  "end_bar_utc": "2026-11-11T23:59:00.000+00:00",
+  "bars": 13740,
+  "historical_warmup_bars": 27600,
+  "ticks": 4993942,
+  "batches": 43,
+  "starting_equity_usd": 10000.0,
+  "median_open_spread": 0.5389999999997599,
+  "spread_eligible_minutes": 192,
+  "decisions": {
+    "legacy_ineligible_quote": 5684,
+    "legacy_bullish_continuation": 4,
+    "no_legacy_candidate": 45,
+    "legacy_bearish_continuation": 13,
+    "legacy_support_or_trendline_rejection": 16,
+    "legacy_resistance_or_trendline_rejection": 10
+  },
+  "candidates": {
+    "legacy_bullish_continuation": 4,
+    "legacy_bearish_continuation": 13,
+    "legacy_support_or_trendline_rejection": 16,
+    "legacy_resistance_or_trendline_rejection": 10
+  },
+  "blocked": {},
+  "exits": {
+    "stop": 34,
+    "target": 9
+  },
+  "drawdown_basis": "realized USD, after costs, from initial equity peak; not intratick equity drawdown",
+  "metrics": {
+    "trades": 43,
+    "win_rate": 0.20930232558139536,
+    "net_profit": -79.75800000000001,
+    "profit_factor": 0.5303656597774243,
+    "average_win": 10.008,
+    "average_loss": -4.995,
+    "max_drawdown": 79.77600000000004
+  },
+  "final_guard": {
+    "day": "2026-11-11",
+    "start": 9920.241999999995,
+    "peak": 10000.018000000004,
+    "day_halt": false,
+    "dd_halt": true
+  },
+  "stop_fill": "barrier",
+  "execution": "next observed minute opening quote; configured commission and slippage per side; executable-side barrier tests; modeled fills",
+  "quote_mode": "ticks",
+  "spread_override": null,
+  "source_timezone": "UTC",
+  "experiment_config": {
+    "zones": {
+      "enabled": true,
+      "rules": {
+        "pivot_bars": 2,
+        "width_atr": 0.15,
+        "momentum_min": 0.25,
+        "recency_bars": 60,
+        "retest_minutes": 20,
+        "max_chase_atr": 0.65,
+        "reset_gap_minutes": 30,
+        "require_structural_stop": false,
+        "exit_mode": "fixed_cash"
+      },
+      "limits": {
+        "max_legs": 3,
+        "max_risk_usd": 15.0,
+        "max_total_lots": 0.27,
+        "daily_loss_usd": 30.0,
+        "drawdown_usd": 75.0,
+        "magic": 26011808,
+        "entry_age_seconds": 8.0
+      },
+      "symbols": {
+        "XAUUSD": {
+          "enabled": true,
+          "broker_symbol": "XAUUSDm",
+          "lots": 0.09,
+          "tp_usd": 10.0,
+          "sl_usd": 5.0,
+          "legs": 1,
+          "contract_size": 100.0,
+          "conversion": "quote_usd",
+          "point": 0.001,
+          "tick_size": 0.001,
+          "max_spread": 0.3,
+          "assumed_spread": 0.24,
+          "slippage": 0.0,
+          "commission": 0.0,
+          "round_step": 5.0
+        },
+        "EURUSD": {
+          "enabled": false,
+          "broker_symbol": "EURUSDm",
+          "lots": 0.01,
+          "tp_usd": 10.0,
+          "sl_usd": 5.0,
+          "legs": 1,
+          "contract_size": 100000.0,
+          "conversion": "quote_usd",
+          "point": 1e-05,
+          "tick_size": 1e-05,
+          "max_spread": 0.0002,
+          "assumed_spread": 0.0001,
+          "slippage": 0.0,
+          "commission": 0.0,
+          "round_step": 0.005
+        },
+        "USDJPY": {
+          "enabled": false,
+          "broker_symbol": "USDJPYm",
+          "lots": 0.01,
+          "tp_usd": 10.0,
+          "sl_usd": 5.0,
+          "legs": 1,
+          "contract_size": 100000.0,
+          "conversion": "base_usd",
+          "point": 0.001,
+          "tick_size": 0.001,
+          "max_spread": 0.02,
+          "assumed_spread": 0.01,
+          "slippage": 0.0,
+          "commission": 0.0,
+          "round_step": 0.5
+        }
+      }
+    },
+    "sessions": {
+      "asia": {
+        "start": "00:00",
+        "end": "07:00",
+        "tz": "UTC"
+      },
+      "london": {
+        "start": "08:00",
+        "end": "16:00",
+        "tz": "Europe/London"
+      },
+      "new_york": {
+        "start": "08:00",
+        "end": "17:00",
+        "tz": "America/New_York"
+      },
+      "killzones": {
+        "london_open": {
+          "start": "07:00",
+          "end": "10:00",
+          "tz": "Europe/London"
+        },
+        "ny_open": {
+          "start": "07:00",
+          "end": "10:00",
+          "tz": "America/New_York"
+        },
+        "london_ny_overlap": {
+          "start": "13:00",
+          "end": "16:00",
+          "tz": "Europe/London"
+        }
+      },
+      "trade_only_in": [],
+      "allow_asia": true,
+      "rollover_blackout": {
+        "start": "21:55",
+        "end": "23:05",
+        "tz": "UTC"
+      }
+    },
+    "market_close_timezone": "Etc/GMT-2",
+    "daily_flatten_time": "23:45",
+    "daily_reopen_time": "01:05"
+  },
+  "config_sha256": "361c485721e856589eb9470e917ba57ff17c6971e04f535f8e77905918e6bd29",
+  "input_files": {
+    "XAUUSD_2026_w40.csv.gz": "c833e8dafc7d4e7712d1c614b57352157f4332b7177b67d3320fb324b925357d",
+    "XAUUSD_2026_w41.csv.gz": "91ff4516f9464256bd1dd992a5bc28a6a8c0f5ccfd17c9b6d9140695cc491ebf",
+    "XAUUSD_2026_w42.csv.gz": "143ae8f84fdae26d443190c3c46f06709d7b0da487aef155107aa996cc9fec37",
+    "XAUUSD_2026_w43.csv.gz": "9cc41eac154de7c6f88c4d9b4ab2af84bc05b272da2e5844ec19a74788e00af5",
+    "XAUUSD_2026_w44.csv.gz": "af7f48fb7d63c3b6ad87bb3b8289177a6091e85df46e483368edc4541781edf8",
+    "XAUUSD_2026_w45.csv.gz": "bfabc0e7d4aa86ac4eceb96cdd8a63ae5f705915877db616b9224615f6711aa8"
+  },
+  "git_head": "6ac112a31e3b02c742f655d98b8afce1abff6561"
+}

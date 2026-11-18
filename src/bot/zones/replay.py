@@ -473,7 +473,7 @@ def run_replay(args, cfg):
         json.dumps(result, indent=2, allow_nan=False) + "\n", encoding="utf-8"
     )
     with (out / "trades.csv").open("w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=TRADE_FIELDS)
+        w = csv.DictWriter(f, fieldnames=TRADE_FIELDS, lineterminator="\n")
         w.writeheader()
         w.writerows(trades)
     print(json.dumps(result["metrics"], indent=2))
