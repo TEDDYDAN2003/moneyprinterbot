@@ -153,6 +153,7 @@ def desk(tmp_path, monkeypatch):
 
     cfg = load_yaml(Path(__file__).resolve().parents[1] / "config.yaml")
     cfg["run"]["mode"] = "demo"
+    cfg["zones"]["price_action"]["policy"] = "baseline"  # v1 desk regression
     cfg["zones"]["symbols"]["XAUUSD"]["legs"] = 2
     mt = Terminal()
     monkeypatch.setattr("bot.zones.monitor.time.time", lambda: T + 0.2)
@@ -260,3 +261,54 @@ def test_kill_does_not_close_foreign_tickets(desk):
     d, s, _sig = desk
     d.close(NS(symbol=s.broker_symbol, magic=d.lim.magic + 1), "kill")
     assert d.mt.sent == []
+
+
+@pytest.mark.parametrize("hidden_break", [False, True])
+def test_challenger_sender_uses_real_wick_and_rechecks_every_intervening_quote(
+    desk, hidden_break
+):
+    import numpy as np
+
+    from bot.zones.price_action import arm
+
+    d, s, _ = desk
+    pa = d.z.price_action.model_copy(
+        update={"policy": "sweep_wick", "demo_opt_in": True}
+    )
+    d.z = d.z.model_copy(update={"price_action": pa})
+    s = s.model_copy(update={"legs": 1})
+    sig = Decision(
+        T,
+        "sweep_reclaim",
+        -1,
+        1,
+        "bsl",
+        4000.0,
+        0.2,
+        4000.6,
+        3995.0,
+        1.5,
+        trigger_high=4000.6,
+        trigger_low=3999.5,
+    )
+    assert d.send(s, sig) == "frozen_watch_required"
+    w, _ = arm(sig, s, pa)
+    d.mt.tick = NS(time_msc=T * 1000 + 100, bid=4000.53, ask=4000.77)
+    d.mt.COPY_TICKS_ALL = 0
+    rows = [
+        (T * 1000, 3999.8, 4000.04),
+        (T * 1000 + 50, 4000.65 if hidden_break else 4000.4, 4000.90),
+        (T * 1000 + 100, 4000.53, 4000.77),
+    ]
+    d.mt.copy_ticks_range = lambda *args: np.array(
+        rows, dtype=[("time_msc", "i8"), ("bid", "f8"), ("ask", "f8")]
+    )
+    if hidden_break:
+        assert (
+            d.send(s, sig, watch=w) == "final_quote_or_safety_changed" and not d.mt.sent
+        )
+    else:
+        assert d.send(s, sig, watch=w) == "demo_batch_sent"
+        req = d.mt.sent[0]
+        assert req["sl"] == pytest.approx(4000.841) and req["volume"] == 0.09
+        assert (req["sl"] - req["price"]) * 9 == pytest.approx(2.799)

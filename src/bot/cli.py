@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -50,7 +50,7 @@ def main() -> int:
         default=None,
         help="legacy worker only; zone mode always uses M1/M5/M15 together",
     )
-    demo.add_argument("--poll-seconds", type=float, default=2.0)
+    demo.add_argument("--poll-seconds", type=float, default=None)
     demo.add_argument("--max-iterations", type=int)
     demo.add_argument(
         "--arm-orders",
@@ -63,7 +63,7 @@ def main() -> int:
         "trade-all", help="scan enabled symbols using M1, M5 and M15 zones"
     )
     trade_all.add_argument("--config", default="config.yaml")
-    trade_all.add_argument("--poll-seconds", type=float, default=2.0)
+    trade_all.add_argument("--poll-seconds", type=float, default=None)
     trade_all.add_argument("--max-iterations", type=int)
     trade_all.add_argument(
         "--arm-orders",
@@ -115,7 +115,46 @@ def main() -> int:
         action="store_true",
         help="replay only: reject cash SL inside setup invalidation",
     )
+    from bot.zones.price_action import POLICIES
+
+    study = subparsers.add_parser(
+        "candle-test",
+        help="compare candle/return/stop/hold policies on actual ordered bid/ask ticks",
+    )
+    study.add_argument("--config", default="config.yaml")
+    study.add_argument("--symbol", default="XAUUSD")
+    study.add_argument(
+        "--ticks",
+        nargs="+",
+        required=True,
+        help="timestamp,bid,ask UTC CSV/CSV.gz (not candle OHLC)",
+    )
+    study.add_argument("--policy", choices=(*POLICIES, "all"), default="all")
+    study.add_argument("--start")
+    study.add_argument("--end")
+    study.add_argument(
+        "--stop-fill", choices=("barrier", "first_quote"), default="barrier"
+    )
+    study.add_argument("--out", default="reports/candle_replay_broker")
+    export = subparsers.add_parser(
+        "export-ticks", help="read-only export from your own MT5 broker terminal"
+    )
+    export.add_argument("--config", default="config.yaml")
+    export.add_argument("--symbol", default="XAUUSD")
+    export.add_argument("--start", required=True)
+    export.add_argument("--end", required=True, help="exclusive UTC")
+    export.add_argument("--out", required=True)
     args = parser.parse_args()
+    if args.command == "candle-test":
+        from bot.zones.candle_replay import run_price_test
+
+        run_price_test(args, load_yaml(args.config))
+        return 0
+    if args.command == "export-ticks":
+        from bot.zones.export import run_export
+
+        run_export(args, load_yaml(args.config))
+        return 0
     if args.command == "zones-replay":
         from bot.zones.replay import run_replay
 
@@ -155,7 +194,7 @@ def main() -> int:
             config,
             args.timeframe or "M1",
             armed=args.arm_orders,
-            poll_seconds=args.poll_seconds,
+            poll_seconds=2.0 if args.poll_seconds is None else args.poll_seconds,
             max_iterations=args.max_iterations,
         )
         return 0
@@ -172,7 +211,7 @@ def main() -> int:
                 "--timeframe",
                 timeframe,
                 "--poll-seconds",
-                str(args.poll_seconds),
+                str(2.0 if args.poll_seconds is None else args.poll_seconds),
             ]
             if args.max_iterations is not None:
                 command.extend(("--max-iterations", str(args.max_iterations)))

@@ -1,8 +1,10 @@
 # Moneyprinterbot • zone-reaction pilot
 
-**Active implementation:** a paper-by-default M1/M5/M15 liquidity-zone scanner, per-symbol cash controls and an offline bid/ask replay. Only XAUUSD is enabled. The historical experiment uses 0.09 lot, $10 TP and $5 SL per leg, with spread retained and zero modeled commission/slippage. It did **not** demonstrate a profitable edge.
+**Active implementation:** a paper-by-default M1/M5/M15 liquidity-zone scanner, per-symbol cash controls and an offline bid/ask replay. Only XAUUSD is enabled. The gold experiment uses 0.09 lot, a $10 reference TP and a $5 maximum modeled initial loss per leg, with spread retained and zero modeled commission/slippage. It did **not** demonstrate a profitable edge.
 
-- [Setup, configuration, demo safeguards and CSV formats](docs/ZONE_PILOT.md)
+- **[Candle/retest scanner, actual wick stops, managed exits and read-only MT5 tick export](docs/CANDLE_RETEST.md)**
+- [Candle experiment: fixed vs wick vs hold, including losing and empty windows](research/candle_retest/REPORT.md)
+- [Original zone design, per-symbol configuration and safeguards](docs/ZONE_PILOT.md)
 - [Code audit, XAUUSD comparison and trade ledgers](research/zone_pilot/REPORT.md)
 - `python -m bot.cli trade-all` observes; `python -m bot.cli zones-replay --help` lists offline options. Real-money orders are disabled.
 

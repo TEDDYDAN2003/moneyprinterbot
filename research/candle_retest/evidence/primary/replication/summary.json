@@ -1,0 +1,297 @@
+{
+  "coverage": {
+    "first_ms": 1788393600111,
+    "bars": 27448,
+    "ticks": 5927297,
+    "open_spread_ok": 178
+  },
+  "last_utc": "2026-09-30T23:59:58.864+00:00",
+  "pattern_tags_on_zone_candidates": {
+    "doji": 101,
+    "bull_ordinary": 519,
+    "bear_rejection": 160,
+    "inside": 426,
+    "bear_ordinary": 496,
+    "bull_body": 278,
+    "bull_rejection": 132,
+    "bear_engulf": 195,
+    "bull_engulf": 171,
+    "bear_body": 269
+  },
+  "arms": {
+    "baseline": {
+      "metrics": {
+        "trades": 7,
+        "win_rate": 0.42857142857142855,
+        "net_profit": 10.043999999999997,
+        "profit_factor": 1.5027027027027025,
+        "average_win": 10.008,
+        "average_loss": -4.995,
+        "max_drawdown": 9.990000000000002,
+        "wins": 3,
+        "expectancy_usd": 1.4348571428571424,
+        "max_drawdown_pct_initial": 0.09990000000000002,
+        "largest_loss": -4.995,
+        "median_initial_risk": 4.995,
+        "max_initial_risk": 4.995
+      },
+      "events": {
+        "zone_candidates": 2398,
+        "not_entered:spread_limit": 2370,
+        "not_entered:opposing_zone_before_cash_target": 12,
+        "not_entered:stale_signal": 7,
+        "entries": 7,
+        "not_entered:scheduled_break": 2
+      },
+      "watch_quote_checks": {},
+      "exits": {
+        "target": 3,
+        "stop": 4
+      },
+      "guard": {
+        "day": "2026-09-30",
+        "start": 10010.043999999996,
+        "peak": 10020.033999999998,
+        "day_halt": false,
+        "dd_halt": false
+      }
+    },
+    "return_cash": {
+      "metrics": {
+        "trades": 8,
+        "win_rate": 0.0,
+        "net_profit": -39.96,
+        "profit_factor": 0.0,
+        "average_win": 0.0,
+        "average_loss": -4.995,
+        "max_drawdown": 39.96,
+        "wins": 0,
+        "expectancy_usd": -4.995,
+        "max_drawdown_pct_initial": 0.3996,
+        "largest_loss": -4.995,
+        "median_initial_risk": 4.995,
+        "max_initial_risk": 4.995
+      },
+      "events": {
+        "zone_candidates": 2398,
+        "signal:armed": 2348,
+        "watch:invalidated_before_entry": 540,
+        "watch:objective_before_entry": 1399,
+        "watch:expired": 345,
+        "watch:opposite_structure_before_entry": 56,
+        "entries": 8
+      },
+      "watch_quote_checks": {
+        "outside_return_band": 55394,
+        "spread_limit": 12508,
+        "wick_risk_over_budget": 89,
+        "opposing_zone_before_cash_target": 1,
+        "ready": 8
+      },
+      "exits": {
+        "stop": 8
+      },
+      "guard": {
+        "day": "2026-09-30",
+        "start": 9960.039999999994,
+        "peak": 10000.0,
+        "day_halt": false,
+        "dd_halt": false
+      }
+    },
+    "return_wick": {
+      "metrics": {
+        "trades": 8,
+        "win_rate": 0.0,
+        "net_profit": -32.138999999999996,
+        "profit_factor": 0.0,
+        "average_win": 0.0,
+        "average_loss": -4.0173749999999995,
+        "max_drawdown": 32.138999999999996,
+        "wins": 0,
+        "expectancy_usd": -4.0173749999999995,
+        "max_drawdown_pct_initial": 0.32138999999999995,
+        "largest_loss": -4.842,
+        "median_initial_risk": 4.297499999999999,
+        "max_initial_risk": 4.842
+      },
+      "events": {
+        "zone_candidates": 2398,
+        "signal:armed": 2348,
+        "watch:invalidated_before_entry": 540,
+        "watch:objective_before_entry": 1399,
+        "watch:expired": 345,
+        "watch:opposite_structure_before_entry": 56,
+        "entries": 8
+      },
+      "watch_quote_checks": {
+        "outside_return_band": 55394,
+        "spread_limit": 12508,
+        "wick_risk_over_budget": 89,
+        "opposing_zone_before_cash_target": 1,
+        "ready": 8
+      },
+      "exits": {
+        "stop": 8
+      },
+      "guard": {
+        "day": "2026-09-30",
+        "start": 9967.860999999999,
+        "peak": 10000.0,
+        "day_halt": false,
+        "dd_halt": false
+      }
+    },
+    "pattern_wick": {
+      "metrics": {
+        "trades": 2,
+        "win_rate": 0.0,
+        "net_profit": -8.946,
+        "profit_factor": 0.0,
+        "average_win": 0.0,
+        "average_loss": -4.473,
+        "max_drawdown": 8.946,
+        "wins": 0,
+        "expectancy_usd": -4.473,
+        "max_drawdown_pct_initial": 0.08946,
+        "largest_loss": -4.545,
+        "median_initial_risk": 4.473,
+        "max_initial_risk": 4.545
+      },
+      "events": {
+        "zone_candidates": 2398,
+        "signal:no_directional_pattern": 1676,
+        "signal:armed": 701,
+        "watch:objective_before_entry": 419,
+        "watch:invalidated_before_entry": 148,
+        "watch:expired": 119,
+        "watch:opposite_structure_before_entry": 13,
+        "entries": 2
+      },
+      "watch_quote_checks": {
+        "outside_return_band": 16912,
+        "wick_risk_over_budget": 21,
+        "opposing_zone_before_cash_target": 1,
+        "spread_limit": 3843,
+        "ready": 2
+      },
+      "exits": {
+        "stop": 2
+      },
+      "guard": {
+        "day": "2026-09-30",
+        "start": 9991.054,
+        "peak": 10000.0,
+        "day_halt": false,
+        "dd_halt": false
+      }
+    },
+    "pattern_zone": {
+      "metrics": {
+        "trades": 2,
+        "win_rate": 0.0,
+        "net_profit": -8.946,
+        "profit_factor": 0.0,
+        "average_win": 0.0,
+        "average_loss": -4.473,
+        "max_drawdown": 8.946,
+        "wins": 0,
+        "expectancy_usd": -4.473,
+        "max_drawdown_pct_initial": 0.08946,
+        "largest_loss": -4.545,
+        "median_initial_risk": 4.473,
+        "max_initial_risk": 4.545
+      },
+      "events": {
+        "zone_candidates": 2398,
+        "signal:no_directional_pattern": 1676,
+        "signal:armed": 701,
+        "watch:objective_before_entry": 419,
+        "watch:invalidated_before_entry": 148,
+        "watch:expired": 119,
+        "watch:opposite_structure_before_entry": 13,
+        "entries": 2
+      },
+      "watch_quote_checks": {
+        "outside_return_band": 16912,
+        "wick_risk_over_budget": 21,
+        "opposing_zone_before_cash_target": 1,
+        "spread_limit": 3843,
+        "ready": 2
+      },
+      "exits": {
+        "stop": 2
+      },
+      "guard": {
+        "day": "2026-09-30",
+        "start": 9991.054,
+        "peak": 10000.0,
+        "day_halt": false,
+        "dd_halt": false
+      }
+    },
+    "pattern_managed": {
+      "metrics": {
+        "trades": 2,
+        "win_rate": 0.0,
+        "net_profit": -7.551,
+        "profit_factor": 0.0,
+        "average_win": 0.0,
+        "average_loss": -3.7755,
+        "max_drawdown": 7.551,
+        "wins": 0,
+        "expectancy_usd": -3.7755,
+        "max_drawdown_pct_initial": 0.07551000000000001,
+        "largest_loss": -4.401,
+        "median_initial_risk": 4.473,
+        "max_initial_risk": 4.545
+      },
+      "events": {
+        "zone_candidates": 2398,
+        "signal:no_directional_pattern": 1676,
+        "signal:armed": 701,
+        "watch:objective_before_entry": 419,
+        "watch:invalidated_before_entry": 148,
+        "watch:expired": 119,
+        "watch:opposite_structure_before_entry": 13,
+        "entries": 2
+      },
+      "watch_quote_checks": {
+        "outside_return_band": 16912,
+        "wick_risk_over_budget": 21,
+        "opposing_zone_before_cash_target": 1,
+        "spread_limit": 3843,
+        "ready": 2
+      },
+      "exits": {
+        "adverse_candle": 1,
+        "stop": 1
+      },
+      "guard": {
+        "day": "2026-09-30",
+        "start": 9992.449,
+        "peak": 10000.0,
+        "day_halt": false,
+        "dd_halt": false
+      }
+    }
+  },
+  "unbounded_same_entries_diagnostic": {
+    "metrics": {
+      "trades": 7,
+      "win_rate": 0.8571428571428571,
+      "net_profit": 43.62299999999999,
+      "profit_factor": 3.6558904109589037,
+      "average_win": 10.008,
+      "average_loss": -16.425,
+      "wins": 6,
+      "expectancy_usd": 6.231857142857142,
+      "largest_loss": -16.425,
+      "median_initial_risk": 18.396,
+      "max_initial_risk": 33.093
+    },
+    "over_budget": 7,
+    "unavailable": 0,
+    "note": "Frozen signals only. Possible overlapping exposure. Not a deployable portfolio or a $5-risk alternative."
+  }
+}

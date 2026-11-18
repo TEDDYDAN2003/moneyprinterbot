@@ -52,10 +52,36 @@ class Limits(Strict):
     entry_age_seconds: float = Field(default=8.0, gt=0, le=59)
 
 
+Policy = Literal[
+    "baseline",
+    "return_cash",
+    "return_wick",
+    "pattern_wick",
+    "pattern_zone",
+    "pattern_managed",
+    "return_managed",
+    "sweep_wick",
+    "sweep_managed",
+    "sweep_pattern_managed",
+    "reaction_managed",
+]
+
+
+class PriceAction(Strict):
+    policy: Policy = "baseline"  # absent in v1 configs
+    ttl_seconds: int = Field(default=180, ge=5, le=900)
+    buffer_ticks: int = Field(default=1, ge=1, le=100)
+    adverse_momentum: float = Field(default=0.30, gt=0, le=1)
+    giveback_fraction: float = Field(default=0.40, gt=0, lt=1)
+    poll_seconds: float = Field(default=2.0, ge=0.5, le=10.0)
+    demo_opt_in: bool = False  # separate from mode and --arm-demo
+
+
 class ZoneConfig(Strict):
     enabled: bool = True
     rules: Rules = Rules()
     limits: Limits = Limits()
+    price_action: PriceAction = PriceAction()
     symbols: dict[str, Instrument] = Field(min_length=1)
 
     @model_validator(mode="after")

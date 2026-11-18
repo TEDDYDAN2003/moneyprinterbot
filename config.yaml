@@ -260,6 +260,14 @@ reporting:
 # Values below are independent of the legacy pilot settings above.
 zones:
   enabled: true
+  price_action:
+    policy: reaction_managed  # SHADOW: sweep pocket, otherwise band; candles inform exits. baseline = v1.
+    ttl_seconds: 180         # second return must occur after the reaction close
+    buffer_ticks: 1          # beyond the reaction wick AND frozen invalidation
+    adverse_momentum: 0.30
+    giveback_fraction: 0.40  # only after executable per-leg profit reached tp_usd
+    poll_seconds: 2.0        # simulator samples first observed tick per UTC bucket
+    demo_opt_in: false       # do not promote based on the public replay
   rules:
     pivot_bars: 2             # left AND right completed bars, never backdated
     width_atr: 0.15          # half-width, frozen when the zone forms

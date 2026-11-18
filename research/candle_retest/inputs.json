@@ -1,0 +1,20 @@
+{
+  "base": "https://raw.githubusercontent.com/Touhid-HZ/xauusd-tick-data-2026/3ef0f9a5940898a3f690140481500730a3fe178a/data/tick/",
+  "sha256": {
+    "XAUUSD_2026_w36.csv.gz": "fa8189b01b8f176a7503f08c3ddf76fb564e213de9f99595264b8de4e3076c9d",
+    "XAUUSD_2026_w37.csv.gz": "7cb51444ae70c90527555f7e52aa9b0f923ec92bfba9d63b0ce8d1d333d4eacd",
+    "XAUUSD_2026_w38.csv.gz": "42e8e1bff4c621bfa9fcb6a139062e07dc0841da806d7a5ff5c93d19f097bec5",
+    "XAUUSD_2026_w39.csv.gz": "6868d5c29ed07d433b8fdd40aa949ff18e62b65595da731c7d6d107e498245e8",
+    "XAUUSD_2026_w40.csv.gz": "c833e8dafc7d4e7712d1c614b57352157f4332b7177b67d3320fb324b925357d",
+    "XAUUSD_2026_w41.csv.gz": "91ff4516f9464256bd1dd992a5bc28a6a8c0f5ccfd17c9b6d9140695cc491ebf",
+    "XAUUSD_2026_w42.csv.gz": "143ae8f84fdae26d443190c3c46f06709d7b0da487aef155107aa996cc9fec37",
+    "XAUUSD_2026_w43.csv.gz": "9cc41eac154de7c6f88c4d9b4ab2af84bc05b272da2e5844ec19a74788e00af5",
+    "XAUUSD_2026_w44.csv.gz": "af7f48fb7d63c3b6ad87bb3b8289177a6091e85df46e483368edc4541781edf8",
+    "XAUUSD_2026_w45.csv.gz": "bfabc0e7d4aa86ac4eceb96cdd8a63ae5f705915877db616b9224615f6711aa8",
+    "XAUUSD_2026_w46.csv.gz": "eb451e96b70913de2dd64788aa50eb0b2d9f704cedfeed542dc57c39e272f8e1",
+    "XAUUSD_2026_w32.csv.gz": "72a6e4713f16fbdfd65631be4680dee7263555ea68e2e017567b9bb9d8888673",
+    "XAUUSD_2026_w33.csv.gz": "380a9c7c6eebc1b579c9d5d6a23300ebe2758cefddbbe83bdca1fcfa6f2eb5d3",
+    "XAUUSD_2026_w34.csv.gz": "b4039572bb0067cae708804b6adc00e61981b42835b0de10bbbad40d9307c0de",
+    "XAUUSD_2026_w35.csv.gz": "2fab971abe8a607fc4c2852ac23f2d72f0a32c4454f9dd911f822dfceb649a68"
+  }
+}

@@ -223,10 +223,27 @@ class Desk:
             },
         )
 
-    def send(self, s, d):
+    def send(self, s, d, *, watch=None):
         """Durable intent BEFORE first send. Partial batch = keep protected fills, never top up/retry."""
         mt = self.mt
         name = s.broker_symbol
+        if self.z.price_action.policy != "baseline" and watch is None:
+            return "frozen_watch_required"
+        if watch is not None:
+            from .price_action import return_plan, rules_for
+            from .quote_path import path_cancel, quotes_to_snapshot
+
+            if (
+                not self.z.price_action.demo_opt_in
+                or watch.d != d
+                or watch.policy != self.z.price_action.policy
+            ):
+                return "challenger_not_armed"
+        deadline = (
+            watch.until_ms / 1000
+            if watch is not None
+            else d.t + self.lim.entry_age_seconds
+        )
         if self.state.get("last_attempt", {}).get(name, 0) >= d.t:
             return "already_attempted"
         if self.state.get("manual_hold"):
@@ -276,14 +293,22 @@ class Desk:
             now = time.time()
             if (
                 not fresh(tick, now, self.max_age)
-                or not d.t
-                <= tick.time_msc / 1000
-                <= now
-                <= d.t + self.lim.entry_age_seconds
+                or not d.t <= tick.time_msc / 1000 <= now <= deadline
             ):
                 return "stale_signal_or_quote"
             min_dist = max(info.trade_stops_level, info.trade_freeze_level) * info.point
-            p, block = plan_entry(d, s, self.z.rules, tick.bid, tick.ask, min_dist)
+            if watch is not None:
+                p, block = return_plan(
+                    watch,
+                    s,
+                    rules_for(self.z.rules, watch.policy),
+                    tick.bid,
+                    tick.ask,
+                    tick.time_msc,
+                    min_dist,
+                )
+            else:
+                p, block = plan_entry(d, s, self.z.rules, tick.bid, tick.ask, min_dist)
             if not p:
                 return block
             typ = mt.ORDER_TYPE_BUY if d.side == 1 else mt.ORDER_TYPE_SELL
@@ -333,10 +358,23 @@ class Desk:
             account_check(mt, self.mode, True, self.identity)
             q2 = mt.symbol_info_tick(name)
             now = time.time()
+            verified = True
+            if watch is not None and q2 is not None:
+                path = quotes_to_snapshot(mt, name, d.t * 1000, q2)
+                verified = path is not None and not path_cancel(watch, path[1])
+                # Do not send against an older snapshot after the history query.
+                q3 = mt.symbol_info_tick(name)
+                verified = (
+                    verified
+                    and q3 is not None
+                    and (q2.time_msc, q2.bid, q2.ask) == (q3.time_msc, q3.bid, q3.ask)
+                )
+            now = time.time()
             if (
-                self.kill.exists()
+                not verified
+                or self.kill.exists()
                 or self.hours.status(now)[0]
-                or now > d.t + self.lim.entry_age_seconds
+                or now >= deadline
                 or not fresh(q2, now, self.max_age)
                 or (q2.bid, q2.ask) != (tick.bid, tick.ask)
             ):
@@ -366,15 +404,54 @@ class Desk:
                 or not math.isclose(res.volume, s.lots, abs_tol=1e-8)
             ):
                 return "incomplete_or_unverified_batch_manual_hold"
+            if watch is not None:
+                actual = float(getattr(res, "price", 0) or 0)
+                gross = (
+                    mt.order_calc_profit(
+                        typ, name, s.lots, actual, p.sl - d.side * s.slippage
+                    )
+                    if actual > 0
+                    else None
+                )
+                if (
+                    gross is None
+                    or not math.isfinite(gross)
+                    or fee - gross > s.sl_usd + 1e-7
+                ):
+                    self.emit(
+                        "fill_risk_mismatch",
+                        {
+                            "symbol": name,
+                            "signal": d.t,
+                            "actual_fill": actual,
+                            "cap": s.sl_usd,
+                        },
+                    )
+                    new = [
+                        x
+                        for x in snapshot(mt)[0]
+                        if x.symbol == name
+                        and x.magic == self.lim.magic
+                        and x.ticket not in current
+                    ]
+                    if len(new) == 1:
+                        self.close(new[0], "fill_risk_mismatch")
+                    return "broker_fill_risk_manual_hold"
             self.state.pop("manual_hold")
             save(self.path, self.state)
         return "demo_batch_sent"
 
 
-def monitor(cfg, armed=False, poll=2.0, iterations=None):
+def monitor(cfg, armed=False, poll=None, iterations=None):
     z = ZoneConfig.model_validate(cfg["zones"])
+    if poll is None:
+        poll = z.price_action.poll_seconds
     if not 0.5 <= poll <= 10 or (iterations is not None and iterations < 1):
         raise ValueError("Invalid polling limits")
+    if armed and z.price_action.policy != "baseline" and not z.price_action.demo_opt_in:
+        raise DemoSafetyError(
+            "Candle challenger is shadow-only unless price_action.demo_opt_in is explicit"
+        )
     if armed and cfg["run"]["mode"] != "demo":
         raise DemoSafetyError("Use explicit run.mode: demo; paper cannot send orders")
     try:
@@ -417,7 +494,10 @@ def monitor(cfg, armed=False, poll=2.0, iterations=None):
                 else {}
             )
             desk = Desk(mt, cfg, z, identity, state, state_path, emit)
+            from .watch_monitor import SymbolWatch
+
             engines = {}
+            watches = {}
             history = max(2400, int(cfg["pilot"]["history_m1_bars"]))
             for name, s in desk.symbols.items():
                 if not mt.symbol_select(name, True):
@@ -428,6 +508,8 @@ def monitor(cfg, armed=False, poll=2.0, iterations=None):
                         f"{name}: {mismatch}; verify profile in config.yaml"
                     )
                 engines[name] = ZoneEngine(z.rules, s)
+                if z.price_action.policy != "baseline":
+                    watches[name] = SymbolWatch(s, z)
             emit(
                 "scanner_started",
                 {
@@ -473,9 +555,23 @@ def monitor(cfg, armed=False, poll=2.0, iterations=None):
                         name, mt.TIMEFRAME_M1, 1, count
                     )  # NEVER use forming index zero
                     if rates is None or len(rates) == 0:
+                        if name in watches:
+                            watches[name].poll(
+                                desk,
+                                None,
+                                cold,
+                                True,
+                                False,
+                                own,
+                                armed,
+                                halt,
+                                flatten,
+                                killed,
+                            )
                         emit("data_unavailable", {"symbol": name})
                         continue
                     d = None
+                    before = engine.prev.t if engine.prev else None
                     for x in rates:
                         t = int(x["time"])
                         if t + 60 <= time.time() and (
@@ -490,6 +586,20 @@ def monitor(cfg, armed=False, poll=2.0, iterations=None):
                                     ],
                                 )
                             )
+                    if name in watches:
+                        expected = int(time.time()) // 60 * 60
+                        good = (
+                            engine.prev is not None and engine.prev.t + 60 == expected
+                        )
+                        gap = bool(
+                            before is not None
+                            and d is not None
+                            and engine.prev.t != before + 60
+                        )
+                        watches[name].poll(
+                            desk, d, cold, gap, good, own, armed, halt, flatten, killed
+                        )
+                        continue
                     if d is None:
                         continue
                     s = desk.symbols[name]

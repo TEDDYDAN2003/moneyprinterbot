@@ -10,6 +10,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from math import ceil, floor, isfinite
 
+from .candles import patterns
 from .config import Instrument, Rules
 
 
@@ -74,6 +75,15 @@ class Decision:
     reactions: tuple[
         str, ...
     ] = ()  # all interactions, even if another level wins priority
+
+    candle: tuple[str, ...] = ()
+    previous_candle: tuple[str, ...] = ()
+    source_candle: tuple[str, ...] = ()
+    prior_at_zone: bool = False
+    trigger_high: float = 0.0
+    trigger_low: float = 0.0
+    prior_momentum: float = 0.0
+    bar_direction: int = 0
 
 
 @dataclass
@@ -158,6 +168,8 @@ class ZoneEngine:
         self.frames = {n: Frame(n, rules.pivot_bars) for n in (1, 5, 15)}
         self.zones: list[Pool] = []
         self.prev: Bar | None = None
+        self.last_momentum = 0.0
+        self.last_patterns = {n: () for n in self.frames}
 
     def _add(self, f, role, p, label, t):
         w = max(self.s.tick_size, self.r.width_atr * f.atr)
@@ -211,7 +223,15 @@ class ZoneEngine:
                 f.chunk.clear()
         old, self.prev = self.prev, b
         t = b.t + 60
+        prev_pattern = self.last_patterns[1] if old and old.t + 60 == b.t else ()
         completed = [f for f in self.frames.values() if f.ingest(b) is not None]
+        for f in completed:
+            prev_tf = (
+                f.window[-2]
+                if len(f.window) > 1 and f.window[-2].t + f.n * 60 == f.window[-1].t
+                else None
+            )
+            self.last_patterns[f.n] = patterns(f.window[-1], prev_tf, self.s.tick_size)
         closed = {f.n for f in completed}
         atr = self.frames[1].atr
         rng = max(b.h - b.l, self.s.tick_size)
@@ -299,6 +319,12 @@ class ZoneEngine:
             "momentum": mom,
             "trends": trends,
             "breaks": tuple(breaks),
+            "bar_direction": (1 if body > 0 else -1 if body < 0 else 0),
+            "candle": self.last_patterns[1],
+            "previous_candle": prev_pattern,
+            "trigger_high": b.h,
+            "trigger_low": b.l,
+            "prior_momentum": self.last_momentum if old and old.t + 60 == b.t else 0.0,
             "reactions": tuple(notes),
             "observed_levels": observed,
         }
@@ -329,6 +355,13 @@ class ZoneEngine:
                 swing=z.label,
                 touches=z.touches,
                 invalidation=invalid,
+                source_candle=self.last_patterns[z.tf],
+                prior_at_zone=bool(
+                    old
+                    and old.t >= max(z.born, z.break_time)
+                    and old.l <= z.price + z.w
+                    and old.h >= z.price - z.w
+                ),
                 objective=self._objective(z.role, b.c),
                 pool=(
                     "buy_side"
@@ -349,4 +382,5 @@ class ZoneEngine:
         for f in completed:
             for role, price, label in f.confirmed():
                 self._add(f, role, price, label, t)
+        self.last_momentum = mom
         return answer

@@ -1,0 +1,230 @@
+{
+  "coverage": {
+    "first_ms": 1788393600111,
+    "bars": 27448,
+    "ticks": 5927297,
+    "open_spread_ok": 178
+  },
+  "last_utc": "2026-09-30T23:59:58.864+00:00",
+  "pattern_tags_on_zone_candidates": {
+    "bear_ordinary": 501,
+    "bull_ordinary": 522,
+    "inside": 428,
+    "bull_rejection": 133,
+    "bear_body": 271,
+    "bull_engulf": 172,
+    "bear_engulf": 196,
+    "doji": 101,
+    "bear_rejection": 160,
+    "bull_body": 278
+  },
+  "arms": {
+    "baseline": {
+      "metrics": {
+        "trades": 7,
+        "win_rate": 0.42857142857142855,
+        "net_profit": 8.135999999999997,
+        "profit_factor": 1.3717105263157894,
+        "average_win": 10.008,
+        "average_loss": -5.4719999999999995,
+        "max_drawdown": 11.727,
+        "wins": 3,
+        "expectancy_usd": 1.162285714285714,
+        "max_drawdown_pct_initial": 0.11727,
+        "largest_loss": -6.444,
+        "median_initial_risk": 4.995,
+        "max_initial_risk": 4.995
+      },
+      "events": {
+        "zone_candidates": 2411,
+        "not_entered:spread_limit": 2383,
+        "not_entered:opposing_zone_before_cash_target": 12,
+        "not_entered:stale_signal": 7,
+        "entries": 7,
+        "not_entered:scheduled_break": 2
+      },
+      "watch_quote_checks": {},
+      "exits": {
+        "target": 3,
+        "stop": 4
+      },
+      "guard": {
+        "day": "2026-09-30",
+        "start": 10008.136,
+        "peak": 10018.297,
+        "day_halt": false,
+        "dd_halt": false
+      }
+    },
+    "return_cash": {
+      "metrics": {
+        "trades": 8,
+        "win_rate": 0.0,
+        "net_profit": -45.504,
+        "profit_factor": 0.0,
+        "average_win": 0.0,
+        "average_loss": -5.688,
+        "max_drawdown": 45.504000000000005,
+        "wins": 0,
+        "expectancy_usd": -5.688,
+        "max_drawdown_pct_initial": 0.45504000000000006,
+        "largest_loss": -6.66,
+        "median_initial_risk": 4.995,
+        "max_initial_risk": 4.995
+      },
+      "events": {
+        "zone_candidates": 2411,
+        "signal:armed": 2360,
+        "watch:objective_before_entry": 1404,
+        "watch:expired": 348,
+        "watch:invalidated_before_entry": 544,
+        "watch:opposite_structure_before_entry": 56,
+        "entries": 8
+      },
+      "watch_quote_checks": {
+        "outside_return_band": 55833,
+        "spread_limit": 12596,
+        "wick_risk_over_budget": 89,
+        "opposing_zone_before_cash_target": 1,
+        "ready": 8
+      },
+      "exits": {
+        "stop": 8
+      },
+      "guard": {
+        "day": "2026-09-30",
+        "start": 9954.496,
+        "peak": 10000.0,
+        "day_halt": false,
+        "dd_halt": false
+      }
+    },
+    "return_wick": {
+      "metrics": {
+        "trades": 8,
+        "win_rate": 0.0,
+        "net_profit": -42.831,
+        "profit_factor": 0.0,
+        "average_win": 0.0,
+        "average_loss": -5.353875,
+        "max_drawdown": 42.831,
+        "wins": 0,
+        "expectancy_usd": -5.353875,
+        "max_drawdown_pct_initial": 0.42831,
+        "largest_loss": -6.66,
+        "median_initial_risk": 4.297499999999999,
+        "max_initial_risk": 4.842
+      },
+      "events": {
+        "zone_candidates": 2411,
+        "signal:armed": 2360,
+        "watch:objective_before_entry": 1404,
+        "watch:expired": 348,
+        "watch:invalidated_before_entry": 544,
+        "watch:opposite_structure_before_entry": 56,
+        "entries": 8
+      },
+      "watch_quote_checks": {
+        "outside_return_band": 55833,
+        "spread_limit": 12596,
+        "wick_risk_over_budget": 89,
+        "opposing_zone_before_cash_target": 1,
+        "ready": 8
+      },
+      "exits": {
+        "stop": 8
+      },
+      "guard": {
+        "day": "2026-09-30",
+        "start": 9957.169,
+        "peak": 10000.0,
+        "day_halt": false,
+        "dd_halt": false
+      }
+    },
+    "sweep_wick": {
+      "metrics": {
+        "trades": 0,
+        "win_rate": null,
+        "net_profit": 0,
+        "profit_factor": null,
+        "average_win": 0.0,
+        "average_loss": 0.0,
+        "max_drawdown": 0.0,
+        "wins": 0,
+        "expectancy_usd": null,
+        "max_drawdown_pct_initial": 0.0,
+        "largest_loss": 0.0,
+        "median_initial_risk": null,
+        "max_initial_risk": null
+      },
+      "events": {
+        "zone_candidates": 2411,
+        "signal:not_a_sweep": 1871,
+        "signal:armed": 527,
+        "watch:objective_before_entry": 331,
+        "watch:invalidated_before_entry": 109,
+        "watch:opposite_structure_before_entry": 20,
+        "watch:expired": 67
+      },
+      "watch_quote_checks": {
+        "outside_swept_pocket": 14573,
+        "spread_limit": 511,
+        "wick_risk_over_budget": 1
+      },
+      "exits": {},
+      "guard": {
+        "day": "2026-09-30",
+        "start": 10000.0,
+        "peak": 10000.0,
+        "day_halt": false,
+        "dd_halt": false
+      }
+    },
+    "reaction_managed": {
+      "metrics": {
+        "trades": 8,
+        "win_rate": 0.0,
+        "net_profit": -39.321,
+        "profit_factor": 0.0,
+        "average_win": 0.0,
+        "average_loss": -4.915125,
+        "max_drawdown": 39.321000000000005,
+        "wins": 0,
+        "expectancy_usd": -4.915125,
+        "max_drawdown_pct_initial": 0.39321000000000006,
+        "largest_loss": -6.03,
+        "median_initial_risk": 4.297499999999999,
+        "max_initial_risk": 4.842
+      },
+      "events": {
+        "zone_candidates": 2411,
+        "signal:armed": 2360,
+        "watch:objective_before_entry": 1404,
+        "watch:expired": 348,
+        "watch:invalidated_before_entry": 544,
+        "watch:opposite_structure_before_entry": 56,
+        "entries": 8
+      },
+      "watch_quote_checks": {
+        "outside_return_band": 43878,
+        "spread_limit": 9999,
+        "outside_swept_pocket": 14561,
+        "wick_risk_over_budget": 80,
+        "opposing_zone_before_cash_target": 1,
+        "ready": 8
+      },
+      "exits": {
+        "stop": 7,
+        "adverse_candle": 1
+      },
+      "guard": {
+        "day": "2026-09-30",
+        "start": 9960.679,
+        "peak": 10000.0,
+        "day_halt": false,
+        "dd_halt": false
+      }
+    }
+  }
+}

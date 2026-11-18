@@ -1,5 +1,7 @@
 # Zone pilot • quickstart & operating rules
 
+> **Current default:** `reaction_managed` in shadow. [Candle/retest rules and the XAUUSDm tick exporter](CANDLE_RETEST.md). The immediate-entry rules and `zones-replay` below describe the v1 control. For the challenger, `--arm-demo` alone is not sufficient.
+
 **Experiment only.** The fixed-cash zone rule lost money on the independent gold replay. Keep `run.mode: paper`. There is no live-money execution path in the CLI. No Pine indicator, TradingView subscription, external signals, hosted database, or ML model is needed. See [the measured comparison](../research/zone_pilot/REPORT.md) before considering a demo order.
 
 ## Replay your broker first (no terminal required)

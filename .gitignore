@@ -23,3 +23,6 @@ reports/*.parquet
 research/directional_scalping/results/
 reports/zone_runtime/
 reports/zone_replay*/
+
+# Local broker candle experiments and private replay output
+reports/candle_replay*/

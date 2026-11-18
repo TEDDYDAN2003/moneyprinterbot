@@ -1,0 +1,296 @@
+{
+  "coverage": {
+    "first_ms": 1793232000110,
+    "bars": 13740,
+    "ticks": 4993942,
+    "open_spread_ok": 192
+  },
+  "last_utc": "2026-11-11T23:59:59.017+00:00",
+  "pattern_tags_on_zone_candidates": {
+    "inside": 224,
+    "bull_engulf": 100,
+    "bull_body": 136,
+    "bear_ordinary": 251,
+    "bull_ordinary": 238,
+    "bear_rejection": 107,
+    "bear_engulf": 105,
+    "bull_rejection": 75,
+    "bear_body": 131,
+    "doji": 66
+  },
+  "arms": {
+    "baseline": {
+      "metrics": {
+        "trades": 9,
+        "win_rate": 0.1111111111111111,
+        "net_profit": -29.952,
+        "profit_factor": 0.25045045045045045,
+        "average_win": 10.008,
+        "average_loss": -4.995,
+        "max_drawdown": 34.965,
+        "wins": 1,
+        "expectancy_usd": -3.3280000000000003,
+        "max_drawdown_pct_initial": 0.34965000000000007,
+        "largest_loss": -4.995,
+        "median_initial_risk": 4.995,
+        "max_initial_risk": 4.995
+      },
+      "events": {
+        "zone_candidates": 1246,
+        "not_entered:spread_limit": 1211,
+        "not_entered:scheduled_break": 14,
+        "entries": 9,
+        "not_entered:quote_left_entry_zone": 3,
+        "not_entered:opposing_zone_before_cash_target": 8,
+        "not_entered:stale_signal": 1
+      },
+      "watch_quote_checks": {},
+      "exits": {
+        "stop": 8,
+        "target": 1
+      },
+      "guard": {
+        "day": "2026-11-11",
+        "start": 9970.047999999993,
+        "peak": 10000.0,
+        "day_halt": false,
+        "dd_halt": false
+      }
+    },
+    "return_cash": {
+      "metrics": {
+        "trades": 6,
+        "win_rate": 0.16666666666666666,
+        "net_profit": -14.967000000000002,
+        "profit_factor": 0.4007207207207207,
+        "average_win": 10.008,
+        "average_loss": -4.995,
+        "max_drawdown": 24.975,
+        "wins": 1,
+        "expectancy_usd": -2.4945000000000004,
+        "max_drawdown_pct_initial": 0.24975,
+        "largest_loss": -4.995,
+        "median_initial_risk": 4.995,
+        "max_initial_risk": 4.995
+      },
+      "events": {
+        "zone_candidates": 1246,
+        "signal:armed": 1208,
+        "watch:invalidated_before_entry": 285,
+        "watch:objective_before_entry": 692,
+        "watch:expired": 190,
+        "watch:opposite_structure_before_entry": 35,
+        "entries": 6
+      },
+      "watch_quote_checks": {
+        "outside_return_band": 30590,
+        "spread_limit": 6875,
+        "wick_risk_over_budget": 53,
+        "ready": 6,
+        "opposing_zone_before_cash_target": 2
+      },
+      "exits": {
+        "stop": 5,
+        "target": 1
+      },
+      "guard": {
+        "day": "2026-11-11",
+        "start": 9985.032999999996,
+        "peak": 10000.0,
+        "day_halt": false,
+        "dd_halt": false
+      }
+    },
+    "return_wick": {
+      "metrics": {
+        "trades": 6,
+        "win_rate": 0.16666666666666666,
+        "net_profit": -11.169,
+        "profit_factor": 0.47258818529536756,
+        "average_win": 10.008,
+        "average_loss": -4.2354,
+        "max_drawdown": 21.176999999999996,
+        "wins": 1,
+        "expectancy_usd": -1.8615000000000002,
+        "max_drawdown_pct_initial": 0.21176999999999999,
+        "largest_loss": -4.554,
+        "median_initial_risk": 4.1895,
+        "max_initial_risk": 4.554
+      },
+      "events": {
+        "zone_candidates": 1246,
+        "signal:armed": 1208,
+        "watch:invalidated_before_entry": 285,
+        "watch:objective_before_entry": 692,
+        "watch:expired": 190,
+        "watch:opposite_structure_before_entry": 35,
+        "entries": 6
+      },
+      "watch_quote_checks": {
+        "outside_return_band": 30590,
+        "spread_limit": 6875,
+        "wick_risk_over_budget": 53,
+        "ready": 6,
+        "opposing_zone_before_cash_target": 2
+      },
+      "exits": {
+        "stop": 5,
+        "target": 1
+      },
+      "guard": {
+        "day": "2026-11-11",
+        "start": 9988.831000000002,
+        "peak": 10000.0,
+        "day_halt": false,
+        "dd_halt": false
+      }
+    },
+    "pattern_wick": {
+      "metrics": {
+        "trades": 1,
+        "win_rate": 0.0,
+        "net_profit": -4.185,
+        "profit_factor": 0.0,
+        "average_win": 0.0,
+        "average_loss": -4.185,
+        "max_drawdown": 4.185,
+        "wins": 0,
+        "expectancy_usd": -4.185,
+        "max_drawdown_pct_initial": 0.04184999999999999,
+        "largest_loss": -4.185,
+        "median_initial_risk": 4.185,
+        "max_initial_risk": 4.185
+      },
+      "events": {
+        "zone_candidates": 1246,
+        "signal:armed": 407,
+        "watch:invalidated_before_entry": 91,
+        "signal:no_directional_pattern": 818,
+        "watch:objective_before_entry": 233,
+        "watch:expired": 70,
+        "watch:opposite_structure_before_entry": 12,
+        "entries": 1
+      },
+      "watch_quote_checks": {
+        "outside_return_band": 10504,
+        "spread_limit": 2530,
+        "wick_risk_over_budget": 20,
+        "ready": 1
+      },
+      "exits": {
+        "stop": 1
+      },
+      "guard": {
+        "day": "2026-11-11",
+        "start": 9995.815,
+        "peak": 10000.0,
+        "day_halt": false,
+        "dd_halt": false
+      }
+    },
+    "pattern_zone": {
+      "metrics": {
+        "trades": 1,
+        "win_rate": 0.0,
+        "net_profit": -4.185,
+        "profit_factor": 0.0,
+        "average_win": 0.0,
+        "average_loss": -4.185,
+        "max_drawdown": 4.185,
+        "wins": 0,
+        "expectancy_usd": -4.185,
+        "max_drawdown_pct_initial": 0.04184999999999999,
+        "largest_loss": -4.185,
+        "median_initial_risk": 4.185,
+        "max_initial_risk": 4.185
+      },
+      "events": {
+        "zone_candidates": 1246,
+        "signal:armed": 407,
+        "watch:invalidated_before_entry": 91,
+        "signal:no_directional_pattern": 818,
+        "watch:objective_before_entry": 233,
+        "watch:expired": 70,
+        "watch:opposite_structure_before_entry": 12,
+        "entries": 1
+      },
+      "watch_quote_checks": {
+        "outside_return_band": 10504,
+        "spread_limit": 2530,
+        "wick_risk_over_budget": 20,
+        "ready": 1
+      },
+      "exits": {
+        "stop": 1
+      },
+      "guard": {
+        "day": "2026-11-11",
+        "start": 9995.815,
+        "peak": 10000.0,
+        "day_halt": false,
+        "dd_halt": false
+      }
+    },
+    "pattern_managed": {
+      "metrics": {
+        "trades": 1,
+        "win_rate": 0.0,
+        "net_profit": -4.185,
+        "profit_factor": 0.0,
+        "average_win": 0.0,
+        "average_loss": -4.185,
+        "max_drawdown": 4.185,
+        "wins": 0,
+        "expectancy_usd": -4.185,
+        "max_drawdown_pct_initial": 0.04184999999999999,
+        "largest_loss": -4.185,
+        "median_initial_risk": 4.185,
+        "max_initial_risk": 4.185
+      },
+      "events": {
+        "zone_candidates": 1246,
+        "signal:armed": 407,
+        "watch:invalidated_before_entry": 91,
+        "signal:no_directional_pattern": 818,
+        "watch:objective_before_entry": 233,
+        "watch:expired": 70,
+        "watch:opposite_structure_before_entry": 12,
+        "entries": 1
+      },
+      "watch_quote_checks": {
+        "outside_return_band": 10504,
+        "spread_limit": 2530,
+        "wick_risk_over_budget": 20,
+        "ready": 1
+      },
+      "exits": {
+        "stop": 1
+      },
+      "guard": {
+        "day": "2026-11-11",
+        "start": 9995.815,
+        "peak": 10000.0,
+        "day_halt": false,
+        "dd_halt": false
+      }
+    }
+  },
+  "unbounded_same_entries_diagnostic": {
+    "metrics": {
+      "trades": 9,
+      "win_rate": 0.5555555555555556,
+      "net_profit": -33.642,
+      "profit_factor": 0.5979780597978058,
+      "average_win": 10.008,
+      "average_loss": -20.9205,
+      "wins": 5,
+      "expectancy_usd": -3.7380000000000004,
+      "largest_loss": -28.854,
+      "median_initial_risk": 25.128,
+      "max_initial_risk": 66.717
+    },
+    "over_budget": 9,
+    "unavailable": 0,
+    "note": "Frozen signals only. Possible overlapping exposure. Not a deployable portfolio or a $5-risk alternative."
+  }
+}
