@@ -1,6 +1,6 @@
 # Hull labels → protected MT5 demo tickets
 
-This is a **Python companion for MT5 Desktop on Windows**, not an `.ex5` file. It does not need a chart website, browser automation, API key or database. `trade`, `demo` and `trade-all` now route **only** to this scanner. One process monitors native **M1, M2, M5** for the selected instruments. No M15 orders or legacy zone/momentum fallback. [Copy/paste agent prompt](HULL_START_PROMPT.md) · [test evidence](../research/hull_labels/README.md).
+This is a **Python companion for MT5 Desktop on Windows**, not an `.ex5` file. It does not need a chart website, browser automation, API key or database. `trade`, `demo` and `trade-all` now route **only** to this scanner. One process monitors native **M1, M2, M5** for the selected instruments. No M15 orders or legacy zone/momentum fallback. [Standing startup instructions](../README.md#standing-instructions-for-the-desktop-agent) · [Copy just your profiles](Hull-demo-start.html) · [test evidence](../research/hull_labels/README.md).
 
 ## What triggers an entry?
 
