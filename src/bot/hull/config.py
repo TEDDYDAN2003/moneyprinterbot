@@ -14,6 +14,8 @@ class Strict(BaseModel):
 Rate = Literal["slow", "medium", "fast"]
 COUNTS = {"slow": (10,), "medium": (4, 3), "fast": (7, 6)}
 FRAMES = (1, 2, 5)
+LADDER = "profit_ladder_70_30_v1"
+FIXED = "fixed_tp"
 
 
 class Indicator(Strict):
@@ -54,6 +56,7 @@ class Limits(Strict):
 
 
 class HullConfig(Strict):
+    exit_policy: Literal["profit_ladder_70_30_v1", "fixed_tp"] = LADDER
     indicator: Indicator = Indicator()
     limits: Limits = Limits()
     magic: int = Field(26111825, gt=0, lt=2**31)

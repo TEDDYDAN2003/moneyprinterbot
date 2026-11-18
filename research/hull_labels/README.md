@@ -1,6 +1,6 @@
 # Hull label port: what was checked
 
-**Goal:** preserve the user's printed Hull labels (not the chart simulator's EMA-gated queue) and filter new entries by confirmed internal structure before using the local wick SL and fixed USD TP per ticket. Never infer a fill or winning probability from a screenshot. Implementation: `src/bot/hull`. [Exact conventions and Windows setup](../../docs/HULL_DEMO.md).
+**Goal:** preserve the user's printed Hull labels (not the chart simulator's EMA-gated queue) and filter new entries by confirmed internal structure before using the initial local-wick SL and a per-ticket USD target. New tickets now use the [70/30 profit ladder](../../docs/HULL_DEMO.md#profit-ladder-for-new-tickets); the historical result files below predate it. Never infer a fill or winning probability from a screenshot. Implementation: `src/bot/hull`. [Exact conventions and Windows setup](../../docs/HULL_DEMO.md).
 
 ## Calculation parity
 
@@ -17,6 +17,8 @@ Use `--last-live` only if the last row is still forming. Remove it if every row 
 ## Structure-filtered execution
 
 [Entry specification](../../docs/HULL_STRUCTURE.md) · [checked results](structure_check/summary.json) · [all raw labels with causal structure and entry reasons](structure_check/labels.csv). The scanner preserves the raw chart labels, not automatic entries on every label. The checked-in `structure_check/` figures are from `ec5d3db` with the then-current 1-ticket slow profile and $15 aggregate risk cap, **not** a replay with today’s scaled demo limits. To reproduce those counts and economics use that revision in a separate research checkout. To evaluate the checked-out code, run `python research/hull_labels/reproduce.py --cache data/public_xau_ticks --out reports/hull_replay_structure` against the pinned weeks 45–46. Counts at the label close are before quote, batch and risk vetoes. The replay applies the configured opposite-label exit independently of entry qualification. Compare the same feed, time window and limits; this short sample does not establish a trading edge.
+
+Current `hull-replay` walks **ordered** executable quotes within each minute. An already-attached stop/TP is evaluated before any same-tick ladder amendment. Simulated tickets share the rate budget, so some can remain on an earlier rung. Each closed group’s CSV row records its own size, original and final prices and `ladder_rung`; `net_usd_batch` on such a row is the contribution of those legs. Batch metrics sum the groups from the same entry. This idealized replay assumes common initial fills, no amendment latency and no broker rejection. It is not evidence that trailing improves returns on a particular feed.
 
 ## Archived pre-structure ordered-quote smoke comparison
 

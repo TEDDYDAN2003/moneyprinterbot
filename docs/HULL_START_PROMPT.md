@@ -12,7 +12,7 @@ It means exactly:
 HULL START XAUUSD:0.09:10:slow EURUSD:0.01:10:slow GBPUSD:0.01:10:slow
 ```
 
-On current `main`, slow requests **ten tickets**, not one. These explicit lots are per ticket; generic EURUSD/GBPUSD presets are larger. Verify the batch totals in preflight.
+On current `main`, slow requests **ten tickets**, not one. These explicit lots are per ticket; generic EURUSD/GBPUSD presets are larger. Verify the batch totals and `new_ticket_exit_policy: profit_ladder_70_30_v1` in preflight. $10 is each new ticket’s **initial** USD target, not a fixed exit on the ladder.
 
 To use different profiles, open [Hull demo start](Hull-demo-start.html), tick the instruments and select **Copy start line** or **Copy selected rows**. Only checked rows are included. The fields are **symbol, lot per ticket, TP USD per ticket, rate**. No long prompt is necessary. These are messages for your agent, not shell commands.
 

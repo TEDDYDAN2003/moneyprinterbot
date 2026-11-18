@@ -27,11 +27,29 @@ The blue arrows in your screenshots indicate the preceding local pullback, not n
 
 The order SL is the computed chart price, **not** that price plus an unreported spread allowance. Longs exit on bid; shorts exit on ask. A spread expansion can stop a short even if the bid chart doesn't revisit its high. If SL is already breached, too close for the broker, or incompatible with the portfolio budget, skip.
 
-## Target, rate and symbols
+## Profit ladder for new tickets
 
-The lot and target are **per position**. Each ticket is submitted with its own hard SL and TP; calculate the nearest favorable tradable tick meeting the USD target using the broker’s `order_calc_profit`, not an assumed pip value. A changed fill is checked and TP is aligned to the actual open if necessary, without widening SL. The supervisor requests a close if the broker still reports an owned ticket at/above its USD profit goal. No trailing, giveback or momentum hold. The configured opposite crossover exit is separate. Exact realized net can differ due to rounding, gaps, conversion, broker fees or execution. KILL and missing protection are emergency exceptions.
+The profile’s USD number is the **original, per-ticket gross profit target**, not a batch target. `hull.exit_policy` defaults to `profit_ladder_70_30_v1`, including when an older local YAML omits the field. Every new position starts with its own hard swing SL and 100% TP. After a verified fill, the scanner records that ticket’s actual side, volume, entry and original target. It does not adopt existing positions. Previously journaled fixed-target tickets keep their original cash-exit behavior; a later config/profile change does not change a ticket’s policy or base.
 
-| Rate | Requested count per eligible label | At 0.09 lot and $10 each |
+| Executable gross profit vs. original goal | New SL profit level | New broker TP | Example with a $10 original goal: trigger → SL / TP |
+|---:|---:|---:|---|
+| 70% | 60% | 120% | +$7 → +$6 / +$12 |
+| 100% | 90% | 150% | +$10 → +$9 / +$15 |
+| 130% | 120% | 180% | +$13 → +$12 / +$18 |
+| 160% | 150% | 210% | +$16 → +$15 / +$21 |
+
+From there add **30 percentage points to all three columns** at each step. The base never compounds. For example, if +$7 was observed and the broker confirmed the first move, +$10 advances the next rung; it is **not** a request to close at the old $10 target. A reversal to +$9 after that move can hit the raised stop. Nothing is locked before the first amendment is actually accepted.
+
+- **No candle-close or extra trend vote.** Check each ticket’s executable **bid for a BUY, ask for a SELL**. Convert price to modeled USD using the broker’s `order_calc_profit` at the actual fill and volume; use the tick grid to price both new levels. Ten tickets retain ten independent exits. While enrolled tickets are open the single Windows scanner aims to sample every 250 ms and can check between batch legs. It does not see every tick: MT5 latency, other broker calls, sleep or disconnect can delay/miss a step.
+- **One request, both levels.** Never remove/widen SL or move TP closer. If both prices don’t fit broker stop/freeze distances, checks fail, or the account’s send budget is exhausted, keep the last attached pair. Reconsider only on fresh, still-eligible quotes. The gap between trigger and stop is just **$1 gross** on a $10 ticket; on some lots/symbols that is less than a legal stop distance. No substitute lower floor or bare TP extension. A ticket’s amendment consumes one slot in the shared entry/amendment send budget.
+- **Server exits come first.** Price may hit the current TP or SL before an amendment; if the scanner observes a crossed hard barrier it leaves that pair alone, even on a later retreat. The configured opposite Hull exit, KILL and missing-protection exits still apply. The last broker SL/TP remain attached if the scanner stops, but they cannot advance offline. Stops can slip through gaps; fees, spread and changing conversion affect realized net. This does not guarantee profit or an exit exclusively at SL.
+- **Audit and recovery.** Preflight and `started.summary` show `new_ticket_exit_policy` and each symbol’s `ladder_preview_per_ticket` in USD. The observer is read-only: it does not amend tickets. Armed logs distinguish `profit_ladder_enrolled`, `profit_ladder_step` (both prices verified on the broker ticket), `profit_ladder_deferred`, and `profit_ladder_broker_barrier` (observed touch, **not** a confirmed fill). The journal stores original bases, confirmed pairs and pending requests in `ladder_by_ticket`. A lost reply/crash never triggers a blind resend. Both broker levels must match the pending pair to confirm; unresolved requests or unexpected external edits block new entries for review. Do not delete the journal to clear a hold.
+
+`fixed_tp` is available explicitly for comparisons/new fixed-target tickets. It is **not** the default. The ladder calculation is independent of account type; the shipped order bridge still refuses real-money accounts. This is not a live-account rollout.
+
+## Rate and symbols
+
+| Rate | Requested count per eligible label | At 0.09 lot and $10 **initial** target each |
 |---|---:|---|
 | Slow | 10 | 0.90 lot / $100 gross target |
 | Medium | 4 if it fits, else 3 | 0.27–0.36 lot / $30–$40 |

@@ -10,7 +10,6 @@ from dataclasses import asdict
 from decimal import Decimal
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 from bot.backtest.metrics import summarize_pnl
@@ -20,7 +19,9 @@ from bot.zones.hours import Hours
 from bot.zones.orders import EquityGuard
 from bot.zones.replay import file_hash, iso_ms
 
+from .config import LADDER
 from .entry_clock import QUOTE_POLICY, check_quote
+from .ladder import Protection, propose
 from .orders import Block, Exposure, Grid, count_for, make_plan, select_labels
 from .signal import ENTRY_AUDIT_FIELDS, Hull, Reading
 from .structure import ENTRY_POLICY
@@ -59,8 +60,15 @@ class Clock:
 
 
 class Account:
-    def __init__(self, p, lim, grid, cash, hours, initial, *, exit_opposite):
+    def __init__(
+        self, p, lim, grid, cash, hours, initial, *, exit_opposite, exit_policy=LADDER
+    ):
         self.exit_opposite = exit_opposite
+        self.exit_policy = exit_policy
+        self.groups = (
+            Counter()
+        )  # identical, independent tickets sharing confirmed levels
+        self.amendments = 0
         self.p, self.lim, self.grid, self.cash, self.hours = p, lim, grid, cash, hours
         self.eq = initial
         self.guard = EquityGuard()
@@ -83,8 +91,8 @@ class Account:
         self.guard.dd_halt |= self.guard.peak - equity >= self.lim.drawdown_usd - 1e-8
         return "drawdown_halt" if self.guard.dd_halt else ""
 
-    def close(self, why, ms, px):
-        d, p, n, stamp = self.pos
+    def _exit_group(self, why, ms, px, levels, n):
+        d, p, _, stamp = self.pos
         per = self.cash(p.side, p.lots, p.entry, px)
         net = per * n
         self.eq += net
@@ -101,8 +109,11 @@ class Account:
                 "legs": n,
                 "lots_per_leg": p.lots,
                 "entry": p.entry,
-                "sl": p.sl,
-                "tp": p.tp,
+                "initial_sl": p.sl,
+                "initial_tp": p.tp,
+                "ladder_rung": levels.rung,
+                "sl": levels.sl,
+                "tp": levels.tp,
                 "risk_usd_batch": round(p.risk_usd * n, 8),
                 "exit_reason": why,
                 "exit_price": px,
@@ -110,28 +121,69 @@ class Account:
                 "net_usd_batch": round(net, 8),
             }
         )
+
+    def close(self, why, ms, px):
+        for levels, n in self.groups.items():
+            self._exit_group(why, ms, px, levels, n)
+        self.groups.clear()
         self.pos = None
 
     def barriers(self, m, lo, hi):
         if not self.pos or lo >= hi:
             return
         _, p, _, _ = self.pos
-        q = (m.bid if p.side == 1 else m.ask)[lo:hi]
-        sl = p.side * (q - p.sl) <= 0
-        tp = p.side * (q - p.tp) >= 0
-        ix = np.flatnonzero(sl | tp)
-        if len(ix):
-            j = int(ix[0])
-            self.close(
-                "stop" if sl[j] else "target",
-                int(m.ms[lo + j]),
-                float(q[j]) if sl[j] else p.tp,
-            )
+        price = m.bid if p.side == 1 else m.ask
+        for j in range(lo, hi):
+            ms, mark = int(m.ms[j]), float(price[j])
+            after = Counter()
+            for old, n in self.groups.items():
+                # Only levels attached *before* this tick can fill on it. Never
+                # retroactively lift a TP already crossed or fill a stop at its
+                # theoretical dollar floor through a gap.
+                if p.side * (mark - old.sl) <= 0:
+                    self._exit_group(
+                        "ladder_stop" if old.rung else "stop", ms, mark, old, n
+                    )
+                    continue
+                if p.side * (mark - old.tp) >= 0:
+                    self._exit_group("target", ms, old.tp, old, n)
+                    continue
+                new = None
+                if self.exit_policy == LADDER:
+                    try:
+                        new = propose(
+                            self.grid,
+                            p.side,
+                            p.lots,
+                            p.entry,
+                            self.p.target_usd,
+                            old,
+                            mark,
+                            self.cash,
+                        )
+                    except Block:
+                        pass  # keep the prior protective pair when new levels cannot fit
+                if new is not None:
+                    now = ms / 1000
+                    self.sends = [s for s in self.sends if s > now - 60]
+                    k = min(n, max(0, self.lim.max_orders_minute - len(self.sends)))
+                    if k:
+                        after[new] += k
+                        self.sends.extend([now] * k)
+                        self.amendments += k
+                        n -= k
+                if n:
+                    after[old] += n
+            self.groups = after
+            if not after:
+                self.pos = None
+                return
 
     def equity(self, bid, ask):
         if not self.pos:
             return self.eq
-        _, p, n, _ = self.pos
+        _, p, _, _ = self.pos
+        n = sum(self.groups.values())
         return (
             self.eq
             + self.cash(p.side, p.lots, p.entry, bid if p.side == 1 else ask) * n
@@ -201,6 +253,7 @@ class Account:
                             ),
                         )
                         self.pos = (d, p, n, ms)
+                        self.groups = Counter({Protection(0, p.sl, p.tp): n})
                         self.sends += [now] * n
                         why = "opened"
                     except Block as exc:
@@ -217,7 +270,12 @@ class Account:
                 int(last.ms[-1]),
                 float(last.bid[-1] if p.side == 1 else last.ask[-1]),
             )
-        vals = [r["net_usd_batch"] for r in self.rows]
+        # A rate cap can split a batch across realized exits. Count its economic
+        # result once, but keep every closed group in the ledger.
+        totals = Counter()
+        for r in self.rows:
+            totals[(r["signal"], r["tf"], r["entry_time"])] += r["net_usd_batch"]
+        vals = list(totals.values())
         metrics = summarize_pnl(vals)
         metrics["profit_factor"] = (
             metrics["profit_factor"]
@@ -229,6 +287,8 @@ class Account:
         metrics.pop("trades")
         metrics.update(
             batches=len(vals),
+            closed_groups=len(self.rows),
+            ladder_ticket_amendments=self.amendments,
             wins=sum(v > 0 for v in vals),
             positions=sum(r["legs"] for r in self.rows),
             exits=dict(Counter(r["exit_reason"] for r in self.rows)),
@@ -252,6 +312,9 @@ FIELDS = [
     "legs",
     "lots_per_leg",
     "entry",
+    "initial_sl",
+    "initial_tp",
+    "ladder_rung",
     "sl",
     "tp",
     "risk_usd_batch",
@@ -299,6 +362,7 @@ def study(minutes, cfg, h, p, frames, lo, hi, unit, contract, conversion, rates,
             Hours(cfg),
             cfg["backtest"]["initial_balance"],
             exit_opposite=h.indicator.exit_opposite,
+            exit_policy=h.exit_policy,
         )
         for r in rates
     }
@@ -336,6 +400,7 @@ def study(minutes, cfg, h, p, frames, lo, hi, unit, contract, conversion, rates,
         "timeframes": frames,
         "entry_policy": ENTRY_POLICY,
         "entry_quote_policy": QUOTE_POLICY,
+        "new_ticket_exit_policy": h.exit_policy,
         "per_ticket_target": p.target_usd,
         "profile": p.model_dump(),
         "indicator": h.indicator.model_dump(),
@@ -345,7 +410,7 @@ def study(minutes, cfg, h, p, frames, lo, hi, unit, contract, conversion, rates,
         "conversion": conversion,
         "start_utc": iso_ms(lo * 1000),
         "end_exclusive_utc": iso_ms(hi * 1000),
-        "note": "USD, spread only. Actual crossing quote for SL; TP at limit. Account equity marked at minute boundaries. No broker margin/volume checks, latency or guarantee of atomic batch fills.",
+        "note": "USD, spread only. Actual crossing quote for SL; TP at limit. Account equity marked at minute boundaries. Ladder sees ordered quotes, checks prior barriers first and shares the per-minute entry/amendment limit. Identical initial fills; no amendment latency, dealer rejection, commission, broker margin/volume checks or guarantee of atomic fills.",
     }
     with (out / "labels.csv").open("w", newline="") as f:
         w = csv.DictWriter(

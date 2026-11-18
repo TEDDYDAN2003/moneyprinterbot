@@ -6,4 +6,6 @@ A standalone start line, selected-profile table or `HULL START trio-slow` is eno
 
 Never treat the profile handoff as permission to send orders. A separate explicit `ARM DEMO`, unchanged verified profiles, and the README's dedicated USD hedging demo checks are required. Do not enable live execution, relax account limits, touch manual positions or request credentials.
 
-Before reusing or launching an observer, follow the README checkout/version check. Compare the latest startup record with the pulled HEAD and both policy IDs. Never update over an armed process or reset a dirty/diverged checkout.
+Before reusing or launching an observer, follow the README checkout/version check. Compare the latest startup record with the pulled HEAD and the entry, quote and new-ticket exit policy IDs. Never update over an armed process or reset a dirty/diverged checkout.
+
+For new tickets report the original per-ticket cash goal and the `ladder_preview_per_ticket` shown by preflight. A read-only observer does not manage trades. Do not migrate open tickets or enable a real-account execution path.

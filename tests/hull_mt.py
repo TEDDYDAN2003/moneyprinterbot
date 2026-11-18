@@ -1,5 +1,6 @@
 """Isolated fake MT5 terminal and desk fixtures. No terminal or network access."""
 
+import time
 from pathlib import Path
 from types import SimpleNamespace as NS
 
@@ -9,6 +10,13 @@ from bot.hull.signal import Reading
 
 T = 1794312000  # Tue 12:00 UTC
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def scanner_clock(monkeypatch, wall, advance, mono=time.monotonic):
+    """Do not replace process-global sleep: Git/subprocess waits aren't market ticks."""
+    clock = NS(time=wall, sleep=advance, monotonic=mono)
+    for module in ("desk", "ladder_desk", "terminal"):
+        monkeypatch.setattr("bot.hull." + module + ".time", clock)
 
 
 class MT:

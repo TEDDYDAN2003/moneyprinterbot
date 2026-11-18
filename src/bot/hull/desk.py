@@ -13,8 +13,10 @@ from bot.zones.hours import Hours
 from bot.zones.monitor import account_check, fresh, save, snapshot
 from bot.zones.orders import EquityGuard
 
-from .config import COUNTS
-from .entry_clock import WAITING, TimingBlock, check_quote, utc
+from .config import COUNTS, FIXED, LADDER
+from .entry_clock import FAST_POLL_S, WAITING, TimingBlock, check_quote, utc
+from .ladder import Protection, executable, inside
+from .ladder_desk import TicketLadders
 from .orders import (
     Block,
     Exposure,
@@ -92,6 +94,8 @@ class Desk:
         )
         self.hours = Hours(cfg)
         self.guard = EquityGuard(**state.get("guard", {}))
+        self.ladders = TicketLadders(self)
+        self.last_service = time.monotonic()
         self.waiting: dict[str, FirstQuoteWindow] = {}  # never restored after restart
 
     def persist(self):
@@ -189,6 +193,8 @@ class Desk:
             raise Block("kill")
         if self.state.get("manual_hold"):
             raise Block("manual_reconciliation_required")
+        if self.ladders.needs_review():
+            raise Block("ladder_reconciliation_required")
         ps, os = snapshot(mt)
         e = self.exposure(ps, os)
         tickets = {r.ticket for r in ps if r.symbol == name}
@@ -303,6 +309,16 @@ class Desk:
             self.persist()
         return closed
 
+    def service_if_due(self):
+        # Single MT5 writer: also check between confirmed legs / symbols when a
+        # batch or scan is slow. Never interleave amendments into an entry send.
+        if (
+            self.armed
+            and self.ladders.book
+            and time.monotonic() - self.last_service >= FAST_POLL_S
+        ):
+            self.supervise()
+
     def supervise(self):
         if not self.armed:
             return
@@ -311,10 +327,17 @@ class Desk:
         active = {
             str(p.ticket) for p in ps
         }  # Never drop a goal solely because a profile was deselected.
+        quotes, grids, plans = (
+            {},
+            {},
+            {},
+        )  # per sweep only; fresh quote is re-read before each send
         for p in ps:
             if not self.owned(p):
                 continue
-            goal = goals.get(str(p.ticket))
+            key = str(p.ticket)
+            is_ladder = key in self.ladders.book
+            goal = goals.get(key) if not is_ladder else None
             why = (
                 "kill"
                 if self.kill.exists()
@@ -326,10 +349,14 @@ class Desk:
             )
             if why:
                 self.close_owned(p, why)
+            elif is_ladder:
+                self.ladders.supervise(p, quotes, grids, plans)
+        self.ladders.prune(active)
         if stale := set(goals) - active:
             for k in stale:
                 del goals[k]
             self.persist()
+        self.last_service = time.monotonic()
 
     def finalize(self, name, plan, res, expected):
         mt = self.mt
@@ -346,6 +373,16 @@ class Desk:
         if len(new) != 1 or not self.owned(new[0]):
             return None, "ticket_not_reconciled"
         p = new[0]
+        # On a hedging account the opening order identifies the new position.
+        # If MT5 supplies that identifier, never enroll a different ticket merely
+        # because it appeared in the same positions snapshot.
+        opening_order = getattr(res, "order", 0)
+        if (
+            self.h.exit_policy == LADDER
+            and opening_order
+            and opening_order not in (p.ticket, getattr(p, "identifier", p.ticket))
+        ):
+            return None, "opening_order_not_reconciled"
         grid = Grid.from_info(mt.symbol_info(name))
         tol = grid.tick * 1e-6
         if (
@@ -355,8 +392,11 @@ class Desk:
             or p.price_open <= 0
         ):
             return None, "fill_not_reconciled"
-        self.state.setdefault("target_by_ticket", {})[str(p.ticket)] = prof.target_usd
-        self.persist()
+        if self.h.exit_policy == FIXED:
+            self.state.setdefault("target_by_ticket", {})[str(p.ticket)] = (
+                prof.target_usd
+            )
+            self.persist()
         if abs(p.sl - plan.sl) > tol or not (p.sl > 0 and p.tp > 0):
             self.close_owned(p, "unverified_protection")
             return None, "protection_mismatch"
@@ -368,9 +408,19 @@ class Desk:
         )
         if abs(tp - p.tp) > tol:
             # A different deal price must not silently turn $10 into a different goal.
-            if p.profit >= prof.target_usd:
+            if self.h.exit_policy == FIXED and p.profit >= prof.target_usd:
                 self.close_owned(p, "cash_target_after_fill")
                 return None, "closed_during_batch"
+            if self.h.exit_policy == LADDER:
+                q = mt.symbol_info_tick(name)
+                if not fresh(q, time.time(), self.lim.max_quote_age_s):
+                    return None, "initial_target_alignment_quote_unavailable"
+                mark = executable(plan.side, q.bid, q.ask)
+                if (
+                    not inside(plan.side, mark, Protection(0, p.sl, p.tp))
+                    or plan.side * (tp - mark) < max(grid.gap, grid.tick) - tol
+                ):
+                    return None, "initial_target_alignment_not_executable"
             req = {
                 "action": mt.TRADE_ACTION_SLTP,
                 "symbol": name,
@@ -389,11 +439,20 @@ class Desk:
                 rr is None
                 or rr.retcode != mt.TRADE_RETCODE_DONE
                 or not verify
+                or len(verify) != 1
                 or not self.owned(verify[0])
+                or verify[0].ticket != p.ticket
+                or verify[0].symbol != name
+                or verify[0].type != p.type
+                or verify[0].price_open != p.price_open
+                or verify[0].volume != p.volume
                 or abs(verify[0].tp - tp) > tol
                 or abs(verify[0].sl - plan.sl) > tol
             ):
                 return None, "target_alignment_unverified"
+        if self.h.exit_policy == LADDER:
+            # Do not enroll a pre-existing, partial, unknown or unverified ticket.
+            self.ladders.enroll(p, plan.side, prof.target_usd, plan.sl, tp)
         return p.ticket, "ok"
 
     def cancel_wait(self, name, reason):
@@ -462,6 +521,7 @@ class Desk:
                         signal=d.close_s,
                         rate=self.syms[name][1].rate,
                         legs=n,
+                        exit_policy=self.h.exit_policy,
                         goal_per_leg=self.syms[name][1].target_usd,
                         risk_batch=n * plan.risk_usd,
                         **asdict(plan),
@@ -538,6 +598,7 @@ class Desk:
                 self.persist()
                 if sent == n:
                     return "demo_batch_sent"
+                self.service_if_due()
         except TimingBlock as exc:
             check = exc.check
             wait = (

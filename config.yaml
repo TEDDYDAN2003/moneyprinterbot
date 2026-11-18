@@ -302,6 +302,7 @@ zones:
 
 # ACTIVE demo entry path. Indicator source = the user's Hull BUY/SELL labels.
 hull:
+  exit_policy: profit_ladder_70_30_v1  # new tickets only; all rungs use the original per-ticket USD goal
   enabled: [XAUUSD]  # opt in other keys via --symbols or repeated --profile
   magic: 26111825
   indicator:

@@ -9,7 +9,7 @@ from itertools import pairwise
 from types import SimpleNamespace as NS
 
 import pytest
-from hull_mt import MT, ROOT, T, sig
+from hull_mt import MT, ROOT, T, scanner_clock, sig
 
 from bot.config.loader import load_yaml
 from bot.hull.config import HullConfig, Limits, selection
@@ -317,9 +317,7 @@ def test_eurusd_1952_bar_1953_close_waits_for_quote_not_replayed(
 
     mt.symbol_info_tick = quote
     mt.copy_rates_from_pos = rates
-    monkeypatch.setattr("bot.hull.terminal.time.time", lambda: wall[0])
-    monkeypatch.setattr("bot.hull.terminal.time.monotonic", lambda: mono[0])
-    monkeypatch.setattr("bot.hull.terminal.time.sleep", advance)
+    scanner_clock(monkeypatch, lambda: wall[0], advance, lambda: mono[0])
     monkeypatch.setitem(sys.modules, "MetaTrader5", mt)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))

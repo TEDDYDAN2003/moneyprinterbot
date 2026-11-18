@@ -6,11 +6,11 @@ from types import SimpleNamespace as NS
 
 import pytest
 from hull_cases import PATH, sequence
-from hull_mt import MT, ROOT, T, sig
+from hull_mt import MT, ROOT, T, scanner_clock, sig
 
 from bot.config.loader import load_yaml
 from bot.execution.demo_runner import DemoSafetyError
-from bot.hull.config import HullConfig, selection
+from bot.hull.config import FIXED, HullConfig, selection
 from bot.hull.desk import identity_check, resolve
 from bot.hull.entry_clock import WAITING
 from bot.hull.orders import Block, Grid, target
@@ -41,7 +41,7 @@ def test_exact_batch_range_per_ticket_tp_dynamic_sl_no_five_dollar_clip(
         ) * 10 < 10
     if rate == "slow":
         assert (mt.q.ask - sl) * 10 > 5
-    assert len(d.state["target_by_ticket"]) == legs and not d.state.get("manual_hold")
+    assert len(d.ladders.book) == legs and not d.state.get("manual_hold")
     assert d.batch("XAUUSDm", s) == "already_consumed"
     assert any(x[0] == "batch_preview" for x in logs)
 
@@ -71,8 +71,9 @@ def test_shadow_and_unknown_ack_never_resubmit(hull_desk):
     assert len(mt.requests) == 1
 
 
-def test_fill_retargets_to_actual_open_and_target_is_not_a_momentum_exit(hull_desk):
+def test_fixed_mode_retargets_to_actual_open_and_cash_exit_is_preserved(hull_desk):
     mt, d, _ = hull_desk()
+    d.h = d.h.model_copy(update={"exit_policy": FIXED})
     mt.retprice = 2000.12
     assert d.batch("XAUUSDm", sig()) == "demo_batch_sent"
     assert (
@@ -327,8 +328,7 @@ def test_cli_native_m2_entry_filter_and_independent_exit(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    monkeypatch.setattr("bot.hull.terminal.time.time", lambda: now[0])
-    monkeypatch.setattr("bot.hull.terminal.time.sleep", advance)
+    scanner_clock(monkeypatch, lambda: now[0], advance)
     monkeypatch.setitem(sys.modules, "MetaTrader5", mt)
     local = tmp_path / "cfg.yaml"
     local.write_text(yaml.safe_dump(cfg))

@@ -14,9 +14,10 @@ from pathlib import Path
 from bot.execution.demo_runner import DemoSafetyError, _account_order_lock
 from bot.zones.engine import Bar
 
-from .config import COUNTS, FRAMES
+from .config import COUNTS, FRAMES, LADDER
 from .desk import Desk, identity_check, resolve
 from .entry_clock import QUOTE_POLICY, WAITING, poll_delay, utc
+from .ladder import cash_levels
 from .orders import Grid, select_labels
 from .signal import Hull
 from .structure import ENTRY_POLICY
@@ -286,6 +287,12 @@ def run(
                 "contract_size": i.trade_contract_size,
                 "profit_currency": i.currency_profit,
                 "broker_trade_mode": i.trade_mode,
+                "initial_target_usd": p.target_usd,
+                "ladder_preview_per_ticket": [
+                    cash_levels(p.target_usd, i) for i in range(1, 5)
+                ]
+                if h.exit_policy == LADDER
+                else [],
                 "legs_when_room": COUNTS[p.rate],
                 "batch_lots_range": [
                     round(p.lots * min(COUNTS[p.rate]), 8),
@@ -303,6 +310,7 @@ def run(
             "terminal_trade_allowed": bool(mt.terminal_info().trade_allowed),
             "account_expert_allowed": bool(a.trade_expert and a.trade_allowed),
             "timeframes": list(frames),
+            "new_ticket_exit_policy": h.exit_policy,
             "entry_policy": ENTRY_POLICY,
             "entry_quote_policy": QUOTE_POLICY,
             **source_build(),
@@ -388,6 +396,7 @@ def run(
                     history_ok = sync_deals(d, now)
                     sync = now
                 for name in syms:
+                    d.service_if_due()
                     ds = []
                     data_ok = True
                     rewarmed = False
@@ -422,7 +431,7 @@ def run(
                             frames,
                             poll,
                             limits.max_entry_age_s,
-                            bool(d.waiting),
+                            bool(d.waiting or (armed and d.ladders.book)),
                         )
                     )
     finally:
