@@ -60,7 +60,10 @@ def fetch_mt5_m1(
                 chunk["timestamp"] = pd.to_datetime(chunk["time"], unit="s", utc=True)
                 chunk = chunk.set_index("timestamp")
                 chunk = chunk.rename(columns={"tick_volume": "volume"})
-                chunks.append(chunk[["open", "high", "low", "close", "volume"]])
+                cols = ["open", "high", "low", "close", "volume"]
+                if "spread" in chunk:
+                    cols.append("spread")  # MT5 points; keep broker friction for replay
+                chunks.append(chunk[cols])
             cursor = chunk_end
         if not chunks:
             raise RuntimeError(f"MT5 returned no M1 bars for {symbol}")

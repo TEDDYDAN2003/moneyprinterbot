@@ -21,3 +21,5 @@ models/*
 !models/.gitkeep
 reports/*.parquet
 research/directional_scalping/results/
+reports/zone_runtime/
+reports/zone_replay*/

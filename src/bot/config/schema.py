@@ -4,10 +4,12 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from bot.zones.config import ZoneConfig
+
 
 class RunConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
-    mode: Literal["backtest", "paper", "auto", "demo", "live"] = "auto"
+    mode: Literal["backtest", "paper", "auto", "demo", "live"] = "paper"
     symbol: str = "XAUUSD"
     seed: int = 42
 
@@ -23,6 +25,7 @@ class RootConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
     run: RunConfig = RunConfig()
     data: DataConfig = DataConfig()
+    zones: ZoneConfig | None = None
 
 
 def validate_config(data: dict) -> RootConfig:

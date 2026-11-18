@@ -1398,13 +1398,13 @@ def _account_type(mt5: Any, account: Any) -> str:
 def _validate_run_mode(mode: str, armed: bool) -> None:
     if mode not in {"auto", "demo", "live", "paper"}:
         raise DemoSafetyError(f"Unsupported run.mode={mode!r}")
-    if armed and mode == "paper":
-        raise DemoSafetyError("run.mode: paper cannot send orders; set the shared mode to auto")
+    if armed:
+        raise DemoSafetyError("Legacy runner is shadow-only; use the zone scanner in explicit demo mode")
 
 
 def _validate_account_mode(account_type: str, armed: bool) -> None:
-    if armed and account_type not in {"demo", "contest", "real"}:
-        raise DemoSafetyError("Refusing to send orders: MT5 account type could not be verified")
+    if armed and account_type != "demo":
+        raise DemoSafetyError("Refusing orders on a non-demo account")
 
 
 def _ensure_same_demo_account(mt5: Any, account: Any, login: int, server: str) -> None:

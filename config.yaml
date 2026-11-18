@@ -1,5 +1,5 @@
 run:
-  mode: auto                  # classify the connected MT5 account at runtime
+  mode: paper                 # no orders; the zone scanner only arms in explicit demo mode
   symbol: XAUUSD
   broker_symbol_suffix: "m"   # read-only MT5 check found XAUUSDm on the current account
   timezone_broker: "Etc/GMT-2"   # broker server tz; verify in Phase 1
@@ -135,9 +135,9 @@ pilot:
     liquidity_sweep: 0.04
     fvg_direction: 0.02
     directional_volume: 0.02
-  round_trip_cost_ex_spread_price_units: 0.27  # slippage + $7/lot commission at 100 oz/lot
-  assumed_slippage_price_units_per_side: 0.10
-  commission_round_turn_per_lot: 7.0
+  round_trip_cost_ex_spread_price_units: 0.0  # spread only in this experiment
+  assumed_slippage_price_units_per_side: 0.0
+  commission_round_turn_per_lot: 0.0
   max_spread_points: 300
   max_hold_m1_bars: {M1: 15, M5: 30, M15: 60}
   profit_management: {trail_start_r: 0.80, atr_trail_multiple: 1.20, trail_gap_r: 0.50, target_extension_atr: 1.50}
@@ -238,9 +238,9 @@ training:
 
 backtest:
   initial_balance: 10000
-  commission_per_lot: 7.0
+  commission_per_lot: 0.0
   spread_model: empirical_by_hour     # learned from data
-  slippage_model: {type: proportional_to_atr, factor: 0.02}
+  slippage_model: {type: proportional_to_atr, factor: 0.0}
   latency_ms: 150
   intrabar_resolution: tick_if_available_else_m1_conservative
 
@@ -255,3 +255,39 @@ safety:
 reporting:
   telegram: {enabled: false, token_env: TG_TOKEN, chat_id_env: TG_CHAT}
   daily_report: true
+
+# New default strategy: ONE scanner, one M1 clock, three sources of levels.
+# Values below are independent of the legacy pilot settings above.
+zones:
+  enabled: true
+  rules:
+    pivot_bars: 2             # left AND right completed bars, never backdated
+    width_atr: 0.15          # half-width, frozen when the zone forms
+    momentum_min: 0.25       # signed body + close location + displacement; not P(win)
+    recency_bars: 60         # measured on the source timeframe
+    retest_minutes: 20
+    max_chase_atr: 0.65
+    reset_gap_minutes: 30
+    require_structural_stop: false  # cash-stop experiment; logs whether SL clears wick
+    exit_mode: fixed_cash    # next_zone: hold to known next zone or adverse BOS + momentum
+  limits:
+    max_legs: 3
+    max_risk_usd: 15.0       # TOTAL modeled stop exposure, not per instrument
+    max_total_lots: 0.27
+    daily_loss_usd: 30.0     # block new entries; UTC equity baseline
+    drawdown_usd: 75.0      # block new entries; persistent equity high-water mark
+    magic: 26011808
+    entry_age_seconds: 8
+  symbols:
+    XAUUSD:
+      {enabled: true, broker_symbol: XAUUSDm, lots: 0.09, tp_usd: 10.0, sl_usd: 5.0,
+       legs: 1, contract_size: 100, conversion: quote_usd, point: 0.001, tick_size: 0.001,
+       max_spread: 0.300, assumed_spread: 0.240, slippage: 0.0, commission: 0.0, round_step: 5}
+    EURUSD:                  # example only; verify broker specifications before enabling
+      {enabled: false, broker_symbol: EURUSDm, lots: 0.01, tp_usd: 10.0, sl_usd: 5.0,
+       legs: 1, contract_size: 100000, conversion: quote_usd, point: 0.00001, tick_size: 0.00001,
+       max_spread: 0.00020, assumed_spread: 0.00010, slippage: 0.0, commission: 0.0, round_step: 0.005}
+    USDJPY:
+      {enabled: false, broker_symbol: USDJPYm, lots: 0.01, tp_usd: 10.0, sl_usd: 5.0,
+       legs: 1, contract_size: 100000, conversion: base_usd, point: 0.001, tick_size: 0.001,
+       max_spread: 0.020, assumed_spread: 0.010, slippage: 0.0, commission: 0.0, round_step: 0.5}

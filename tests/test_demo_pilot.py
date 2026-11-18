@@ -50,19 +50,22 @@ def test_armed_runner_stops_if_mt5_account_changes() -> None:
     _ensure_same_demo_account(FakeMT5, account, 123, "Demo-Server")
     with pytest.raises(DemoSafetyError, match="account changed"):
         _ensure_same_demo_account(FakeMT5, account, 456, "Demo-Server")
-    _ensure_same_demo_account(FakeMT5, SimpleNamespace(trade_mode=2, login=123, server="Demo-Server"), 123, "Demo-Server")
+    with pytest.raises(DemoSafetyError, match="non-demo"):
+        _ensure_same_demo_account(FakeMT5, SimpleNamespace(trade_mode=2, login=123, server="Demo-Server"), 123, "Demo-Server")
 
 
-def test_any_verified_mt5_account_type_can_be_armed() -> None:
-    for account_type in ("demo", "contest", "real"):
-        _validate_account_mode(account_type, armed=True)
+def test_real_and_contest_accounts_cannot_be_armed() -> None:
+    _validate_account_mode("demo", armed=True)
+    for account_type in ("real", "contest", "unknown"):
+        with pytest.raises(DemoSafetyError):
+            _validate_account_mode(account_type, armed=True)
 
 
-def test_order_arming_requires_shared_auto_mode() -> None:
-    _validate_run_mode("auto", armed=True)
-    _validate_run_mode("live", armed=True)
-    with pytest.raises(DemoSafetyError, match="run.mode: auto"):
-        _validate_run_mode("paper", armed=True)
+@pytest.mark.parametrize("mode", ["live", "auto", "demo", "paper"])
+def test_legacy_runner_is_observation_only(mode) -> None:
+    _validate_run_mode(mode, armed=False)
+    with pytest.raises(DemoSafetyError, match="shadow-only"):
+        _validate_run_mode(mode, armed=True)
 
 
 def test_order_volume_never_exceeds_risk_and_prices_round_outward() -> None:
