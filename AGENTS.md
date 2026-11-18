@@ -10,7 +10,9 @@ $python = Join-Path $PWD '.venv\Scripts\python.exe'
 $profiles = @(
   '--profile','XAUUSD:0.10:10:slow',
   '--profile','EURUSD:1:10:slow',
+  '--profile','AUDUSD:1:10:slow',
   '--profile','GBPUSD:1:10:slow',
+  '--profile','GBPJPY:1:10:slow',
   '--profile','USDJPY:1.3:10:slow',
   '--profile','NAS100USD:1:10:slow',
   '--profile','US30:1:10:slow'
@@ -23,13 +25,22 @@ The broker aliases are `USTEC_x100m` for `NAS100USD` and `US30m` for `US30`. Slo
 
 ```powershell
 git status --short --branch
+if ((git branch --show-current) -ne 'main') { throw 'Stop: use a clean main checkout.' }
+if (git status --porcelain) { throw 'Stop: preserve local changes and make the checkout clean before updating.' }
+Get-CimInstance Win32_Process -Filter "name='python.exe'" |
+  Where-Object { $_.CommandLine -match 'bot\.cli.*trade-all' } |
+  Select-Object ProcessId,CommandLine
 git pull --ff-only origin main
+if ($LASTEXITCODE -ne 0) { throw 'Stop: fast-forward pull failed.' }
 & $python -m pip install -e ".[test]" MetaTrader5 tzdata
+if ($LASTEXITCODE -ne 0) { throw 'Stop: dependency installation failed.' }
 & $python -m pytest -q
+if ($LASTEXITCODE -ne 0) { throw 'Stop: tests failed.' }
 & $python -m bot.cli validate-config
+if ($LASTEXITCODE -ne 0) { throw 'Stop: configuration validation failed.' }
 ```
 
-Stop if the pull fails, the checkout is dirty, tests fail or the configuration is invalid. Do not reset, force, checkout over local work or discard uncommitted changes.
+Inspect any listed process and stop here if it is armed, unknown, or already observing the account. Stop if the pull fails, the checkout is dirty, tests fail or the configuration is invalid. Do not reset, force, checkout over local work or discard uncommitted changes.
 
 Before reusing or launching a running scanner, compare its startup checkout and policy IDs with the current `git rev-parse HEAD`. Never update over an armed process or open duplicate scanners.
 
@@ -43,6 +54,8 @@ Preflight must report a USD hedging DEMO account, enabled terminal/expert tradin
 
 Do not treat preflight success as authorization to send orders.
 
+Read the full report before starting. Confirm the account, resolved symbols, M1/M2/M5 history, permissions, open exposure, limits and `review_before_demo`. The eight slow profiles can request up to 10 tickets each; the 1.0-lot FX profiles mean 10 lots per symbol, not one lot total.
+
 ## Read-only demo observer
 
 ```powershell
@@ -53,10 +66,15 @@ This observes M1, M2 and M5 and sends no orders. It waits for fresh completed-ca
 
 ## Armed demo account
 
-Only after the operator gives the separate explicit instruction `ARM DEMO`, run:
+The ordinary start command above is a read-only observer. It does not send orders. Only after the operator gives the separate explicit instruction `ARM DEMO` for the exact verified profiles, run the preflight below using a local `config.demo.local.yaml` with `run.mode: demo`:
 
 ```powershell
 & $python -m bot.cli hull-preflight --config config.demo.local.yaml @profiles
+```
+
+Review that report again, including the account, all symbol specs, batch risk and `review_before_demo`. Only if those checks pass, start the armed scanner in a separate command:
+
+```powershell
 & $python -m bot.cli trade-all --config config.demo.local.yaml --arm-demo @profiles
 ```
 

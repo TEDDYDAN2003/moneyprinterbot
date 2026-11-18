@@ -330,6 +330,8 @@ hull:
   symbols:                # suggested sizes only; invalid broker lots are refused
     XAUUSD:   {aliases: [XAUUSDm, XAUUSD, GOLD], lots: 0.10, target_usd: 10, rate: slow, pip_size: 0.01, max_spread: 0.300}
     EURUSD:   {aliases: [EURUSDm, EURUSD], lots: 1.0, target_usd: 10, rate: slow, pip_size: 0.0001, max_spread: 0.00020}
+    AUDUSD:   {aliases: [AUDUSDm], lots: 1.0, target_usd: 10, rate: slow, pip_size: 0.0001, max_spread: 0.00020}
+    GBPJPY:   {aliases: [GBPJPYm], lots: 1.0, target_usd: 10, rate: slow, pip_size: 0.01, max_spread: 0.08}
     GBPUSD:   {aliases: [GBPUSDm, GBPUSD], lots: 1.0, target_usd: 10, rate: slow, pip_size: 0.0001, max_spread: 0.00030}
     USDJPY:   {aliases: [USDJPYm, USDJPY], lots: 1.3, target_usd: 10, rate: slow, pip_size: 0.01, max_spread: 0.025}
     NAS100USD: {broker_symbol: USTEC_x100m, aliases: [NAS100USD, NAS100, US100, USTEC, USTECm, USTEC_x100m], lots: 1, target_usd: 10, rate: slow, pip_size: 1, max_spread: 3.0}
