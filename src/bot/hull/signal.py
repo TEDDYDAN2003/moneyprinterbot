@@ -4,11 +4,21 @@ from __future__ import annotations
 
 import math
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from bot.zones.engine import Bar
 
 from .config import FRAMES, Indicator
+from .structure import InternalStructure, Pivot, Structure
+
+ENTRY_AUDIT_FIELDS = (
+    "structure_phase",
+    "entry_setup",
+    "zone_low",
+    "zone_high",
+    "entry_side",
+    "entry_reason",
+)
 
 
 class WMA:
@@ -50,6 +60,34 @@ class Reading:
     prior_bars: int
     pivot_low: float | None
     pivot_high: float | None
+    # Empty history fails closed; it never implies permission to send.
+    structure: Structure = field(default_factory=Structure)
+
+    @property
+    def entry_reason(self) -> str:
+        if not self.label:
+            return "no_cross"
+        if not self.side:
+            return self.reason if self.reason != "ready" else "no_executable_label"
+        if self.side != self.label:
+            return "no_matching_hull_label"
+        return self.structure.veto(self.side, self.close) or "ready"
+
+    @property
+    def entry_side(self) -> int:
+        # `side` intentionally remains the pre-structure side used by existing exits.
+        return self.side if self.entry_reason == "ready" else 0
+
+    def entry_audit(self):
+        band = self.structure.band(self.label)
+        return {
+            "structure_phase": self.structure.phase,
+            "entry_setup": band.name if band else None,
+            "zone_low": band.low if band else None,
+            "zone_high": band.high if band else None,
+            "entry_side": self.entry_side,
+            "entry_reason": self.entry_reason,
+        }
 
 
 class Hull:
@@ -77,6 +115,7 @@ class Hull:
         self.tr_sum = 0.0
         self.hist = deque(maxlen=max(2 * p.swing_len + 1, p.pullback_bars + 1))
         self.low = self.high = None
+        self.structure = InternalStructure()
         self.last_cross = {1: None, -1: None}
 
     def update(self, c: Bar) -> Reading:
@@ -124,15 +163,18 @@ class Hull:
         prior = list(self.hist)[-p.pullback_bars :] if label else []
         self.hist.append(c)
         s = p.swing_len
+        close_s = c.t + self.tf * 60
+        pl = ph = None
         if len(self.hist) >= 2 * s + 1:
             span = list(self.hist)[-(2 * s + 1) :]
             mid = span[s]
             left = span[:s]
             right = span[s + 1 :]
             if all(mid.l <= q.l for q in left) and all(mid.l < q.l for q in right):
-                self.low = (mid.l, mid.t)
+                self.low = pl = Pivot(mid.l, mid.t, close_s)
             if all(mid.h >= q.h for q in left) and all(mid.h > q.h for q in right):
-                self.high = (mid.h, mid.t)
+                self.high = ph = Pivot(mid.h, mid.t, close_s)
+        structure = self.structure.update(c, close_s, ph, pl)
         anchor = when = sl = window = None
         count = 0
         side = 0
@@ -154,7 +196,7 @@ class Hull:
             else:
                 chosen = self.low if label == 1 else self.high
                 if chosen:
-                    anchor, when = chosen
+                    anchor, when = chosen.price, chosen.bar_s
             if anchor is not None and self.atr is not None:
                 sl = anchor - label * (
                     p.atr_buffer * self.atr + p.extra_pips * self.pip
@@ -171,7 +213,7 @@ class Hull:
             self.last_cross[label] = c.t
         self.prev, self.last_a, self.last_b = c, a, b
         return Reading(
-            c.t + self.tf * 60,
+            close_s,
             self.tf,
             c.c,
             a,
@@ -186,6 +228,7 @@ class Hull:
             sl,
             window,
             count,
-            self.low[0] if self.low else None,
-            self.high[0] if self.high else None,
+            self.low.price if self.low else None,
+            self.high.price if self.high else None,
+            structure,
         )

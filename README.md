@@ -51,7 +51,7 @@ HULL START XAUUSD:0.09:10:slow EURUSD:0.01:10:slow GBPUSD:0.01:10:slow
 
    No `--arm-demo`, no `--arm-orders`, no `--timeframe` override. One scanner watches **M1, M2 and M5 together**. Verify it is running and report its process ID and actual `reports/hull_runtime/<account-hash>/shadow.jsonl` path. If you lack desktop access or launch fails, say so; do not claim it started.
 
-**What the scanner will do:** follow raw **closed-bar Hull BUY/SELL labels**. BUY uses the prior local pullback low; SELL uses the prior local pullback high, with the configured ATR buffer. Each ticket has its own stop and cash TP. No M15, EMA veto, opposite-label exit or momentum hold. The desk checks broker specifications, spread, margin and portfolio room. **Never** raise limits, move the stop or change lots to force a fill. See [the operating guide](docs/HULL_DEMO.md) for the exact stop rule, rates and protections.
+**What the scanner will do:** log every closed Hull label, but open a batch only for a [structure-qualified entry](docs/HULL_STRUCTURE.md) on that symbol and timeframe. Trend BUYs need a confirmed HH → HL lower-half entry; trend SELLs mirror it. Countertrend SELLs require a confirmed post-BOS HH and price strictly above the old broken high; countertrend BUYs mirror it below the broken low. The existing `exit_opposite` setting remains independent of these entry checks. The previous local wick still supplies SL; each ticket keeps its own lot and cash TP. No M15. **Never** raise limits, move the stop or change lots to force a fill. See [the operating guide](docs/HULL_DEMO.md) for rates, protections and demo checks.
 
 ### 3. Demo orders require a separate instruction
 

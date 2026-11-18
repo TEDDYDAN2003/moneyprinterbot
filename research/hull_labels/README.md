@@ -1,6 +1,6 @@
 # Hull label port: what was checked
 
-**Goal:** follow the user's printed Hull labels (not the chart simulator's EMA-gated queue), then apply the specified local pullback SL and a fixed USD TP per broker ticket. Never infer a fill or winning probability from a screenshot. Implementation: `src/bot/hull`. [Exact conventions and Windows setup](../../docs/HULL_DEMO.md).
+**Goal:** preserve the user's printed Hull labels (not the chart simulator's EMA-gated queue) and filter new entries by confirmed internal structure before using the local wick SL and fixed USD TP per ticket. Never infer a fill or winning probability from a screenshot. Implementation: `src/bot/hull`. [Exact conventions and Windows setup](../../docs/HULL_DEMO.md).
 
 ## Calculation parity
 
@@ -14,7 +14,11 @@ python research/hull_labels/compare_chart.py --bars data/chart_M2.csv --tf 2 --l
 
 Use `--last-live` only if the last row is still forming. Remove it if every row is closed. This compares chart labels, not similarity of broker fills. To regenerate the test fixture: `node research/hull_labels/chart_reference.cjs` (Node is not needed to run the bot or its Python tests).
 
-## Small ordered-quote smoke comparison, not a profitability claim
+## Structure-filtered execution (current)
+
+[Entry specification](../../docs/HULL_STRUCTURE.md) · [checked results](structure_check/summary.json) · [all raw labels with causal structure and entry reasons](structure_check/labels.csv). The scanner preserves the raw chart labels, not automatic entries on every label. Run `python research/hull_labels/reproduce.py --cache data/public_xau_ticks --out reports/hull_replay_structure` against the pinned weeks 45–46. Counts at the label close are before quote, batch and risk vetoes. The replay applies the configured opposite-label exit independently of entry qualification. Compare the same feed, time window and limits; this short sample does not establish a trading edge.
+
+## Archived pre-structure ordered-quote smoke comparison
 
 Independent public XAUUSD feed, Nov 12–15 2026 UTC, with week 45 for warm-up and week 46 through Nov 15 for evaluation. Pinned [source revision](https://github.com/Touhid-HZ/xauusd-tick-data-2026/tree/3ef0f9a5940898a3f690140481500730a3fe178a), [file hashes](results/inputs.json). No broker `XAUUSDm` data or trading account available. Shared signals; three separate flat simulated $10,000 accounts; 0.09 lot, $10 per ticket, frozen local-wick stop, 0.300 maximum spread, $15 aggregate open-risk allowance. Executable quote sides, no extra commission/slippage; stop at the first crossing quote and TP at the limit. No simulated latency, broker rejects/margin, atomic-fill guarantee, FX conversion changes or swaps. P&L and drawdown are realized dollars by batch; account guards mark equity at minute boundaries. The comparison is single-symbol, not a multi-symbol portfolio backtest.
 
@@ -28,4 +32,4 @@ Independent public XAUUSD feed, Nov 12–15 2026 UTC, with week 45 for warm-up a
 
 **Trace one real rule decision:** Nov 12 10:40 UTC, M5 SELL. The selected **earlier** high was 3950.955 on the 10:20 candle. ATR buffer took the raw stop to 3951.38134; outward tick rounding gave **3951.382**. Bid entry 3950.581, per-ticket TP 3949.469 (≈$10.008), initial risk **$7.209**, not $5. The first ask to cross was 3951.395: **−$7.326**. Six tickets at that planned stop need **$43.254** of risk and therefore cannot be sent under the $15 portfolio limit.
 
-[Summary](results/summary.json) · [every raw label/anchor](results/labels.csv) · [slow fills](results/slow.csv). Reproduce with `python research/hull_labels/reproduce.py --cache data/public_xau_ticks --out reports/hull_replay_public` (needs the two verified files; see `results/inputs.json`). On your own instrument: `python -m bot.cli hull-replay --help`. It requires ordered UTC bid/ask ticks and explicit offline tick/contract size and conversion: `quote_usd` for gold/EURUSD quoted in USD, `base_usd` for USD-base FX. Do not pass an invented conversion for a non-USD cross. The connected demo path instead uses the terminal's profit and margin calculators.
+[Summary](results/summary.json) · [every raw label/anchor](results/labels.csv) · [slow fills](results/slow.csv). Reproduce **these archived unfiltered results** from commit `9af93fd` with `python research/hull_labels/reproduce.py --cache data/public_xau_ticks --out reports/hull_replay_public` (needs the two verified files; see `results/inputs.json`). On your own instrument: `python -m bot.cli hull-replay --help`. It requires ordered UTC bid/ask ticks and explicit offline tick/contract size and conversion: `quote_usd` for gold/EURUSD quoted in USD, `base_usd` for USD-base FX. Do not pass an invented conversion for a non-USD cross. The connected demo path instead uses the terminal's profit and margin calculators.

@@ -1,0 +1,29 @@
+# Which Hull suggestions can open a position?
+
+**A closed Hull cross is a label. It is not automatically an entry.** The Python scanner, read-only observer and ordered-quote replay apply the same `internal_structure_v1` entry rules. Each symbol has independent M1, M2 and M5 structure. A level on M5 does not qualify an M1 label. This is not a change to the chart indicator, position sizing or exit policy.
+
+| Confirmed structure on the signal timeframe | Required fresh Hull label | Allowed price, at signal close and at the executable quote |
+|---|---|---|
+| Bullish change of character (CHoCH) → confirmed higher high (HH) → later confirmed higher low (HL) | BUY | `HL ≤ price ≤ (HH + HL)/2`. The upper half is too late. |
+| Bearish CHoCH → confirmed lower low (LL) → later confirmed lower high (LH) | SELL | `(LL + LH)/2 ≤ price ≤ LH`. The lower half is too late. |
+| Established bullish trend → continuation break of structure (BOS) above its HH → confirmed new HH | SELL | `old broken high < price ≤ new HH` in the HL → new HH leg. No bearish CHoCH required. |
+| Established bearish trend → continuation BOS below its LL → confirmed new LL | BUY | `new LL ≤ price < old broken low` in the LH → new LL leg. No bullish CHoCH required. |
+
+The first two rules also apply to a newly completed pullback after a continuation BOS. The last two do **not** need another HL/LH after the new extreme. The line called **BOS** is the price of the old swing that was broken, *not* the high/low of the break candle, its close, or the midpoint of the new leg.
+
+**Example:** after bullish CHoCH, a confirmed HH of 110 and a later confirmed HL of 100 allow a Hull BUY at 104, not 108. A later **close above 110** breaks that high. Once a **new HH at 116 has been confirmed**, a fresh Hull SELL closing at 112 is eligible if its bid is still in `(110, 116]`. High 112 **but close 109**, or **close exactly 110**, does not qualify. A valid close followed by a bid at 110 also fails. No old label is queued for a later retest.
+
+## When a level becomes usable
+
+1. Use only finished candles and the scanner’s existing swing definition: `hull.indicator.swing_len` bars on each side (default **3/3**, newer equal wick wins). A pivot candle’s time is not its confirmation time. A swing first learned on the current close cannot be the **previously known** level that same candle broke.
+2. On cold start the first close breaking a known swing, with an opposing swing available, establishes reference direction **only**. In that reference phase the opposing confirmed pivot is the guard. A strict close through that guard in the other direction is CHoCH. CHoCH by itself opens nothing.
+3. Confirm the impulse extreme at or after the break: a higher high above the broken high, or a lower low below the broken low. For trend entries the subsequent pullback must be a **different, later pivot**: its low strictly above the origin low for a bull, or high strictly below the origin high for a bear. The first qualifying pullback freezes the range. A swing that becomes known later never validates an earlier label retroactively.
+4. A closing break of the confirmed extreme **after** that pullback starts a continuation BOS; retire the old bands and freeze the broken price. An extension before a pullback continues the same impulse, not a new BOS. A closing break through the protected HL/LH (or the origin while waiting for the pullback) starts the opposite CHoCH and clears the old bands. A wick or an equal close alone is not a break.
+
+## Orders, exits and audit
+
+- Check the closed candle first; recheck the **same frozen band** on each proposed BUY **ask** or SELL **bid**, including subsequent legs and pre-send rechecks. A batch still needs the existing spread, stop, target, age, session, exposure, margin and arming checks. A broker fill may differ from the quote. The order stop still uses the configured stop method (default: previous local wicks), **not** the full structural range.
+- At the latest candidate close, aligned **entry-qualified** lanes use the highest timeframe; opposing **qualified** lanes skip. An invalid lane cannot override a valid entry. If no lane qualifies, do not fall back to an earlier close.
+- **`exit_opposite` is unchanged.** The old pre-structure selector still determines whether to request an exit on owned opposite positions, independently of opening a replacement. An invalid entry is not a new exit rule or an exemption from the configured one. A raw conflict still produces no selected exit. Busy-symbol checks prevent opening into an unresolved position. Replay now models that configured exit on the first executable bid/ask for the held side.
+- Read `closed_label` for the raw `label`, pre-structure `side`/`reason`, `structure` snapshot, `entry_setup`, `zone_low`, `zone_high`, `entry_side` and `entry_reason`. **`entry_side = 0` means no entry suggestion.** `entry_side = ±1` means qualified at the close, not filled. `label_decision.outcome` reports later vetoes or the batch result. `structure` records pivot `bar_s` (open), `known_s` (confirmation close), and `break_close_s`, all Unix UTC seconds.
+- Replay reports `label_counts`, `entry_qualified_at_close` and `structure_vetoes_at_close` separately from positions/fills. [Pinned gold replay](../research/hull_labels/structure_check/summary.json) · [raw and qualified labels](../research/hull_labels/structure_check/labels.csv). These are implementation checks, not a profitability estimate.

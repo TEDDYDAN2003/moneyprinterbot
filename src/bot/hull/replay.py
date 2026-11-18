@@ -20,8 +20,9 @@ from bot.zones.hours import Hours
 from bot.zones.orders import EquityGuard
 from bot.zones.replay import file_hash, iso_ms
 
-from .orders import Block, Exposure, Grid, choose, count_for, make_plan
-from .signal import Hull
+from .orders import Block, Exposure, Grid, count_for, make_plan, select_labels
+from .signal import ENTRY_AUDIT_FIELDS, Hull, Reading
+from .structure import ENTRY_POLICY
 
 
 class Clock:
@@ -57,7 +58,8 @@ class Clock:
 
 
 class Account:
-    def __init__(self, p, lim, grid, cash, hours, initial):
+    def __init__(self, p, lim, grid, cash, hours, initial, *, exit_opposite):
+        self.exit_opposite = exit_opposite
         self.p, self.lim, self.grid, self.cash, self.hours = p, lim, grid, cash, hours
         self.eq = initial
         self.guard = EquityGuard()
@@ -65,6 +67,8 @@ class Account:
         self.rows = []
         self.count = Counter()
         self.labels = Counter()
+        self.qualified = Counter()
+        self.structure_vetoes = Counter()
         self.sends = []
 
     def close(self, why, ms, px):
@@ -134,7 +138,25 @@ class Account:
             f"M{d.tf}:{'BUY' if d.label == 1 else 'SELL'}" for d in labels
         )
         if labels:
-            d, why = choose(labels)
+            for v in labels:
+                if v.entry_side:
+                    self.qualified[
+                        f"M{v.tf}:{'BUY' if v.entry_side == 1 else 'SELL'}"
+                    ] += 1
+                elif v.side:
+                    self.structure_vetoes[v.entry_reason] += 1
+            original, d, why = select_labels(labels)
+            # Mirror the user's existing terminal exit, independently of permission
+            # to open the replacement. Historical account contains only owned legs.
+            if (
+                self.exit_opposite
+                and original
+                and self.pos
+                and self.pos[1].side != original.side
+            ):
+                self.close(
+                    "opposite_hull_label", ms, bid if self.pos[1].side == 1 else ask
+                )
             if d:
                 why = (
                     "symbol_busy"
@@ -196,6 +218,8 @@ class Account:
             positions=sum(r["legs"] for r in self.rows),
             exits=dict(Counter(r["exit_reason"] for r in self.rows)),
             label_counts=dict(self.labels),
+            entry_qualified_at_close=dict(self.qualified),
+            structure_vetoes_at_close=dict(self.structure_vetoes),
             decision_counts=dict(self.count),
         )
         return metrics
@@ -259,6 +283,7 @@ def study(minutes, cfg, h, p, frames, lo, hi, unit, contract, conversion, rates,
             cash,
             Hours(cfg),
             cfg["backtest"]["initial_balance"],
+            exit_opposite=h.indicator.exit_opposite,
         )
         for r in rates
     }
@@ -275,7 +300,11 @@ def study(minutes, cfg, h, p, frames, lo, hi, unit, contract, conversion, rates,
             continue
         for d in ds:
             if d.label:
-                labels.append({"closed_utc": iso_ms(d.close_s * 1000), **asdict(d)})
+                row = asdict(d)
+                row["structure"] = json.dumps(row["structure"], separators=(",", ":"))
+                labels.append(
+                    {"closed_utc": iso_ms(d.close_s * 1000), **row, **d.entry_audit()}
+                )
         for a in acc.values():
             a.step(m, ds)
         last = m
@@ -290,6 +319,7 @@ def study(minutes, cfg, h, p, frames, lo, hi, unit, contract, conversion, rates,
         "ticks": ticks,
         "rates": {},
         "timeframes": frames,
+        "entry_policy": ENTRY_POLICY,
         "per_ticket_target": p.target_usd,
         "profile": p.model_dump(),
         "indicator": h.indicator.model_dump(),
@@ -301,11 +331,11 @@ def study(minutes, cfg, h, p, frames, lo, hi, unit, contract, conversion, rates,
         "end_exclusive_utc": iso_ms(hi * 1000),
         "note": "USD, spread only. Actual crossing quote for SL; TP at limit. Account equity marked at minute boundaries. No broker margin/volume checks, latency or guarantee of atomic batch fills.",
     }
-    from .signal import Reading
-
     with (out / "labels.csv").open("w", newline="") as f:
         w = csv.DictWriter(
-            f, ["closed_utc", *Reading.__dataclass_fields__], lineterminator="\n"
+            f,
+            ["closed_utc", *Reading.__dataclass_fields__, *ENTRY_AUDIT_FIELDS],
+            lineterminator="\n",
         )
         w.writeheader()
         w.writerows(labels)

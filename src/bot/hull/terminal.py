@@ -15,13 +15,15 @@ from bot.zones.engine import Bar
 
 from .config import COUNTS, FRAMES
 from .desk import Desk, identity_check, resolve
-from .orders import Grid, choose
+from .orders import Grid, select_labels
 from .signal import Hull
+from .structure import ENTRY_POLICY
 
 
 def describe(r):
     return {
         **asdict(r),
+        **r.entry_audit(),
         "direction": "BUY" if r.label == 1 else "SELL" if r.label == -1 else "NONE",
         "signal_close_utc": datetime.fromtimestamp(r.close_s, UTC).isoformat(),
         "anchor_bar_utc": datetime.fromtimestamp(r.anchor_s, UTC).isoformat()
@@ -190,6 +192,7 @@ def run(
             "terminal_trade_allowed": bool(mt.terminal_info().trade_allowed),
             "account_expert_allowed": bool(a.trade_expert and a.trade_allowed),
             "timeframes": list(frames),
+            "entry_policy": ENTRY_POLICY,
             "specs": specs,
             "limits": limits.model_dump(),
             "indicator": h.indicator.model_dump(),
@@ -211,6 +214,7 @@ def run(
                     checks[f"M{tf}"] = {
                         "status": status,
                         "closed_bars_loaded": lane.h.n,
+                        "current_structure_phase": lane.h.structure.view.phase,
                         "last_label_for_comparison_only": describe(v) if v else None,
                     }
                     if status == "history_unavailable" or lane.h.n < lane.min_bars:
@@ -281,26 +285,31 @@ def run(
                             ds.append(reading)
                             emit("closed_label", symbol=name, **describe(reading))
                     if ds:
-                        picked, why = choose(ds)
+                        original, entry, why = select_labels(ds)
                         if not data_ok or not history_ok:
                             why = "data_or_deal_history_unavailable"
-                        elif picked:
-                            if h.indicator.exit_opposite:
-                                reversed_closed = d.close_opposite(name, picked)
+                        else:
+                            # Preserve the configured exit on the PRE-filter candidate.
+                            if original is not None and h.indicator.exit_opposite:
+                                reversed_closed = d.close_opposite(name, original)
                                 if reversed_closed:
                                     emit(
                                         "opposite_label_exit",
                                         symbol=name,
-                                        tf=picked.tf,
-                                        signal=picked.close_s,
+                                        tf=original.tf,
+                                        signal=original.close_s,
                                         closed_positions=reversed_closed,
-                                        next_side="BUY" if picked.side == 1 else "SELL",
+                                        next_side="BUY"
+                                        if original.side == 1
+                                        else "SELL",
                                     )
-                            why = d.batch(name, picked)
+                            if entry is not None:
+                                why = d.batch(name, entry)
                         emit(
                             "label_decision",
                             symbol=name,
-                            tf=picked.tf if picked else None,
+                            tf=entry.tf if entry else None,
+                            raw_selected_tf=original.tf if original else None,
                             close_s=max(v.close_s for v in ds),
                             outcome=why,
                         )

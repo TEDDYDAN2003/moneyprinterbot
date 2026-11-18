@@ -1,6 +1,9 @@
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
+import pytest
+from hull_cases import PATH, known_range, sequence
 
 from bot.config.loader import load_yaml
 from bot.hull.config import HullConfig, Indicator
@@ -41,6 +44,7 @@ def test_first_crossing_quote_gap_stop_and_tp_never_waits_for_momentum():
             lambda side, l, e, px: side * l * 100 * (px - e),
             Hours(cfg),
             10000,
+            exit_opposite=h.indicator.exit_opposite,
         )
         bid = np.array([2000.0, next_bid])
         ask = bid + 0.1
@@ -69,6 +73,7 @@ def test_first_crossing_quote_gap_stop_and_tp_never_waits_for_momentum():
             4,
             None,
             None,
+            known_range(side, 2000.0, T),
         )
         a.step(m, [sig])
         return a.rows[0]
@@ -81,3 +86,58 @@ def test_first_crossing_quote_gap_stop_and_tp_never_waits_for_momentum():
             loss["exit_reason"] == "stop"
             and -loss["net_usd_batch"] > loss["risk_usd_batch"]
         )
+
+
+@pytest.mark.parametrize("bias", [1, -1])
+@pytest.mark.parametrize(
+    "exit_opposite,valid", [(False, False), (False, True), (True, False), (True, True)]
+)
+def test_replay_original_opposite_exit_separate_from_structure_entry(
+    bias, exit_opposite, valid
+):
+    cfg = load_yaml(Path(__file__).resolve().parents[1] / "config.yaml")
+    h = HullConfig.model_validate(cfg["hull"])
+    g = Grid(0.001, 0.001, 3, 0, 0.01, 100, 0.01)
+    p = h.symbols["XAUUSD"].model_copy(update={"lots": 0.01})
+    a = Account(
+        p,
+        h.limits,
+        g,
+        lambda d, l, e, x: d * l * 100 * (x - e),
+        Hours(cfg),
+        10000,
+        exit_opposite=exit_opposite,
+    )
+    r = sequence(bias, closes=PATH[:21], end_s=T + 60)[-1]
+    # At constant prices neither attached barrier is hit. Seed the held side,
+    # then feed the genuine, opposite post-BOS label or its equality case.
+    x = r.close
+
+    def minute(t):
+        return Minute(
+            Bar(t, x, x, x, x),
+            np.array([t * 1000 + 10]),
+            np.array([x]),
+            np.array([x + 0.1]),
+            True,
+        )
+
+    first = replace(
+        r,
+        close_s=T,
+        side=bias,
+        label=bias,
+        raw_sl=x - bias,
+        structure=known_range(bias, x, T),
+    )
+    a.step(minute(T), [first])
+    assert a.pos is not None and a.pos[1].side == bias
+    next_r = r if valid else replace(r, close=r.structure.broken.price)
+    a.step(minute(T + 60), [next_r])
+    assert sum(a.labels.values()) == 2 and sum(a.qualified.values()) == 1 + int(valid)
+    if exit_opposite:
+        assert len(a.rows) == 1 and a.rows[0]["exit_reason"] == "opposite_hull_label"
+        assert a.rows[0]["exit_price"] == (x if bias == 1 else x + 0.1)
+        assert (a.pos[1].side if a.pos else 0) == (-bias if valid else 0)
+    else:
+        assert not a.rows and a.pos[1].side == bias

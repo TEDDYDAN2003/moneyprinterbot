@@ -307,12 +307,12 @@ hull:
   indicator:
     hull_len: 24
     source: hl2
-    signal: labels        # every strict closed-bar cross; no EMA/zone/momentum gate
-    exit_opposite: true   # close owned opposite-side tickets, then start the Hull reversal
+    signal: labels        # raw closed-bar crosses; internal structure gates new entries
+    exit_opposite: true   # original opposite-label exit, independent of entry eligibility
     ema_length: 200
     stop: local_pullback  # recent preceding wicks, not a market-structure HH/HL
     pullback_bars: 7      # capped at the preceding opposite crossover; excludes signal bar
-    swing_len: 3          # optional literal confirmed_pivot mode only
+    swing_len: 3          # closed bars on each side for structure and optional pivot SL
     atr_length: 14
     atr_buffer: 0.1
     extra_pips: 0

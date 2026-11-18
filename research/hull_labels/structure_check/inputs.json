@@ -1,0 +1,7 @@
+{
+  "base": "https://raw.githubusercontent.com/Touhid-HZ/xauusd-tick-data-2026/3ef0f9a5940898a3f690140481500730a3fe178a/data/tick/",
+  "sha256": {
+    "XAUUSD_2026_w45.csv.gz": "bfabc0e7d4aa86ac4eceb96cdd8a63ae5f705915877db616b9224615f6711aa8",
+    "XAUUSD_2026_w46.csv.gz": "eb451e96b70913de2dd64788aa50eb0b2d9f704cedfeed542dc57c39e272f8e1"
+  }
+}

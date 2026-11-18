@@ -115,8 +115,8 @@ def target(grid, side, lots, entry, usd, cash):
 
 
 def make_plan(d, p, grid, bid, ask, cash):
-    if not d.side or d.raw_sl is None:
-        raise Block(d.reason)
+    if not d.entry_side or d.raw_sl is None:
+        raise Block(d.entry_reason)
     if not all(math.isfinite(v) for v in (bid, ask, d.raw_sl)) or not 0 < bid <= ask:
         raise Block("bad_quote")
     if p.max_spread is not None and ask - bid > p.max_spread + grid.tick * 1e-7:
@@ -124,6 +124,10 @@ def make_plan(d, p, grid, bid, ask, cash):
     grid.volume(p.lots)
     side = d.side
     entry, mark = (ask, bid) if side == 1 else (bid, ask)
+    # Same frozen zone at the signal CLOSE and each executable ask/bid. A quote
+    # drifting back into the zone can never resurrect an invalid closed label.
+    if why := d.structure.veto(side, entry):
+        raise Block("quote_" + why)
     # Use the actual chart-derived price; never replace with a cash stop or add a hidden spread buffer.
     sl = grid.price(grid.index(d.raw_sl, side == -1))
     dist = max(grid.gap, grid.tick)
@@ -173,3 +177,24 @@ def choose(ds):
     if len({d.side for d in same}) > 1:
         return None, "opposite_labels_same_close"
     return max(same, key=lambda d: d.tf), "ready"
+
+
+def select_labels(ds):
+    """Independent picks: existing exit arbitration, and structure-qualified entry.
+
+    Keep the original opportunity timestamp. An older valid signal must not be
+    revived by a newer veto. Only qualified lanes vote on a NEW position.
+    """
+    original, why = choose(ds)
+    latest = max((d.close_s for d in ds if d.side), default=None)
+    if latest is None:
+        return original, None, why
+    valid = [d for d in ds if d.close_s == latest and d.entry_side]
+    if not valid:
+        return (
+            original,
+            None,
+            (original.entry_reason if original else "no_structure_qualified_label"),
+        )
+    entry, entry_why = choose(valid)
+    return original, entry, entry_why
