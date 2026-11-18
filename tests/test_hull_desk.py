@@ -193,10 +193,10 @@ def factory(tmp_path, monkeypatch):
     ("rate", "sl", "legs"),
     [
         ("fast", 1999.95, 7),
-        ("fast", 1999.85, 6),
+        ("fast", 1999.85, 7),
         ("medium", 1999.80, 4),
-        ("medium", 1999.65, 3),
-        ("slow", 1999.1, 1),
+        ("medium", 1999.65, 4),
+        ("slow", 1999.1, 10),
     ],
 )
 def test_exact_batch_range_per_ticket_tp_dynamic_sl_no_five_dollar_clip(
@@ -207,12 +207,12 @@ def test_exact_batch_range_per_ticket_tp_dynamic_sl_no_five_dollar_clip(
     assert d.batch("XAUUSDm", s) == "demo_batch_sent"
     assert len(mt.positions) == legs
     for p in mt.positions:
-        assert p.sl == sl and p.volume == 0.09 and p.magic == d.h.magic
-        assert (p.tp - p.price_open) * 9 >= 10 and (
+        assert p.sl == sl and p.volume == 0.1 and p.magic == d.h.magic
+        assert (p.tp - p.price_open) * 10 >= 10 and (
             p.tp - 0.001 - p.price_open
-        ) * 9 < 10
+        ) * 10 < 10
     if rate == "slow":
-        assert (mt.q.ask - sl) * 9 > 5
+        assert (mt.q.ask - sl) * 10 > 5
     assert len(d.state["target_by_ticket"]) == legs and not d.state.get("manual_hold")
     assert d.batch("XAUUSDm", s) == "already_consumed"
     assert any(x[0] == "batch_preview" for x in logs)
@@ -220,9 +220,10 @@ def test_exact_batch_range_per_ticket_tp_dynamic_sl_no_five_dollar_clip(
 
 def test_nothing_sent_if_batch_minimum_does_not_fit(factory):
     mt, d, log = factory("fast")
+    d.lim = d.lim.model_copy(update={"max_open_risk_usd": 0.1})
     assert d.batch("XAUUSDm", sig(1999.1)) == "portfolio_risk_limit"
     veto = next(data for name, data in log if name == "risk_veto")
-    assert veto["min_legs"] == 6 and veto["min_batch_risk"] == pytest.approx(54)
+    assert veto["min_legs"] == 6 and veto["min_batch_risk"] == pytest.approx(60)
     assert not mt.requests
 
 
@@ -247,26 +248,28 @@ def test_fill_retargets_to_actual_open_and_target_is_not_a_momentum_exit(factory
     mt.retprice = 2000.12
     assert d.batch("XAUUSDm", sig()) == "demo_batch_sent"
     assert (
-        len(mt.requests) == 2
+        len(mt.positions) == 10
+        and len(mt.requests) == 20
+        and mt.requests[0]["action"] == 1
         and mt.requests[1]["action"] == 6
-        and mt.positions[0].tp == pytest.approx(2001.232)
+        and mt.positions[0].tp == pytest.approx(2001.12)
     )
     mt.positions[0].profit = 9.99
     d.supervise()
-    assert len(mt.positions) == 1
+    assert len(mt.positions) == 10
     mt.positions[0].profit = 10.0
     d.supervise()
-    assert not mt.positions and mt.requests[-1]["position"] == 1
+    assert len(mt.positions) == 9
 
 
 def test_opposite_hull_label_closes_held_side_before_reversal(factory):
     mt, d, _ = factory("slow")
     buy = replace(sig(side=1), close_s=T - 1)
     assert d.batch("XAUUSDm", buy) == "demo_batch_sent"
-    assert len(mt.positions) == 1
+    assert len(mt.positions) == 10
 
     sell = replace(sig(sl=2000.05, side=-1), close_s=T)
-    assert d.close_opposite("XAUUSDm", sell) == 1
+    assert d.close_opposite("XAUUSDm", sell) == 10
     assert not mt.positions
 
 
@@ -527,8 +530,8 @@ def test_cli_native_m2_entry_filter_and_independent_exit(
     (record,) = [r for r in ledger if r["event"] == "closed_label"]
     assert record["label"] == d.label and record["entry_side"] == d.entry_side
     if eligible:
-        assert len(mt.positions) == len(mt.requests) == 1
-        assert mt.positions[0].sl > 0 and mt.positions[0].tp > 0
+        assert len(mt.positions) == len(mt.requests) == 10
+        assert all(p.sl > 0 and p.tp > 0 and p.volume == 0.01 for p in mt.positions)
         assert ledger[-1]["outcome"] == "demo_batch_sent"
     else:
         assert ledger[-1]["outcome"] == d.entry_reason and not ledger[-1]["tf"]
@@ -547,9 +550,10 @@ def test_actual_hull_label_beyond_confirmed_bos_opens_protected_batch(factory, b
     mt.q.bid = row.close
     mt.q.ask = row.close + 0.1
     assert desk.batch("XAUUSDm", row) == "demo_batch_sent"
-    (p,) = mt.positions
-    assert p.type == (mt.ORDER_TYPE_SELL if bias == 1 else mt.ORDER_TYPE_BUY)
-    assert p.volume == 0.09 and p.tp > 0 and p.sl > 0
+    assert len(mt.positions) == 10
+    for p in mt.positions:
+        assert p.type == (mt.ORDER_TYPE_SELL if bias == 1 else mt.ORDER_TYPE_BUY)
+        assert p.volume == 0.10 and p.tp > 0 and p.sl > 0
 
 
 @pytest.mark.parametrize("bad_close", [False, True])
@@ -658,5 +662,5 @@ def test_flat_may_use_only_qualified_lane_but_raw_conflict_never_exits(
         assert last["outcome"] == "symbol_busy_or_batch_changed" and not mt.requests
         assert mt.positions[0].ticket == 55
     else:
-        assert last["outcome"] == "demo_batch_sent" and len(mt.requests) == 1
+        assert last["outcome"] == "demo_batch_sent" and len(mt.requests) == 10
         assert mt.positions[0].type == mt.ORDER_TYPE_BUY

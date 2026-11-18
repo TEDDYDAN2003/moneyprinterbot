@@ -39,8 +39,8 @@
 </main>
 <script>
 'use strict';
-const counts = {slow: [1, 1], medium: [3, 4], fast: [6, 7]};
-const presets = [ ['XAUUSD','0.09'], ['EURUSD','0.05'], ['GBPUSD','0.05'], ['USDJPY','1.3'], ['USTEC100','1'], ['US30','1'], ['1HZ100V','0.01'] ];
+const counts = {slow: [10, 10], medium: [3, 4], fast: [6, 7]};
+const presets = [ ['XAUUSD','0.10'], ['EURUSD','1'], ['GBPUSD','1'], ['USDJPY','1.3'], ['USTEC100','1'], ['US30','1'], ['1HZ100V','0.01'] ];
 const presetKeys = {USTEC100:'NAS100USD', US30:'US30'};
 const trio = new Set(['XAUUSD', 'EURUSD', 'GBPUSD']);
 const id = name => document.getElementById(name);
@@ -109,7 +109,7 @@ async function copyField(field, message) {
 copyLine.addEventListener('click', () => copyField(lineBox, 'Start line copied. Paste it into your Windows agent.'));
 copyRows.addEventListener('click', () => copyField(rowsBox, 'Selected rows copied, including the chosen rates.'));
 id('trio').addEventListener('click', () => {
-  const defaultLots = {XAUUSD:'0.09', EURUSD:'0.05', GBPUSD:'0.05'};
+  const defaultLots = {XAUUSD:'0.10', EURUSD:'1', GBPUSD:'1'};
   for (const row of body.rows) {
     const selected = trio.has(row.dataset.key);
     row.querySelector('.use').checked = selected;
