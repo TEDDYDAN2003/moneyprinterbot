@@ -9,10 +9,9 @@ from unittest.mock import patch
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fixtures import FakeMT, T
-from test_journal import ticket
-
 from hull_analytics import entry_reason, session_minute
 from ledger import csv_bytes, db_open, make_views, sync
+from test_journal import ticket
 
 
 def classify(s):
@@ -75,6 +74,19 @@ class AnalyticsTests(unittest.TestCase):
                 )
         finally:
             session_minute.cache_clear()
+
+    def test_new_structure_reasons_do_not_rewrite_legacy_reasons(self):
+        self.assertEqual(
+            entry_reason("bear_protected_pullback_sell"),
+            "SELL · pullback below protected LH",
+        )
+        self.assertEqual(
+            entry_reason("bull_protected_pullback_buy"),
+            "BUY · pullback above protected HL",
+        )
+        self.assertEqual(entry_reason("bear_choch_sell"), "SELL · bearish CHoCH close")
+        self.assertEqual(entry_reason("bull_choch_buy"), "BUY · bullish CHoCH close")
+        self.assertEqual(entry_reason("bear_premium_sell"), "SELL · bearish premium")
 
     def test_reason_from_matching_signal_not_trade_outcome(self):
         ds = ticket(end=T + 180, gross=-8)

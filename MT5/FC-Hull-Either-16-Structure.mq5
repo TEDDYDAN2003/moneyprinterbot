@@ -1,10 +1,10 @@
 // FC Hull Either 16 | Market Structure Suggestions | MT5 custom indicator (not an EA).
 // No order, account, network or file APIs. All P/L and occupancy below are chart simulations.
-#property version "1.00"
+#property version "2.00"
 #property description "Confirmed Hull crosses, internal market structure and a one-position chart simulation."
 #property indicator_chart_window
-#property indicator_buffers 30
-#property indicator_plots 21
+#property indicator_buffers 36
+#property indicator_plots 27
 #property indicator_label1 "Channel neutral: high;Channel neutral: low"
 #property indicator_type1 DRAW_FILLING
 #property indicator_color1 clrSilver,clrSilver
@@ -65,6 +65,19 @@
 #property indicator_type20 DRAW_NONE
 #property indicator_label21 "Source conflict (1/0)"
 #property indicator_type21 DRAW_NONE
+
+#property indicator_label22 "Protected HL/LH"
+#property indicator_type22 DRAW_NONE
+#property indicator_label23 "Confirmed structural HH/LL"
+#property indicator_type23 DRAW_NONE
+#property indicator_label24 "Candidate pullback wick (not protected)"
+#property indicator_type24 DRAW_NONE
+#property indicator_label25 "Structure bias (+1/-1/0)"
+#property indicator_type25 DRAW_NONE
+#property indicator_label26 "Break on close (signed 2 CHoCH / 3 BOS)"
+#property indicator_type26 DRAW_NONE
+#property indicator_label27 "Pullback seen (1/0)"
+#property indicator_type27 DRAW_NONE
 
 enum FC_VIEW {
    FC_VALID=0,      // Valid suggestions only
@@ -132,7 +145,8 @@ struct FCState {
    double oldB,oldH,oldL,ema,atr,trSum;
    int lastSig,lastBuy,lastSell,rawBuys,rawSells,conflicts,repeats,lastDisplay;
    double knownH,knownL,broken,origin,extreme,reaction,tip;
-   int bias,kind,extremeBar,tipBar;
+   double legOuter,retraceWick;
+   int bias,kind,tipBar; bool seenPullback,breakNow;
    int pending,side; datetime due;
    double qSL,qTP,qLo,qHi; bool qOpenLo,qOpenHi,exitNext;
    double entry,stop,target,units,entryFee,cash,peak,maxDD,totalNet,gWin,gLoss;
@@ -140,7 +154,7 @@ struct FCState {
 };
 struct FCBar {
    double b,hi,lo,ema,atr,buyLo,buyHi,sellLo,sellHi,rawSL,fillPx,fillSL,fillTP;
-   bool strictBuyHi,strictSellLo,insideBuy,insideSell;
+   bool strictBuyLo,strictBuyHi,strictSellLo,strictSellHi,insideBuy,insideSell;
    int raw,structure,valid,filled,display,tie,conflict;
 };
 void ResetState(FCState &s) {
@@ -148,7 +162,7 @@ void ResetState(FCState &s) {
    s.oldB=EMPTY_VALUE; s.oldH=EMPTY_VALUE; s.oldL=EMPTY_VALUE;
    s.ema=EMPTY_VALUE; s.atr=EMPTY_VALUE; s.knownH=EMPTY_VALUE; s.knownL=EMPTY_VALUE;
    s.broken=EMPTY_VALUE; s.origin=EMPTY_VALUE; s.extreme=EMPTY_VALUE;
-   s.reaction=EMPTY_VALUE; s.tip=EMPTY_VALUE; s.extremeBar=-1; s.tipBar=-1;
+   s.reaction=EMPTY_VALUE; s.tip=EMPTY_VALUE; s.legOuter=EMPTY_VALUE; s.retraceWick=EMPTY_VALUE; s.tipBar=-1;
    s.lastBuy=-1; s.lastSell=-1; s.cash=InCapital; s.peak=InCapital;
 }
 void ResetBar(FCBar &r) {
@@ -189,19 +203,22 @@ void SelectCross(FCState &s,FCBar &r,bool &repeat) {
    s.oldB=r.b; s.oldH=r.hi; s.oldL=r.lo;
 }
 bool Inside(const double px,const double lo,const double hi,const bool openLo,const bool openHi) {
-   return px!=EMPTY_VALUE && lo!=EMPTY_VALUE && hi!=EMPTY_VALUE && (openLo?px>lo:px>=lo) && (openHi?px<hi:px<=hi);
+   return px!=EMPTY_VALUE && (lo!=EMPTY_VALUE || hi!=EMPTY_VALUE) &&
+          (lo==EMPTY_VALUE || (openLo?px>lo:px>=lo)) && (hi==EMPTY_VALUE || (openHi?px<hi:px<=hi));
 }
-void Bands(const FCState &s,FCBar &r) {
-   bool trend=s.kind>=2 && s.extreme!=EMPTY_VALUE && s.reaction!=EMPTY_VALUE;
+void Bands(const FCState &s,FCBar &r,const bool closed=true) {
+   bool now=closed && s.breakNow;
+   bool trend=s.kind>=2 && (now || s.seenPullback);
    bool fade=s.kind==3 && s.extreme!=EMPTY_VALUE && s.broken!=EMPTY_VALUE;
-   double mid=trend?(s.extreme+s.reaction)/2.0:EMPTY_VALUE;
-   r.buyLo=(s.bias==1&&trend?s.reaction:s.bias==-1&&fade?s.extreme:EMPTY_VALUE);
-   r.buyHi=(s.bias==1&&trend?mid:s.bias==-1&&fade?s.broken:EMPTY_VALUE);
-   r.sellLo=(s.bias==-1&&trend?mid:s.bias==1&&fade?s.broken:EMPTY_VALUE);
-   r.sellHi=(s.bias==-1&&trend?s.reaction:s.bias==1&&fade?s.extreme:EMPTY_VALUE);
-   r.strictBuyHi=s.bias==-1&&fade; r.strictSellLo=s.bias==1&&fade;
+   double edge=now && s.kind==2 ? s.broken:s.origin;
+   r.buyLo=s.bias==1&&trend?edge:s.bias==-1&&fade?s.extreme:EMPTY_VALUE;
+   r.buyHi=s.bias==-1&&fade?s.broken:EMPTY_VALUE;
+   r.sellLo=s.bias==1&&fade?s.broken:EMPTY_VALUE;
+   r.sellHi=s.bias==-1&&trend?edge:s.bias==1&&fade?s.extreme:EMPTY_VALUE;
+   r.strictBuyLo=s.bias==1&&trend; r.strictBuyHi=s.bias==-1&&fade;
+   r.strictSellLo=s.bias==1&&fade; r.strictSellHi=s.bias==-1&&trend;
 }
-void UpdateStructure(FCState &s,const int i,const double &h[],const double &l[],const double closePx) {
+void UpdateStructure(FCState &s,const int i,const double &h[],const double &l[],const double &c[]) {
    int p=i-InSwing; bool ph=(i>=2*InSwing),pl=ph;
    if(ph) {
       for(int k=1;k<=InSwing;k++){
@@ -212,35 +229,40 @@ void UpdateStructure(FCState &s,const int i,const double &h[],const double &l[],
    }
    double hp=ph?h[p]:EMPTY_VALUE,lp=pl?l[p]:EMPTY_VALUE;
    int ns=0,nk=0; double nb=EMPTY_VALUE,no=EMPTY_VALUE;
-   // First break only seeds; reversal tested against OLD guard before admitting today's pivots.
-   if(s.knownH!=EMPTY_VALUE && s.knownL!=EMPTY_VALUE){
-      if(s.bias==0){
-         if(closePx>s.knownH || closePx<s.knownL){
-            ns=closePx>s.knownH?1:-1; nk=1; nb=ns==1?s.knownH:s.knownL; no=ns==1?s.knownL:s.knownH;
-         }
+   s.breakNow=false;
+   if(s.bias==0){
+      if(s.knownH!=EMPTY_VALUE && s.knownL!=EMPTY_VALUE && (c[i]>s.knownH || c[i]<s.knownL)){
+         ns=c[i]>s.knownH?1:-1; nk=1; nb=ns==1?s.knownH:s.knownL; no=ns==1?s.knownL:s.knownH;
+      }
+   }else if(s.bias*(c[i]-s.origin)<0){
+      ns=-s.bias; nk=2; nb=s.origin; no=s.legOuter;
+   }else if(s.extreme!=EMPTY_VALUE && s.bias*(c[i]-s.extreme)>0){
+      if(s.seenPullback && s.retraceWick!=EMPTY_VALUE){
+         ns=s.bias; nk=3; nb=s.extreme;
+         bool promote=s.bias*(s.retraceWick-s.origin)>0 && s.bias*(s.extreme-s.retraceWick)>0;
+         no=promote?s.retraceWick:s.origin;
       }else{
-         double guard=s.reaction!=EMPTY_VALUE?s.reaction:s.origin;
-         if(guard!=EMPTY_VALUE && s.bias*(closePx-guard)<0){
-            ns=-s.bias; nk=2; nb=guard; no=s.bias==1?(ph?hp:s.knownH):(pl?lp:s.knownL);
-         }else if(s.extreme!=EMPTY_VALUE && s.bias*(closePx-s.extreme)>0){
-            if(s.reaction!=EMPTY_VALUE){ ns=s.bias; nk=3; nb=s.extreme; no=s.reaction; }
-            else{ s.extreme=EMPTY_VALUE; s.extremeBar=-1; s.tip=EMPTY_VALUE; s.tipBar=-1; }
-         }
+         s.extreme=EMPTY_VALUE; s.tip=EMPTY_VALUE; s.tipBar=-1; s.retraceWick=EMPTY_VALUE; s.seenPullback=false;
       }
    }
-   if(nk!=0){s.bias=ns; s.kind=nk; s.broken=nb; s.origin=no; s.extreme=EMPTY_VALUE;
-      s.extremeBar=-1; s.reaction=EMPTY_VALUE; s.tip=EMPTY_VALUE; s.tipBar=-1;}
-   bool tipP=s.bias==1?ph:pl,backP=s.bias==1?pl:ph;
-   double tipPx=s.bias==1?hp:lp,backPx=s.bias==1?lp:hp;
-   if(s.kind==1 && backP)s.origin=backPx;
-   else if(s.kind>=2){
-      if(s.extreme==EMPTY_VALUE){
-         double w=s.bias==1?h[i]:l[i];
-         if(s.tip==EMPTY_VALUE || s.bias*(w-s.tip)>=0){s.tip=w; s.tipBar=i;}
-         if(tipP && p==s.tipBar && s.bias*(tipPx-s.broken)>0){s.extreme=tipPx;s.extremeBar=p;}
-      }
-      if(s.extreme!=EMPTY_VALUE && s.reaction==EMPTY_VALUE && backP && p>s.extremeBar && s.bias*(backPx-s.origin)>0 && s.bias*(s.extreme-backPx)>0)s.reaction=backPx;
+   if(nk!=0){
+      s.bias=ns; s.kind=nk; s.broken=nb; s.origin=no; s.extreme=EMPTY_VALUE;
+      s.tip=EMPTY_VALUE; s.tipBar=-1; s.legOuter=EMPTY_VALUE; s.retraceWick=EMPTY_VALUE;
+      s.seenPullback=false; s.breakNow=nk>=2;
    }
+   if(s.bias!=0){
+      double w=s.bias==1?h[i]:l[i],back=s.bias==1?l[i]:h[i];
+      if(s.legOuter==EMPTY_VALUE || s.bias*(w-s.legOuter)>=0)s.legOuter=w;
+      if(s.extreme==EMPTY_VALUE && (s.tip==EMPTY_VALUE || s.bias*(w-s.tip)>=0)){
+         s.tip=w; s.tipBar=i; s.retraceWick=EMPTY_VALUE; s.seenPullback=false;
+      }else{
+         if(s.retraceWick==EMPTY_VALUE || s.bias*(back-s.retraceWick)<=0)s.retraceWick=back;
+         if(!s.seenPullback && i>0 && s.bias*(c[i]-c[i-1])<0)s.seenPullback=true;
+      }
+      bool tipP=s.bias==1?ph:pl; double tipPx=s.bias==1?hp:lp;
+      if(s.extreme==EMPTY_VALUE && tipP && p==s.tipBar && s.bias*(tipPx-s.broken)>0)s.extreme=tipPx;
+   }
+   s.reaction=s.seenPullback?s.retraceWick:EMPTY_VALUE;
    if(ph)s.knownH=hp; if(pl)s.knownL=lp;
 }
 void BookExit(FCState &s,const double raw,const bool slipIt,const double slip,const double fee) {
@@ -257,8 +279,8 @@ void StepClosed(FCState &s,FCBar &r,const int i,const datetime at,const datetime
    double tr=h[i]-l[i]; if(i>0)tr=MathMax(tr,MathMax(MathAbs(h[i]-c[i-1]),MathAbs(l[i]-c[i-1])));
    if(s.atr==EMPTY_VALUE){s.trSum+=tr;if(i+1==InATRLen)s.atr=s.trSum/InATRLen;}
    else s.atr=(s.atr*(InATRLen-1)+tr)/InATRLen;
-   r.atr=s.atr; UpdateStructure(s,i,h,l,px); Bands(s,r);
-   r.insideBuy=Inside(px,r.buyLo,r.buyHi,false,r.strictBuyHi); r.insideSell=Inside(px,r.sellLo,r.sellHi,r.strictSellLo,false);
+   r.atr=s.atr; UpdateStructure(s,i,h,l,c); Bands(s,r);
+   r.insideBuy=Inside(px,r.buyLo,r.buyHi,r.strictBuyLo,r.strictBuyHi); r.insideSell=Inside(px,r.sellLo,r.sellHi,r.strictSellLo,r.strictSellHi);
    int d=r.raw; r.structure=(d==1&&r.insideBuy?1:d==-1&&r.insideSell?-1:0);
    double anchor=EMPTY_VALUE;
    if(d!=0){
@@ -307,8 +329,9 @@ void StepClosed(FCState &s,FCBar &r,const int i,const datetime at,const datetime
       else{
          r.valid=d;s.suggestN++;s.pending=d;s.qSL=planned;s.qTP=px+(px-planned)*InTargetR;
          s.qLo=d==1?r.buyLo:r.sellLo;s.qHi=d==1?r.buyHi:r.sellHi;
-         s.qOpenLo=(d==-1&&r.strictSellLo);s.qOpenHi=(d==1&&r.strictBuyHi);s.due=expectedNext;
-         s.decision=d==1?(s.bias==1?9:10):(s.bias==-1?11:12);
+         s.qOpenLo=d==1?r.strictBuyLo:r.strictSellLo;s.qOpenHi=d==1?r.strictBuyHi:r.strictSellHi;s.due=expectedNext;
+         bool cc=s.breakNow && s.kind==2;
+         s.decision=d==1?(s.bias==1?(cc?15:9):10):(s.bias==-1?(cc?16:11):12);
       }
    }else if(r.conflict!=0)s.decision=13;else if(repeat)s.decision=14;
    double marked=s.cash+(s.side==0?0.0:(px-s.entry)*s.side*s.units*InPointValue);
@@ -322,6 +345,7 @@ void StepClosed(FCState &s,FCBar &r,const int i,const datetime at,const datetime
 double F0a[],F0b[],F1a[],F1b[],F2a[],F2b[],FBa[],FBb[],FSa[],FSb[];
 double HullB[],HullInk[],LineH[],LineL[],LineEMA[],BandBL[],BandBH[],BandSL[],BandSH[];
 double BuyArrow[],SellArrow[],ConflictMark[],RawCode[],StructureCode[],ValidCode[],FillCode[],ConflictCode[];
+double GuardCode[],TipCode[],BackCode[],BiasCode[],EventCode[],PullCode[];
 double WorkH[],WorkL[],WorkB[];
 FCState engine;
 struct PlanStamp {int bar;double ep,sl,tp;};
@@ -363,14 +387,15 @@ int OnInit(){
         Bind(10,HullB)&&Bind(11,HullInk,INDICATOR_COLOR_INDEX)&&Bind(12,LineH)&&Bind(13,LineL)&&Bind(14,LineEMA)&&
         Bind(15,BandBL)&&Bind(16,BandBH)&&Bind(17,BandSL)&&Bind(18,BandSH)&&Bind(19,BuyArrow)&&Bind(20,SellArrow)&&Bind(21,ConflictMark)&&
         Bind(22,RawCode)&&Bind(23,StructureCode)&&Bind(24,ValidCode)&&Bind(25,FillCode)&&Bind(26,ConflictCode)&&
-        Bind(27,WorkH,INDICATOR_CALCULATIONS)&&Bind(28,WorkL,INDICATOR_CALCULATIONS)&&Bind(29,WorkB,INDICATOR_CALCULATIONS)))return INIT_FAILED;
-   for(int j=0;j<21;j++){PlotIndexSetDouble(j,PLOT_EMPTY_VALUE,j<5?0.0:EMPTY_VALUE);PlotIndexSetInteger(j,PLOT_SHOW_DATA,j>=5);}
+        Bind(27,GuardCode)&&Bind(28,TipCode)&&Bind(29,BackCode)&&Bind(30,BiasCode)&&Bind(31,EventCode)&&Bind(32,PullCode)&&
+        Bind(33,WorkH,INDICATOR_CALCULATIONS)&&Bind(34,WorkL,INDICATOR_CALCULATIONS)&&Bind(35,WorkB,INDICATOR_CALCULATIONS)))return INIT_FAILED;
+   for(int j=0;j<27;j++){PlotIndexSetDouble(j,PLOT_EMPTY_VALUE,j<5?0.0:EMPTY_VALUE);PlotIndexSetInteger(j,PLOT_SHOW_DATA,j>=5);}
    PlotIndexSetInteger(13,PLOT_ARROW,233);PlotIndexSetInteger(13,PLOT_ARROW_SHIFT,8);
    PlotIndexSetInteger(14,PLOT_ARROW,234);PlotIndexSetInteger(14,PLOT_ARROW_SHIFT,-8);
    PlotIndexSetInteger(15,PLOT_ARROW,251);PlotIndexSetInteger(15,PLOT_ARROW_SHIFT,-12);
    gridTick=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE);if(gridTick<=0)gridTick=_Point;
    if(gridTick<=0 || PeriodSeconds(_Period)<=0)return INIT_FAILED;
-   IndicatorSetInteger(INDICATOR_DIGITS,_Digits);IndicatorSetString(INDICATOR_SHORTNAME,"FC Hull Structure ("+IntegerToString(InHull)+")");
+   IndicatorSetInteger(INDICATOR_DIGITS,_Digits);IndicatorSetString(INDICATOR_SHORTNAME,"FC Hull Protected v2 ("+IntegerToString(InHull)+")");
    ArrayResize(planRing,InKeepPlans);ArrayResize(textRing,InTextCount);
    string key="FCH_"+IntegerToString((long)GetTickCount64())+"_";int serial=0;
    do{prefix=key+IntegerToString(serial)+"_";serial++;}while(ObjectFind(0,prefix+"owner")>=0);
@@ -383,19 +408,23 @@ datetime BarEnd(const datetime t){
    MqlDateTime d;if(!TimeToStruct(t,d))return 0;d.day=1;d.hour=0;d.min=0;d.sec=0;
    if(d.mon==12){d.year++;d.mon=1;}else d.mon++;return StructToTime(d);
 }
-void PaintBar(const int i,const double h,const double l,const FCBar &r){
+void PaintBar(const int i,const double h,const double l,const FCBar &r,const bool closed=true){
    int last=engine.lastDisplay;bool ch=InChannel&&InChannelFill&&r.hi!=EMPTY_VALUE&&r.lo!=EMPTY_VALUE;
    F0a[i]=ch&&last==0?r.hi:0; F0b[i]=ch&&last==0?r.lo:0;
    F1a[i]=ch&&last==1?r.hi:0; F1b[i]=ch&&last==1?r.lo:0;
    F2a[i]=ch&&last==-1?r.hi:0;F2b[i]=ch&&last==-1?r.lo:0;
-   FBa[i]=InBands&&r.buyLo!=EMPTY_VALUE?r.buyLo:0;FBb[i]=InBands&&r.buyHi!=EMPTY_VALUE?r.buyHi:0;
-   FSa[i]=InBands&&r.sellLo!=EMPTY_VALUE?r.sellLo:0;FSb[i]=InBands&&r.sellHi!=EMPTY_VALUE?r.sellHi:0;
+   bool bf=InBands && r.buyLo!=EMPTY_VALUE && r.buyHi!=EMPTY_VALUE;
+   FBa[i]=bf?r.buyLo:0;FBb[i]=bf?r.buyHi:0;
+   bool sf=InBands && r.sellLo!=EMPTY_VALUE && r.sellHi!=EMPTY_VALUE;
+   FSa[i]=sf?r.sellLo:0;FSb[i]=sf?r.sellHi:0;
    HullB[i]=r.b;HullInk[i]=(last==1?1:last==-1?2:0);LineH[i]=InChannel?r.hi:EMPTY_VALUE;LineL[i]=InChannel?r.lo:EMPTY_VALUE;
    LineEMA[i]=InShowEMA&&InUseEMA?r.ema:EMPTY_VALUE;
    BandBL[i]=InBands?r.buyLo:EMPTY_VALUE;BandBH[i]=InBands?r.buyHi:EMPTY_VALUE;BandSL[i]=InBands?r.sellLo:EMPTY_VALUE;BandSH[i]=InBands?r.sellHi:EMPTY_VALUE;
    BuyArrow[i]=InMarks&&r.display==1?l:EMPTY_VALUE;SellArrow[i]=InMarks&&r.display==-1?h:EMPTY_VALUE;
    ConflictMark[i]=InMarks&&InView==FC_RAW&&r.conflict!=0?h:EMPTY_VALUE;
    RawCode[i]=r.raw;StructureCode[i]=r.structure;ValidCode[i]=r.valid;FillCode[i]=r.filled;ConflictCode[i]=r.conflict;
+   GuardCode[i]=engine.origin;TipCode[i]=engine.extreme;BackCode[i]=engine.reaction;BiasCode[i]=engine.bias;
+   EventCode[i]=closed&&engine.breakNow?engine.bias*engine.kind:0;PullCode[i]=engine.seenPullback?1:0;
 }
 void Remember(const int i,const datetime t,const double h,const double l,const FCBar &r){
    if(InPlans && r.filled!=0){planRing[planNext].bar=i;planRing[planNext].ep=r.fillPx;planRing[planNext].sl=r.fillSL;planRing[planNext].tp=r.fillTP;
@@ -432,24 +461,25 @@ void DrawRecent(const datetime &tm[],const int size){
 string DecText(const int n){
    switch(n){case 1:return "Veto: missing adjacent open";case 2:return "Veto: left frozen band";case 3:return "Veto: bracket/size/busy";
       case 4:return "Rejected: structure / price";case 5:return "Rejected: direction / EMA";case 6:return "Rejected: no legal stop";
-      case 7:return "Rejected: position busy";case 8:return "Rejected: no chart capital";case 9:return "BUY: bullish discount";
-      case 10:return "BUY: below bearish BOS";case 11:return "SELL: bearish premium";case 12:return "SELL: above bullish BOS";
-      case 13:return "Rejected: source conflict";case 14:return "Rejected: alternation";}return "Waiting for a cross";
+      case 7:return "Rejected: position busy";case 8:return "Rejected: no chart capital";case 9:return "BUY: protected HL holds";
+      case 10:return "BUY: below bearish BOS";case 11:return "SELL: protected LH holds";case 12:return "SELL: above bullish BOS";
+      case 13:return "Rejected: source conflict";case 14:return "Rejected: alternation";case 15:return "BUY: CHoCH close";case 16:return "SELL: CHoCH close";}return "Waiting for a cross";
 }
 string ViewText(){return InView==FC_RAW?"Raw crosses":InView==FC_FILLS?"Simulated fills":InView==FC_STRUCTURE?"Structure crosses":"Valid suggestions";}
 string SourceText(){return InSource==FC_EITHER?"Either":InSource==FC_DIRECTIONAL?"Directional":InSource==FC_HIGH?"High":"Low";}
-string PhaseText(){if(engine.kind<=1)return "Context only";string name=engine.kind==3?"BOS / ":"CHoCH / ";
-   if(engine.extreme==EMPTY_VALUE)return name+(engine.bias==1?"wait HH":"wait LL");
-   if(engine.reaction==EMPTY_VALUE)return name+(engine.kind==3?(engine.bias==1?"SELL band; wait HL":"BUY band; wait LH"):(engine.bias==1?"wait HL":"wait LH"));
-   return name+(engine.bias==1?"bull range":"bear range");}
+string PhaseText(){
+   if(engine.kind<=1)return "Context only";
+   string phase=engine.breakNow?"break close":engine.seenPullback?"pullback":"wait pullback";
+   return (engine.kind==2?"CHoCH / ":"BOS / ")+phase;
+}
 void PanelLabel(const string n,const int x,const int y,const string text,const color ink,const int size){
    if(ObjectFind(0,n)<0){ObjectCreate(0,n,OBJ_LABEL,0,0,0);QuietObject(n);ObjectSetInteger(0,n,OBJPROP_CORNER,CORNER_LEFT_UPPER);ObjectSetInteger(0,n,OBJPROP_ANCHOR,ANCHOR_LEFT_UPPER);ObjectSetString(0,n,OBJPROP_FONT,"Segoe UI");}
    ObjectSetInteger(0,n,OBJPROP_XDISTANCE,x);ObjectSetInteger(0,n,OBJPROP_YDISTANCE,y);ObjectSetInteger(0,n,OBJPROP_FONTSIZE,size);ObjectSetInteger(0,n,OBJPROP_COLOR,ink);ObjectSetString(0,n,OBJPROP_TEXT,text);
 }
 void DrawPanel(){
    if(!InTable||StringLen(prefix)==0)return;
-   string left[18]={"FC HULL  /  CHART SIM","Trades : W / L / BE","Win rate","Net / average","PF / max drawdown","Avg win / loss","Position","SL / TP","EMA / target R","Pip size","Source / length","Raw BUY / SELL","Conflict / repeat skips","Structure","Qualified / valid closes","Fills / open vetoes","Last decision","View"};
-   string v[18];int done=engine.wins+engine.losses+engine.flats;
+   string left[19]={"FC HULL  /  CHART SIM","Trades : W / L / BE","Win rate","Net / average","PF / max drawdown","Avg win / loss","Position","SL / TP","EMA / target R","Pip size","Source / length","Raw BUY / SELL","Conflict / repeat skips","Structure","Qualified / valid closes","Fills / open vetoes","Last decision","View","Protected HL / LH"};
+   string v[19];int done=engine.wins+engine.losses+engine.flats;
    v[0]=_Symbol+"  "+EnumToString(_Period);v[1]=StringFormat("%d : %d / %d / %d",done,engine.wins,engine.losses,engine.flats);
    v[2]=done>0?DoubleToString(100.0*engine.wins/done,1)+"%":"-";
    v[3]=DoubleToString(engine.totalNet,2)+" / "+(done>0?DoubleToString(engine.totalNet/done,2):"-");
@@ -460,13 +490,13 @@ void DrawPanel(){
    v[8]=(InUseEMA?IntegerToString(InEMALen):"Off")+" / "+DoubleToString(InTargetR,2);
    v[9]=DoubleToString(InPipSize,8);v[10]=SourceText()+" / "+IntegerToString(InHull);
    v[11]=StringFormat("%d / %d",engine.rawBuys,engine.rawSells);v[12]=StringFormat("%d / %d",engine.conflicts,engine.repeats);
-   v[13]=PhaseText();v[14]=StringFormat("%d / %d",engine.structN,engine.suggestN);v[15]=StringFormat("%d / %d",engine.fillN,engine.vetoN);v[16]=DecText(engine.decision);v[17]=ViewText();
-   int w=348,h=18*16+14,ww=(int)ChartGetInteger(0,CHART_WIDTH_IN_PIXELS,0),hh=(int)ChartGetInteger(0,CHART_HEIGHT_IN_PIXELS,0);
+   v[13]=PhaseText();v[14]=StringFormat("%d / %d",engine.structN,engine.suggestN);v[15]=StringFormat("%d / %d",engine.fillN,engine.vetoN);v[16]=DecText(engine.decision);v[17]=ViewText();v[18]=engine.origin==EMPTY_VALUE?"-":DoubleToString(engine.origin,_Digits);
+   int w=348,h=19*16+14,ww=(int)ChartGetInteger(0,CHART_WIDTH_IN_PIXELS,0),hh=(int)ChartGetInteger(0,CHART_HEIGHT_IN_PIXELS,0);
    int x=(InCorner==CORNER_RIGHT_LOWER||InCorner==CORNER_RIGHT_UPPER)?(int)MathMax(2,ww-w-8):8;
    int y=(InCorner==CORNER_RIGHT_LOWER||InCorner==CORNER_LEFT_LOWER)?(int)MathMax(2,hh-h-8):18;
    string box=prefix+"panel";if(ObjectFind(0,box)<0){ObjectCreate(0,box,OBJ_RECTANGLE_LABEL,0,0,0);QuietObject(box);ObjectSetInteger(0,box,OBJPROP_CORNER,CORNER_LEFT_UPPER);ObjectSetInteger(0,box,OBJPROP_BGCOLOR,C'22,40,43');ObjectSetInteger(0,box,OBJPROP_BORDER_TYPE,BORDER_FLAT);ObjectSetInteger(0,box,OBJPROP_COLOR,clrSlateGray);}
    ObjectSetInteger(0,box,OBJPROP_XDISTANCE,x);ObjectSetInteger(0,box,OBJPROP_YDISTANCE,y);ObjectSetInteger(0,box,OBJPROP_XSIZE,w);ObjectSetInteger(0,box,OBJPROP_YSIZE,h);
-   for(int j=0;j<18;j++){int yy=y+5+j*16;string id=IntegerToString(j);PanelLabel(prefix+"k"+id,x+8,yy,left[j],j==0?clrPaleGreen:clrSilver,8);PanelLabel(prefix+"v"+id,x+152,yy,v[j],clrWhite,8);}
+   for(int j=0;j<19;j++){int yy=y+5+j*16;string id=IntegerToString(j);PanelLabel(prefix+"k"+id,x+8,yy,left[j],j==0?clrPaleGreen:clrSilver,8);PanelLabel(prefix+"v"+id,x+152,yy,v[j],clrWhite,8);}
 }
 void OnChartEvent(const int id,const long &lparam,const double &dparam,const string &sparam){
    if(id==CHARTEVENT_CHART_CHANGE&&StringLen(prefix)>0){FillColours();DrawPanel();}
@@ -497,7 +527,7 @@ int OnCalculate(const int rates_total,const int prev_calculated,const datetime &
    // Only preview moving lines on the live bar. No mutation of signal/structure/account state.
    FCBar live;ResetBar(live);Curves(forming,high,low,close,WorkH,WorkL,WorkB,live);
    live.ema=engine.ema==EMPTY_VALUE?close[forming]:engine.ema+2.0/(InEMALen+1.0)*(close[forming]-engine.ema);
-   Bands(engine,live);PaintBar(forming,high[forming],low[forming],live);previousForm=time[forming];
+   Bands(engine,live,false);PaintBar(forming,high[forming],low[forming],live,false);previousForm=time[forming];
    if(changed){DrawRecent(time,rates_total);DrawPanel();}
    return rates_total;
 }

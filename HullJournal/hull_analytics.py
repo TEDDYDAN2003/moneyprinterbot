@@ -12,12 +12,20 @@ SESSIONS = (
     ("New York", "America/New_York", 8, 17),
 )
 REASON_LABELS = {
+    "bull_choch_buy": "BUY · bullish CHoCH close",
+    "bear_choch_sell": "SELL · bearish CHoCH close",
+    "bull_protected_pullback_buy": "BUY · pullback above protected HL",
+    "bear_protected_pullback_sell": "SELL · pullback below protected LH",
     "bull_discount_buy": "BUY · bullish discount",
     "bear_premium_sell": "SELL · bearish premium",
     "buy_below_bear_bos": "BUY · below bearish BOS",
     "sell_above_bull_bos": "SELL · above bullish BOS",
 }
 REASON_NOTES = {
+    "bull_choch_buy": "A fresh Hull BUY closed strictly above the protected bearish LH on the bullish CHoCH candle.",
+    "bear_choch_sell": "A fresh Hull SELL closed strictly below the protected bullish HL on the bearish CHoCH candle.",
+    "bull_protected_pullback_buy": "After a completed pullback, the fresh BUY closed above the protected higher low. An internal swing alone does not move that boundary.",
+    "bear_protected_pullback_sell": "After a completed pullback, the fresh SELL closed below the protected lower high. An internal swing alone does not move that boundary.",
     "bull_discount_buy": "The confirmed bullish swing range allowed a BUY between the higher low and the midpoint.",
     "bear_premium_sell": "The confirmed bearish swing range allowed a SELL between the midpoint and the lower high.",
     "buy_below_bear_bos": "After a bearish continuation break and a confirmed new low, the BUY closed below the broken low inside the countertrend band.",

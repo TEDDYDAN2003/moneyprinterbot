@@ -9,9 +9,15 @@ from dataclasses import dataclass, field
 from bot.zones.engine import Bar
 
 from .config import FRAMES, Indicator
-from .structure import InternalStructure, Pivot, Structure
+from .structure import ENTRY_POLICY, InternalStructure, Pivot, Structure
 
 ENTRY_AUDIT_FIELDS = (
+    "entry_policy",
+    "protected_level",
+    "pullback_candidate",
+    "pullback_seen_close_s",
+    "zone_low_open",
+    "zone_high_open",
     "structure_phase",
     "entry_setup",
     "zone_low",
@@ -109,6 +115,16 @@ class Reading:
     def entry_audit(self):
         band = self.structure.band(self.label)
         return {
+            "entry_policy": ENTRY_POLICY,
+            "protected_level": self.structure.origin.price
+            if self.structure.origin
+            else None,
+            "pullback_candidate": self.structure.pullback.price
+            if self.structure.pullback
+            else None,
+            "pullback_seen_close_s": self.structure.pullback_seen_s,
+            "zone_low_open": band.low_open if band else None,
+            "zone_high_open": band.high_open if band else None,
             "structure_phase": self.structure.phase,
             "entry_setup": band.name if band else None,
             "zone_low": band.low if band else None,

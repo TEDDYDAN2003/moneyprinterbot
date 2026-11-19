@@ -11,3 +11,6 @@ HullJournal/examples/*.csv text eol=crlf
 MT5/** text eol=lf
 indicators/FC-Hull-Either-16-Structure.pine text eol=lf
 downloads/*.zip binary
+
+# Also shipped byte-for-byte in the portable kit.
+docs/HULL_STRUCTURE.md text eol=lf

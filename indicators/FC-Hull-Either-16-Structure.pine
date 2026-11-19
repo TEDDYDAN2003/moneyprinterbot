@@ -1,8 +1,8 @@
 //@version=6
-indicator("FC Hull Either 16 · Market Structure Suggestions", shorttitle="FC Struct", overlay=true, max_bars_back=2100, max_lines_count=300, max_labels_count=300)
+indicator("FC Hull Either 16 · Protected-Swing v2", shorttitle="FC Guard 2", overlay=true, max_bars_back=2100, max_lines_count=300, max_labels_count=300)
 
 // Standalone chart study, not an MT5 connection. Native chart candles only.
-// Structure: internal_structure_v1. Suggestions commit at the signal close; a
+// Structure: protected_swing_v2. Suggestions commit at the signal close; a
 // subsequent chart-open check can cancel a plan, never erase or backdate a label.
 // Flat/busy uses one simulated chart position, not MT5 tickets or their 70/30 ladder.
 const string G_VIEW = "1 · Suggestions and alerts"
@@ -15,7 +15,7 @@ const string G_PLAN = "7 · Chart plans and statistics"
 
 string labelMode = input.string("Valid suggestions only", "Labels and alerts", options=["Valid suggestions only", "Structure-qualified crosses", "Simulated fills only", "All Hull crosses (debug)"], group=G_VIEW, tooltip="Valid: a fresh cross in its confirmed band at the close, with a legal stop and an available chart position. Same-side repeats are hidden while that simulated trade is open; a fresh cross after it closes can qualify in the same band. Structure-qualified: test structure only. Fills: recheck the frozen band at the next chart open; mark the fill candle when it closes. Raw: diagnostics only. This setting changes the display and alerts, not the simulation.")
 bool showCross = input.bool(true, "Show signal labels", group=G_VIEW, tooltip="Hides the marks only. The two alert conditions still use the chosen Labels and alerts setting.")
-bool showBands = input.bool(false, "Draw active BUY and SELL bands", group=G_VIEW, tooltip="Green = allowed BUY area, red = allowed SELL area. After a continuation BOS the old broken level is excluded on the countertrend band. No band = no structure-qualified suggestion.")
+bool showBands = input.bool(false, "Draw active BUY and SELL bands", group=G_VIEW, tooltip="Trend: one boundary, BUY strictly above / SELL strictly below. Countertrend: two edges after continuation BOS and a confirmed new extreme. No boundary = no permission.")
 int hullLen = input.int(16, "Hull length", minval=2, maxval=500, group=G_HULL)
 string sourceMode = input.string("Either source", "Signal source mode", options=["Either source", "Directional", "Low only", "High only"], group=G_HULL, tooltip="Either: a strict cross of the Low or High Hull A. Same-direction crosses on one close count once. Opposed crosses on the same close produce no signal.")
 bool alternateOnly = input.bool(false, "Require selected BUY and SELL crosses to alternate", group=G_HULL, tooltip="Leave off for the bot's rule: a later fresh same-side cross can qualify once flat. This optional filter operates on crosses, not on filled positions.")
@@ -136,9 +136,8 @@ f_level(array<line> lines, array<label> tags, int x1, int x2, float price, strin
     array.push(lines, ln)
     array.push(tags, tag)
 
-// internal_structure_v1: 0 none, 1 seed/context only, 2 CHoCH, 3 continuation BOS.
-// Important order: break OLD levels first -> admit newly confirmed pivots ->
-// publish those pivots as "known" for the next bar. Newest equal wick wins.
+// protected_swing_v2. Only structural closing breaks change the protected origin.
+// 0 none, 1 context, 2 CHoCH, 3 continuation BOS. Never relabel earlier bars.
 var float knownH = na
 var float knownL = na
 var int bias = 0
@@ -146,91 +145,99 @@ var int eventKind = 0
 var float broken = na
 var float origin = na
 var float extreme = na
-var int extremeBar = na
-var float reaction = na
 var float runTip = na
 var int runTipBar = na
+var float legOuter = na
+var float retraceWick = na
+var int pullbackSeenBar = na
+bool breakNow = false
 int pivotBar = bar_index - swingLen
 if barstate.isconfirmed
-    int nextSide = 0
-    int nextKind = 0
-    float nextBroken = na
-    float nextOrigin = na
-    if not na(knownH) and not na(knownL)
-        if bias == 0
-            if close > knownH or close < knownL
-                nextSide := close > knownH ? 1 : -1
-                nextKind := 1
-                nextBroken := nextSide == 1 ? knownH : knownL
-                nextOrigin := nextSide == 1 ? knownL : knownH
+    int ns = 0
+    int nk = 0
+    float nb = na
+    float no = na
+    if bias == 0
+        if not na(knownH) and not na(knownL) and (close > knownH or close < knownL)
+            ns := close > knownH ? 1 : -1
+            nk := 1
+            nb := ns == 1 ? knownH : knownL
+            no := ns == 1 ? knownL : knownH
+    else if bias * (close - origin) < 0
+        ns := -bias
+        nk := 2
+        nb := origin
+        no := legOuter
+    else if not na(extreme) and bias * (close - extreme) > 0
+        if not na(pullbackSeenBar) and not na(retraceWick)
+            ns := bias
+            nk := 3
+            nb := extreme
+            bool promote = bias * (retraceWick - origin) > 0 and bias * (extreme - retraceWick) > 0
+            no := promote ? retraceWick : origin
         else
-            float guard = not na(reaction) ? reaction : origin
-            if not na(guard) and bias * (close - guard) < 0
-                nextSide := -bias
-                nextKind := 2
-                nextBroken := guard
-                nextOrigin := bias == 1 ? (pivotHigh ? candidateHigh : knownH) : (pivotLow ? candidateLow : knownL)
-            else if not na(extreme) and bias * (close - extreme) > 0
-                if not na(reaction)
-                    nextSide := bias
-                    nextKind := 3
-                    nextBroken := extreme
-                    nextOrigin := reaction
-                else
-                    // Extension before a later HL/LH: same impulse, not a BOS.
-                    extreme := na
-                    extremeBar := na
-                    runTip := na
-                    runTipBar := na
-    if nextKind != 0
-        bias := nextSide
-        eventKind := nextKind
-        broken := nextBroken
-        origin := nextOrigin
+            extreme := na
+            runTip := na
+            runTipBar := na
+            retraceWick := na
+            pullbackSeenBar := na
+    if nk != 0
+        bias := ns
+        eventKind := nk
+        broken := nb
+        origin := no
         extreme := na
-        extremeBar := na
-        reaction := na
         runTip := na
         runTipBar := na
-    bool tipPivot = bias == 1 ? pivotHigh : pivotLow
-    bool backPivot = bias == 1 ? pivotLow : pivotHigh
-    float tipPx = bias == 1 ? candidateHigh : candidateLow
-    float backPx = bias == 1 ? candidateLow : candidateHigh
-    if eventKind == 1 and backPivot
-        origin := backPx
-    else if eventKind >= 2
-        if na(extreme)
-            float wick = bias == 1 ? high : low
-            if na(runTip) or bias * (wick - runTip) >= 0
-                runTip := wick
-                runTipBar := bar_index
-            if tipPivot and pivotBar == runTipBar and bias * (tipPx - broken) > 0
-                extreme := tipPx
-                extremeBar := pivotBar
-        if not na(extreme) and na(reaction) and backPivot and pivotBar > extremeBar and bias * (backPx - origin) > 0 and bias * (extreme - backPx) > 0
-            reaction := backPx
+        legOuter := na
+        retraceWick := na
+        pullbackSeenBar := na
+        breakNow := nk >= 2
+    if bias != 0
+        float wick = bias == 1 ? high : low
+        float back = bias == 1 ? low : high
+        if na(legOuter) or bias * (wick - legOuter) >= 0
+            legOuter := wick
+        if na(extreme) and (na(runTip) or bias * (wick - runTip) >= 0)
+            runTip := wick
+            runTipBar := bar_index
+            retraceWick := na
+            pullbackSeenBar := na
+        else
+            if na(retraceWick) or bias * (back - retraceWick) <= 0
+                retraceWick := back
+            if na(pullbackSeenBar) and not na(close[1]) and bias * (close - close[1]) < 0
+                pullbackSeenBar := bar_index
+        bool tipPivot = bias == 1 ? pivotHigh : pivotLow
+        float tipPx = bias == 1 ? candidateHigh : candidateLow
+        if na(extreme) and tipPivot and pivotBar == runTipBar and bias * (tipPx - broken) > 0
+            extreme := tipPx
     if pivotHigh
         knownH := candidateHigh
     if pivotLow
         knownL := candidateLow
 
-bool trendReady = eventKind >= 2 and not na(extreme) and not na(reaction)
+bool seenPullback = not na(pullbackSeenBar)
+float reaction = seenPullback ? retraceWick : na
+bool trendReady = eventKind >= 2 and (breakNow or seenPullback)
 bool fadeReady = eventKind == 3 and not na(extreme) and not na(broken)
-float mid = trendReady ? (extreme + reaction) / 2.0 : na
-// BUY trend: [HL, midpoint]. BUY counter: [new LL, old broken LL).
-// SELL trend: [midpoint, LH]. SELL counter: (old broken HH, new HH].
-float buyLo = bias == 1 and trendReady ? reaction : bias == -1 and fadeReady ? extreme : na
-float buyHi = bias == 1 and trendReady ? mid : bias == -1 and fadeReady ? broken : na
-float sellLo = bias == -1 and trendReady ? mid : bias == 1 and fadeReady ? broken : na
-float sellHi = bias == -1 and trendReady ? reaction : bias == 1 and fadeReady ? extreme : na
+bool chochClose = breakNow and eventKind == 2
+float trendEdge = chochClose ? broken : origin
+// A trend is one-sided; missing BOTH bounds means no trade. Never invent a chart-price limit.
+float buyLo = bias == 1 and trendReady ? trendEdge : bias == -1 and fadeReady ? extreme : na
+float buyHi = bias == -1 and fadeReady ? broken : na
+float sellLo = bias == 1 and fadeReady ? broken : na
+float sellHi = bias == -1 and trendReady ? trendEdge : bias == 1 and fadeReady ? extreme : na
+bool strictBuyLo = bias == 1 and trendReady
 bool strictBuyHi = bias == -1 and fadeReady
 bool strictSellLo = bias == 1 and fadeReady
+bool strictSellHi = bias == -1 and trendReady
 f_inside(float px, float lo, float hi, bool openLo, bool openHi) =>
-    not na(px) and not na(lo) and not na(hi) and (openLo ? px > lo : px >= lo) and (openHi ? px < hi : px <= hi)
+    not na(px) and (not na(lo) or not na(hi)) and (na(lo) or (openLo ? px > lo : px >= lo)) and (na(hi) or (openHi ? px < hi : px <= hi))
 
 int selected = rawBuy ? 1 : rawSell ? -1 : 0
-bool insideBuy = f_inside(close, buyLo, buyHi, false, strictBuyHi)
-bool insideSell = f_inside(close, sellLo, sellHi, strictSellLo, false)
+bool insideBuy = f_inside(close, buyLo, buyHi, strictBuyLo, strictBuyHi)
+bool insideSell = f_inside(close, sellLo, sellHi, strictSellLo, strictSellHi)
 int structureSide = rawBuy and insideBuy ? 1 : rawSell and insideSell ? -1 : 0
 
 // Independent of structure: freeze the selected stop anchor on THIS close.
@@ -401,10 +408,10 @@ if barstate.isconfirmed
             pendingTP := close + (close - stopPlan) * targetR
             pendingLo := rawBuy ? buyLo : sellLo
             pendingHi := rawBuy ? buyHi : sellHi
-            pendingOpenLo := rawSell and strictSellLo
-            pendingOpenHi := rawBuy and strictBuyHi
+            pendingOpenLo := rawBuy ? strictBuyLo : strictSellLo
+            pendingOpenHi := rawBuy ? strictBuyHi : strictSellHi
             pendingAt := time_close
-            lastDecision := rawBuy ? (bias == 1 ? "BUY: bull discount" : "BUY: below bear BOS") : (bias == -1 ? "SELL: bear premium" : "SELL: above bull BOS")
+            lastDecision := rawBuy ? (bias == 1 ? (chochClose ? "BUY: CHoCH close" : "BUY: protected HL holds") : "BUY: below bear BOS") : (bias == -1 ? (chochClose ? "SELL: CHoCH close" : "SELL: protected LH holds") : "SELL: above bull BOS")
     else if conflict
         lastDecision := "Rejected: conflicting crosses"
     else if repeatSkipped
@@ -445,6 +452,12 @@ plot(structureSide, "Structure pass at close (+1/-1/0)", display=display.data_wi
 plot(suggestion, "Valid chart suggestion (+1/-1/0)", display=display.data_window)
 plot(filledSide, "Next-open chart fill (+1/-1/0)", display=display.data_window)
 plot(conflict ? 1 : 0, "Source conflict", display=display.data_window)
+plot(origin, "Protected HL/LH", display=display.data_window)
+plot(extreme, "Confirmed structural HH/LL", display=display.data_window)
+plot(reaction, "Candidate pullback wick (not protected)", display=display.data_window)
+plot(bias, "Structure bias (+1/-1/0)", display=display.data_window)
+plot(breakNow ? bias * eventKind : 0, "Break on this close (signed 2 CHoCH / 3 BOS)", display=display.data_window)
+plot(seenPullback ? 1 : 0, "Pullback seen (1/0)", display=display.data_window)
 // Last confirmed simulation state. Closed-trade statistics do not liquidate an
 // open position at the right edge. Gross loss is tracked as a positive magnitude.
 int done = wins + losses + flats
@@ -476,7 +489,8 @@ if showTable and barstate.islast
     f_row(stats, 10, "Mode / length", sourceMode + " / " + str.tostring(hullLen))
     f_row(stats, 11, "Raw BUY / SELL", str.tostring(buyLabels) + " / " + str.tostring(sellLabels))
     f_row(stats, 12, "Conflicts / alternate skips", str.tostring(conflicts) + " / " + str.tostring(repeats))
-    string phaseName = eventKind <= 1 ? "Context only" : na(extreme) ? (bias == 1 ? "Wait HH" : "Wait LL") : na(reaction) ? (fadeReady ? (bias == 1 ? "SELL band · wait HL" : "BUY band · wait LH") : (bias == 1 ? "Wait HL" : "Wait LH")) : (bias == 1 ? "Bull range" : "Bear range")
+    string phaseName = eventKind <= 1 ? "Context only" : breakNow ? "Break close" : seenPullback ? "Pullback seen" : "Wait pullback"
+    phaseName += na(origin) ? "" : " / guard " + f_price(origin)
     f_row(stats, 13, "Structure", (eventKind == 3 ? "BOS · " : eventKind == 2 ? "CHoCH · " : "") + phaseName)
     f_row(stats, 14, "Structure / valid closes", str.tostring(structureCount) + " / " + str.tostring(suggestionCount))
     f_row(stats, 15, "Chart fills / open vetoes", str.tostring(fillCount) + " / " + str.tostring(openVetoCount))

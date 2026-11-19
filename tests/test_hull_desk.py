@@ -471,24 +471,24 @@ def test_bos_close_and_executable_quote_both_must_pass(hull_desk, bias, bad_clos
 def test_each_batch_leg_rechecks_frozen_zone_and_does_not_top_up(hull_desk):
     mt, desk, _ = hull_desk("medium")
     d = sig()
-    # First ask=2000.10 at the inclusive midpoint; next ask a tick beyond it.
+    # The close and first ask are above the frozen structural HL. The next ask
+    # touches it exactly, so keep the protected partial and never top it up.
     s = replace(
         d.structure,
-        pullback=replace(d.structure.pullback, price=1999.9),
-        extreme=replace(d.structure.extreme, price=2000.3),
+        origin=replace(d.structure.origin, price=1999.999),
     )
     d = replace(d, structure=s)
     send = mt.order_send
 
     def drift(request):
         ack = send(request)
-        mt.q.bid, mt.q.ask = 2000.001, 2000.101
+        mt.q.bid, mt.q.ask = 1999.899, 1999.999
         return ack
 
     mt.order_send = drift
     assert (
         desk.batch("XAUUSDm", d)
-        == "protected_partial_no_topup:quote_outside_bull_discount_buy"
+        == "protected_partial_no_topup:quote_outside_bull_protected_pullback_buy"
     )
     assert (
         len(mt.positions) == len(mt.requests) == 1

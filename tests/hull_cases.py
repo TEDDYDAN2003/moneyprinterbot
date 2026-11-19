@@ -20,6 +20,7 @@ def known_range(side, price, stamp):
         pivot(-3, 11),
         pivot(3, 5),
         pivot(-1, 2),
+        pullback_seen_s=stamp - 2 * 60,
     )
 
 

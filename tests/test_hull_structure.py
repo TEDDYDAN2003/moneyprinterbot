@@ -24,47 +24,50 @@ def test_local_sequence_protected_range_and_separate_bos_leg(tf, bias):
     s = ds[9].structure
     assert s.extreme.price == price(118.25)
     assert (s.extreme.bar_s, s.extreme.known_s) == (8 * dt, 10 * dt)
-    # Even a real Hull cross on the HH confirmation close cannot backdate the later HL.
-    assert ds[9].side == bias and not ds[9].entry_side and s.pullback is None
-    assert ds[10].structure.pullback is None
+    # A completed lower close after HH (higher after LL) is sufficient. The
+    # counter-swing itself is not protected and needs no three-right confirmation.
+    assert ds[9].side == ds[9].entry_side == bias and s.pullback_seen_s == 10 * dt
+    assert s.origin.price == price(105.75) and s.pullback.price == price(114.75)
     s = ds[11].structure
     assert (s.pullback.price, s.pullback.bar_s, s.pullback.known_s) == (
         price(112.75),
         10 * dt,
-        12 * dt,
+        11 * dt,
     )
-    assert s.band(-bias) is None  # a CHoCH, not a continuation BOS
-    for x in (112.75, 114, 115.5):
+    assert s.band(-bias) is None  # fresh CHoCH does not provide a countertrend band
+    for x in (105.76, 112.74, 112.75, 115.51, 118.25, 125):
         assert s.veto(bias, price(x)) == ""
-    for x in (112.74, 115.51, 118.25):
+    for x in (105.74, 105.75):
         assert s.veto(bias, price(x)).startswith("outside_")
     assert ds[13].entry_side == bias and ds[13].entry_reason == "ready"
     assert ds[12].label == 0 and ds[12].entry_side == 0
-    # Close exactly at the high (wick beyond) is NOT a break. The next actual
-    # close past it retires the previous trend band, but isn't yet a post-BOS HH.
-    assert ds[15].structure == s
-    for row in ds[16:18]:
-        assert row.structure.event == "bos" and row.structure.broken == s.extreme
-        assert row.structure.origin == s.pullback and row.structure.band(-bias) is None
-        assert row.structure.band(bias) is None
+    # Equal close and wick beyond are not BOS. On the strict break the extreme
+    # of the intervening pullback becomes protected, never the latest micro-pivot.
+    assert ds[15].structure.origin == s.origin and ds[15].structure.extreme == s.extreme
+    for r in ds[16:18]:
+        assert r.structure.event == "bos" and r.structure.broken == s.extreme
+        assert r.structure.origin == s.pullback and r.structure.band(-bias) is None
+    assert ds[16].structure.break_now and ds[16].structure.band(bias) is not None
+    assert not ds[17].structure.break_now and ds[17].structure.band(bias) is None
     q = ds[18].structure
     assert q.extreme.price == price(124.25) and q.extreme.known_s == 19 * dt
-    assert q.pullback is None and q.band(-bias) is not None
     assert q.band(-bias).contains(price(120)) and not q.band(-bias).contains(
         price(118.25)
     )
     assert q.band(-bias).contains(price(124.25)) and not q.band(-bias).contains(
         price(124.26)
     )
+    assert ds[20].entry_side == -bias  # genuine countertrend cross beyond BOS
+    # A minor swing is breached on 21, the actual protected swing on 22.
+    assert ds[21].structure.bias == bias and ds[21].structure.origin == s.pullback
+    assert ds[22].structure.event == "choch" and ds[22].structure.bias == -bias
+    assert ds[22].structure.broken == s.pullback and ds[22].structure.band(bias) is None
     assert (
-        ds[20].entry_side == -bias
-    )  # genuine countertrend Hull label, not a synthetic signal
-    # Protected HL/LH violated by a CLOSE: start opposite CHoCH, no old range carried across.
-    assert ds[21].structure.event == "choch" and ds[21].structure.bias == -bias
-    assert ds[21].structure.band(bias) is None and ds[21].structure.band(-bias) is None
+        ds[22].structure.band(-bias) is not None
+    )  # CHoCH-close permission, not a raw cross
     assert (
         sequence(bias, tf, PATH[:14])[-1] == ds[13]
-    )  # prefix invariance, including decision/zone
+    )  # future decisions cannot change a past snapshot
 
 
 @pytest.mark.parametrize("bias", [1, -1])
@@ -83,15 +86,20 @@ def test_real_countertrend_label_wick_only_equal_and_beyond_bos(bias, close, all
 
 @pytest.mark.parametrize("bias", [1, -1])
 def test_equal_pullback_or_new_high_before_pullback_does_not_fake_structure(bias):
-    ds = sequence(bias, closes=PATH[:10] + [106, 108])
-    assert ds[-1].structure.pullback is None  # equal to the origin wick, not an HL/LH
-    ds = sequence(bias, closes=PATH[:10] + [119, 124, 122, 120, 121])
-    assert all(
-        v.structure.event == "choch" and v.structure.band(-bias) is None for v in ds[9:]
-    )
+    ds = sequence(bias, closes=PATH[:10] + [106, 108, 119])
+    # Retrace wick equals the protected swing; it is evidence, not a new HL/LH.
+    assert ds[-2].structure.pullback.price == ds[-2].structure.origin.price
     assert (
-        ds[10].structure.extreme is None
-    )  # new extreme, no confirmed intervening HL/LH
+        ds[-1].structure.event == "bos"
+        and ds[-1].structure.origin == ds[-2].structure.origin
+    )
+    # Without a previously known structural pivot or a counter-direction close,
+    # successive new extremes do not manufacture a second BOS or a pullback.
+    ds = sequence(bias, closes=PATH[:9] + [119, 124, 122, 120, 121])
+    assert all(
+        x.structure.event == "choch" and x.structure.band(-bias) is None for x in ds[8:]
+    )
+    assert ds[10].structure.extreme is None and ds[10].structure.band(bias) is None
     assert ds[-1].structure.band(bias) is not None
 
 

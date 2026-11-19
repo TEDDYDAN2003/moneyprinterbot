@@ -342,7 +342,7 @@ def test_eurusd_1952_bar_1953_close_waits_for_quote_not_replayed(
     ]
     summary = records[0]["summary"]
     assert (
-        summary["entry_policy"] == "internal_structure_v1"
+        summary["entry_policy"] == "protected_swing_v2"
         and summary["entry_quote_policy"] == QUOTE_POLICY
     )
     (label,) = [v for v in records if v["event"] == "closed_label"]
