@@ -167,4 +167,4 @@ def test_replay_uses_first_actual_tick_and_same_inclusive_deadline(lag_ms, allow
     if allowed:
         assert a.pos[3] == ms
     else:
-        assert a.count["entry_window_expired"] == 1 and not a.sends
+        assert a.count["entry_window_expired"] == 1 and not a.rows and not a.groups

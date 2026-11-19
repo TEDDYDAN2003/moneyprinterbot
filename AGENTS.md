@@ -79,6 +79,8 @@ The ordinary start command above is a read-only observer. It does not send order
 
 A pull does not rewrite an existing `config.demo.local.yaml`. Under **`hull.limits` only**, the defaults are `max_positions: null`, `max_total_lots: null`, `max_open_risk_usd: null` and `min_free_margin_pct: 0`. Preflight lists any enabled overrides in `review_before_demo`. To adopt the new defaults in an existing file, change or remove just those four keys; keep your other settings. See [how funding and vetoes work](docs/HULL_DEMO.md#hull-portfolio-limits-and-broker-funding).
 
+Check `retired_limits`: it must list `drawdown_usd` and `max_orders_minute`. The Hull scanner ignores those two keys in older YAML and ignores any old drawdown halt/send history in the journal. No journal edit or local YAML edit is needed for **these two removals**. The bot can keep opening funded batches after losses; broker rejections and ticket reconciliation still apply.
+
 Review that report again, including the account, all symbol specs, effective limits and `review_before_demo`. Only if those checks pass, start the armed scanner in a separate command:
 
 ```powershell

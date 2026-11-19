@@ -16,6 +16,8 @@ COUNTS = {"slow": (10,), "medium": (4, 3), "fast": (7, 6)}
 FRAMES = (1, 2, 5)
 LADDER = "profit_ladder_70_30_v1"
 FIXED = "fixed_tp"
+# Removed in Hull only. Older full-file demo configs may still contain the keys.
+RETIRED_LIMITS = ("drawdown_usd", "max_orders_minute")
 
 
 class Indicator(Strict):
@@ -49,12 +51,21 @@ class Limits(Strict):
     max_total_lots: float | None = Field(None, gt=0)
     max_open_risk_usd: float | None = Field(None, gt=0)
     daily_loss_usd: float = Field(0.0, ge=0)
-    drawdown_usd: float = Field(75.0, gt=0)
     # Minimum free margin after funding, as a percentage of current equity.
     min_free_margin_pct: float = Field(0.0, ge=0, le=100)
-    max_orders_minute: int = Field(40, ge=1, le=200)
     max_quote_age_s: float = Field(4.0, gt=0, le=15)
     max_entry_age_s: float = Field(8.0, gt=0, le=30)
+
+    @model_validator(mode="before")
+    @classmethod
+    def omit_retired_limits(cls, data):
+        # Drop only these two retired inputs; every other unexpected key is still
+        # rejected. Keep the source mapping intact for the preflight notice.
+        if isinstance(data, dict):
+            return {
+                key: value for key, value in data.items() if key not in RETIRED_LIMITS
+            }
+        return data
 
 
 class HullConfig(Strict):

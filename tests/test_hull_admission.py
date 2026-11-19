@@ -5,10 +5,11 @@ from dataclasses import replace
 from types import SimpleNamespace as NS
 
 import pytest
-from hull_mt import ROOT, sig
+from hull_mt import ROOT, T, sig
 from pydantic import ValidationError
 
 from bot.config.loader import load_yaml
+from bot.execution.demo_runner import DemoSafetyError
 from bot.hull.config import HullConfig, Limits
 from bot.hull.orders import Exposure, Plan, room
 
@@ -30,7 +31,7 @@ def test_shipped_and_omitted_settings_match_and_do_not_change_old_explicit_confi
     h = HullConfig.model_validate(cfg["hull"])
     for limits in (h.limits, Limits()):
         assert {k: getattr(limits, k) for k in OFF} == OFF
-        assert (limits.drawdown_usd, limits.max_orders_minute) == (75, 40)
+        assert {"drawdown_usd", "max_orders_minute"}.isdisjoint(limits.model_dump())
     assert cfg["risk"]["min_free_margin_pct"] == 60  # not used by the Hull executor
     old = {
         "max_positions": 60,
@@ -38,8 +39,13 @@ def test_shipped_and_omitted_settings_match_and_do_not_change_old_explicit_confi
         "max_open_risk_usd": 1000.0,
         "min_free_margin_pct": 60.0,
     }
-    assert Limits(**old).model_dump(include=set(old)) == old
+    # A private full config can retain the retired keys, without hiding typos or
+    # stripping the four independent opt-in portfolio/funding overrides.
+    legacy = {**old, "drawdown_usd": 75, "max_orders_minute": 40}
+    assert Limits.model_validate(legacy).model_dump() == Limits(**old).model_dump()
+    assert Limits.model_validate(legacy).model_dump(include=set(old)) == old
     for bad in (
+        {"max_order_minute": 40},  # only the two exact legacy keys are accepted
         {"max_positions": 0},
         {"max_total_lots": -1},
         {"max_open_risk_usd": float("inf")},
@@ -282,3 +288,45 @@ def test_pre_send_rechecks_full_batch_after_positive_order_check(hull_desk):
         10,
         -1.0,
     )
+
+
+def test_eight_slow_batches_can_send_80_protected_entries_in_one_window(hull_desk):
+    # Identical synthetic specs, independent symbols and signal reservations.
+    # The fixture freezes wall time and supplies funded, broker-accepted quotes.
+    mt, d, _ = hull_desk()
+    _, profile = d.syms[NAME]
+    names = [NAME, *(f"TEST{i}" for i in range(2, 9))]
+    for name in names:
+        d.syms[name] = (name, profile)
+        assert d.batch(name, sig()) == "demo_batch_sent"
+    assert len(mt.requests) == len(mt.positions) == len(d.ladders.book) == 80
+    assert all(p.sl > 0 and p.tp > p.price_open for p in mt.positions)
+    assert d.state["consumed"] == dict.fromkeys(names, T)
+    assert "sends" not in d.state
+    for name in names:
+        assert d.batch(name, sig()) == "already_consumed"
+    assert len(mt.requests) == 80
+
+
+def test_equity_drop_between_funded_legs_does_not_interrupt_the_batch(hull_desk):
+    mt, d, _ = hull_desk()
+    send = mt.order_send
+
+    def fill(req):
+        answer = send(req)
+        if len(mt.requests) == 1:
+            mt.a.equity -= 100.0  # funded throughout, $100 below the first check
+        return answer
+
+    mt.order_send = fill
+    assert d.batch(NAME, sig()) == "demo_batch_sent"
+    assert mt.a.equity == 9900.0 and len(mt.requests) == 10
+
+
+@pytest.mark.parametrize("equity", [0.0, -1.0, float("nan"), float("inf"), None])
+def test_invalid_equity_is_not_treated_as_a_permitted_drawdown(hull_desk, equity):
+    mt, d, _ = hull_desk()
+    mt.a.equity = equity
+    with pytest.raises(DemoSafetyError, match="Invalid account equity"):
+        d.batch(NAME, sig())
+    assert not mt.requests

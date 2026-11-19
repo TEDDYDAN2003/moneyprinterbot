@@ -86,7 +86,7 @@ def test_restart_cannot_recover_wait_and_monotonic_deadline_does_not_slide(
         ("data", "data_or_deal_history_unavailable"),
         ("rewarm", "first_quote_wait_rewarmed"),
         ("stop", "first_quote_wait_stopped"),
-        ("drawdown", "drawdown_halt"),
+        ("unfunded", "insufficient_free_margin"),
         ("manual_hold", "manual_reconciliation_required"),
         ("busy", "symbol_busy_or_batch_changed"),
         ("pending_order", "pending_orders_present"),
@@ -118,8 +118,8 @@ def test_first_quote_resumption_rechecks_guards_and_never_repeats_exit(
         ok["data_ok"] = False
     elif change == "rewarm":
         ok["rewarmed"] = True
-    elif change == "drawdown":
-        mt.a.equity -= 80
+    elif change == "unfunded":
+        mt.a.margin_free = 0.0
     elif change == "manual_hold":
         d.state["manual_hold"] = {"existing": True}
     elif change == "busy":

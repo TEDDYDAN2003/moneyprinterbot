@@ -323,9 +323,7 @@ hull:
     max_total_lots: null
     max_open_risk_usd: null
     daily_loss_usd: 0
-    drawdown_usd: 75
     min_free_margin_pct: 0  # no extra equity reserve; full batch must still fit estimated free margin
-    max_orders_minute: 40
     max_quote_age_s: 4
     max_entry_age_s: 8
   symbols:                # suggested sizes only; invalid broker lots are refused
