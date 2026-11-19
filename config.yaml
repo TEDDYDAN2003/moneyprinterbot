@@ -306,8 +306,8 @@ hull:
   enabled: [XAUUSD]  # opt in other keys via --symbols or repeated --profile
   magic: 26111825
   indicator:
-    hull_len: 24
-    source: hl2
+    hull_len: 16
+    source: either            # independent High/Low Hull A curves; one signal per closed bar
     signal: labels        # raw closed-bar crosses; internal structure gates new entries
     exit_opposite: true   # original opposite-label exit, independent of entry eligibility
     ema_length: 200

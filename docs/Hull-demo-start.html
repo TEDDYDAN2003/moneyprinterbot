@@ -13,6 +13,7 @@
 <section class="panel" aria-labelledby="pick-title">
 <h2 id="pick-title">1 · Choose profiles</h2>
 <p><span class="chip">M1</span> <span class="chip">M2</span> <span class="chip">M5</span> One observer. Only checked rows will be copied.</p>
+<p>Hull v2: <strong>Either source, length 16</strong>. One normal batch on a qualified cross while flat; repeats while any same-side ticket remains do not add or close trades. A fresh cross after flat can reuse the same region. Existing SL and 70/30 ladder stay in place. An older local demo config must explicitly use <code>source: either</code> and <code>hull_len: 16</code>. <a href="HULL_DEMO.md#what-triggers-an-entry">Signal and migration details</a>.</p>
 <button class="secondary preset" type="button" id="trio">trio-slow · gold 0.09, EUR/GBP 0.01 lot per ticket</button>
 <button class="secondary preset" type="button" id="trio-config">Configured trio · gold 0.10, EUR/GBP 1.00 lot per ticket</button>
 <div class="scroll"><table id="profile-table"><thead><tr><th>Use / symbol</th><th>Lot per ticket</th><th>TP USD / ticket</th><th>Rate</th><th>Batch if all fill</th></tr></thead><tbody id="profiles"></tbody></table></div>

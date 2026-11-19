@@ -179,7 +179,8 @@ def test_stream_ignores_forming_bar_and_never_replays_startup_labels():
         return data[max(0, end[0] - count) : end[0]]
 
     mt = NS(TIMEFRAME_M2=2, copy_rates_from_pos=rates)
-    s = Stream(2, Indicator(), 0.01)
+    ref = fix["sets"][0]
+    s = Stream(2, Indicator(hull_len=ref["len"], source=ref["source"]), 0.01)
     assert s.refresh(mt, "S", T + j * dt + 0.2) == (None, "warmup_only")
     end[0] = j + 2
     r, _ = s.refresh(mt, "S", T + (j + 1) * dt + 0.2)
@@ -244,6 +245,8 @@ def test_preflight_resolves_only_requested_symbols_and_never_sends(
     answer = run(cfg, h, selection(h), preflight=True)
     assert (
         answer["timeframes"] == [1, 2, 5]
+        and answer["signal_policy"] == "fc_hull_either_v2"
+        and answer["batch_entry_policy"] == "first_eligible_while_flat_v1"
         and list(answer["specs"]) == ["XAUUSDm"]
         and not mt.requests
     )

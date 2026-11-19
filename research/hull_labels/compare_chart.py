@@ -36,6 +36,11 @@ def compare(path, config, key, tf, out, last_live):
                 "anchor_s",
                 "anchor",
                 "raw_sl",
+                "a_low",
+                "a_high",
+                "cross_low",
+                "cross_high",
+                "source_conflict",
             ]
         )
         for r in df.itertuples(index=False):
@@ -51,7 +56,21 @@ def compare(path, config, key, tf, out, last_live):
             bad += int(has and v != expected)
             total += bool(v)
             w.writerow(
-                [t.isoformat(), d.a, d.b, v, expected, d.anchor_s, d.anchor, d.raw_sl]
+                [
+                    t.isoformat(),
+                    d.a,
+                    d.b,
+                    v,
+                    expected,
+                    d.anchor_s,
+                    d.anchor,
+                    d.raw_sl,
+                    d.a_low,
+                    d.a_high,
+                    d.cross_low,
+                    d.cross_high,
+                    d.source_conflict,
+                ]
             )
     print(
         f"{len(df)} closed candles, {total} raw labels; "

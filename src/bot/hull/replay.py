@@ -18,7 +18,7 @@ from bot.zones.feed import tick_minutes
 from bot.zones.hours import Hours
 from bot.zones.replay import file_hash, iso_ms
 
-from .config import LADDER, RETIRED_LIMITS
+from .config import BATCH_ENTRY_POLICY, LADDER, RETIRED_LIMITS
 from .entry_clock import QUOTE_POLICY, check_quote
 from .ladder import Protection, propose
 from .orders import Block, Exposure, Grid, count_for, make_plan, select_labels
@@ -71,14 +71,18 @@ class Account:
         self.p, self.lim, self.grid, self.cash, self.hours = p, lim, grid, cash, hours
         self.eq = initial
         self.pos = None
+        self.last_exit_ms = {1: -1, -1: -1}
+        self.consumed_close_s = -1
         self.rows = []
         self.count = Counter()
         self.labels = Counter()
+        self.source_conflicts = Counter()
         self.qualified = Counter()
         self.structure_vetoes = Counter()
 
     def _exit_group(self, why, ms, px, levels, n):
         d, p, _, stamp = self.pos
+        self.last_exit_ms[p.side] = ms
         per = self.cash(p.side, p.lots, p.entry, px)
         net = per * n
         self.eq += net
@@ -165,6 +169,7 @@ class Account:
         bid = float(m.bid[0])
         ask = float(m.ask[0])
         self.barriers(m, 0, 1)
+        self.source_conflicts.update(f"M{v.tf}" for v in ds if v.source_conflict)
         labels = [v for v in ds if v.label]
         self.labels.update(
             f"M{d.tf}:{'BUY' if d.label == 1 else 'SELL'}" for d in labels
@@ -193,8 +198,16 @@ class Account:
                 # The ordered feed starts each minute with its first actual tick.
                 # Use the historic tick clock, never today's wall time or a bar-open fill.
                 timing = check_quote(d.close_s, now, self.lim, ms, bid, ask)
-                if self.pos:
+                duplicate = self.consumed_close_s >= d.close_s
+                self.consumed_close_s = max(self.consumed_close_s, d.close_s)
+                if duplicate:
+                    why = "already_consumed"
+                elif self.pos and self.pos[1].side == d.side:
+                    why = "same_side_batch_open"
+                elif self.pos:
                     why = "symbol_busy"
+                elif self.last_exit_ms[d.side] >= d.close_s * 1000:
+                    why = "same_side_batch_at_signal_close"
                 elif timing.reason != "ready":
                     why = timing.reason
                 elif not math.isfinite(self.eq) or self.eq <= 0:
@@ -248,6 +261,7 @@ class Account:
             positions=sum(r["legs"] for r in self.rows),
             exits=dict(Counter(r["exit_reason"] for r in self.rows)),
             label_counts=dict(self.labels),
+            source_conflicts=dict(self.source_conflicts),
             entry_qualified_at_close=dict(self.qualified),
             structure_vetoes_at_close=dict(self.structure_vetoes),
             decision_counts=dict(self.count),
@@ -354,6 +368,8 @@ def study(minutes, cfg, h, p, frames, lo, hi, unit, contract, conversion, rates,
         "rates": {},
         "timeframes": frames,
         "entry_policy": ENTRY_POLICY,
+        "signal_policy": h.indicator.signal_policy,
+        "batch_entry_policy": BATCH_ENTRY_POLICY,
         "entry_quote_policy": QUOTE_POLICY,
         "new_ticket_exit_policy": h.exit_policy,
         "per_ticket_target": p.target_usd,

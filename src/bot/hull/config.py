@@ -16,13 +16,16 @@ COUNTS = {"slow": (10,), "medium": (4, 3), "fast": (7, 6)}
 FRAMES = (1, 2, 5)
 LADDER = "profit_ladder_70_30_v1"
 FIXED = "fixed_tp"
+BATCH_ENTRY_POLICY = "first_eligible_while_flat_v1"
 # Removed in Hull only. Older full-file demo configs may still contain the keys.
 RETIRED_LIMITS = ("drawdown_usd", "max_orders_minute")
 
 
 class Indicator(Strict):
-    hull_len: int = Field(24, ge=2, le=500)
-    source: Literal["open", "high", "low", "close", "hl2", "hlc3", "ohlc4"] = "hl2"
+    hull_len: int = Field(16, ge=2, le=500)
+    source: Literal[
+        "either", "open", "high", "low", "close", "hl2", "hlc3", "ohlc4"
+    ] = "either"
     signal: Literal["labels", "ema_plan"] = "labels"
     exit_opposite: bool = True
     ema_length: int = Field(200, ge=1, le=2000)
@@ -32,6 +35,10 @@ class Indicator(Strict):
     atr_length: int = Field(14, ge=1, le=500)
     atr_buffer: float = Field(0.1, ge=0, le=100)
     extra_pips: float = Field(0.0, ge=0, le=100000)
+
+    @property
+    def signal_policy(self) -> str:
+        return "fc_hull_either_v2" if self.source == "either" else "fc_hull_single_v1"
 
 
 class Profile(Strict):

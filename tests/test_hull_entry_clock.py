@@ -88,7 +88,7 @@ def test_restart_cannot_recover_wait_and_monotonic_deadline_does_not_slide(
         ("stop", "first_quote_wait_stopped"),
         ("unfunded", "insufficient_free_margin"),
         ("manual_hold", "manual_reconciliation_required"),
-        ("busy", "symbol_busy_or_batch_changed"),
+        ("busy", "same_side_batch_open"),
         ("pending_order", "pending_orders_present"),
         ("supersede", "first_quote_wait_superseded"),
         ("invalid_tick", "invalid_quote"),
@@ -196,7 +196,7 @@ def test_after_first_plan_a_preclose_tick_with_identical_prices_cannot_send_or_w
 
 
 def eurusd_bars(end):
-    """Synthetic M1 tape: default Hull 24/hl2, 3/3 pivots. NOT the incident's broker history."""
+    """Synthetic M1 tape: legacy Hull 24/hl2, 3/3 pivots. NOT the incident's broker history."""
     anchors = [
         (0, 120),
         (5, 122),
@@ -264,6 +264,9 @@ def test_eurusd_1952_bar_1953_close_waits_for_quote_not_replayed(
     end = int(datetime(2026, 11, 18, 19, 53, tzinfo=UTC).timestamp())
     bars = eurusd_bars(end)
     cfg = load_yaml(ROOT / "config.yaml")
+    cfg["hull"]["indicator"].update(
+        hull_len=24, source="hl2"
+    )  # pinned incident fixture
     cfg["run"]["mode"] = "demo" if armed else "paper"
     h = HullConfig.model_validate(cfg["hull"])
     eng = Hull(1, h.indicator, 0.0001)

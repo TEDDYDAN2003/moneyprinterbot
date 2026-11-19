@@ -14,7 +14,7 @@ from pathlib import Path
 from bot.execution.demo_runner import DemoSafetyError, _account_order_lock
 from bot.zones.engine import Bar
 
-from .config import COUNTS, FRAMES, LADDER, RETIRED_LIMITS
+from .config import BATCH_ENTRY_POLICY, COUNTS, FRAMES, LADDER, RETIRED_LIMITS
 from .desk import Desk, identity_check, resolve
 from .entry_clock import QUOTE_POLICY, WAITING, poll_delay, utc
 from .ladder import cash_levels
@@ -312,6 +312,8 @@ def run(
             "timeframes": list(frames),
             "new_ticket_exit_policy": h.exit_policy,
             "entry_policy": ENTRY_POLICY,
+            "signal_policy": h.indicator.signal_policy,
+            "batch_entry_policy": BATCH_ENTRY_POLICY,
             "entry_quote_policy": QUOTE_POLICY,
             **source_build(),
             "specs": specs,
@@ -364,6 +366,10 @@ def run(
                     if status == "history_unavailable" or lane.h.n < lane.min_bars:
                         issues.append(f"{name} M{tf}: insufficient closed-bar history")
                 summary["history_check"][name] = checks
+            if h.indicator.source != "either" or h.indicator.hull_len != 16:
+                issues.append(
+                    "Non-default Hull signal settings: verify intended hull.indicator.source and hull_len; v2 defaults are either / 16."
+                )
             if ps or os:
                 issues.append(
                     "Preflight found existing exposure; review before starting or changing profiles"
@@ -429,6 +435,12 @@ def run(
                         if why == "history_unavailable":
                             data_ok = False
                             emit("data_unavailable", symbol=name, tf=tf)
+                        if reading and reading.source_conflict:
+                            emit(
+                                "source_cross_conflict",
+                                symbol=name,
+                                **describe(reading),
+                            )
                         if reading and reading.label:
                             ds.append(reading)
                             emit(

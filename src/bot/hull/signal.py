@@ -41,6 +41,27 @@ class WMA:
         return None
 
 
+class Baseline:
+    """One source's entire A history. Previous B is shared; previous A is not."""
+
+    def __init__(self, half, length):
+        self.fast, self.slow = WMA(half), WMA(length)
+        self.smooth = WMA(max(1, math.floor(math.sqrt(length) + 0.5)))
+        self.last = None
+
+    def update(self, source, b, prev_b):
+        x, y = self.fast.push(source), self.slow.push(source)
+        a = self.smooth.push(2 * x - y if x is not None and y is not None else None)
+        prev_a, self.last = self.last, a
+        cross = 0
+        if None not in (a, b, prev_a, prev_b):
+            if b > a and prev_b < prev_a:
+                cross = 1
+            elif b < a and prev_b > prev_a:
+                cross = -1
+        return a, cross
+
+
 @dataclass(frozen=True, slots=True)
 class Reading:
     close_s: int
@@ -63,10 +84,17 @@ class Reading:
     # Empty history fails closed; it never implies permission to send.
     structure: Structure = field(default_factory=Structure)
 
+    # `a` is meaningful in single-source mode only. Never invent a blended A for Either.
+    a_low: float | None = None
+    a_high: float | None = None
+    cross_low: int = 0
+    cross_high: int = 0
+    source_conflict: bool = False
+
     @property
     def entry_reason(self) -> str:
         if not self.label:
-            return "no_cross"
+            return "source_conflict" if self.source_conflict else "no_cross"
         if not self.side:
             return self.reason if self.reason != "ready" else "no_executable_label"
         if self.side != self.label:
@@ -97,20 +125,13 @@ class Hull:
         self.tf, self.p, self.pip = tf, p, pip_size
         n = p.hull_len
         h = max(1, n // 2)
-        self.weights = [
-            WMA(z)
-            for z in (
-                h,
-                n,
-                max(1, math.floor(math.sqrt(n) + 0.5)),
-                max(1, h // 3),
-                max(1, h // 2),
-                h,
-                h,
-            )
-        ]
+        self.baselines = {
+            src: Baseline(h, n)
+            for src in (("low", "high") if p.source == "either" else (p.source,))
+        }
+        self.b_weights = (WMA(max(1, h // 3)), WMA(max(1, h // 2)), WMA(h), WMA(h))
         self.prev = None
-        self.last_a = self.last_b = self.atr = self.ema = None
+        self.last_b = self.atr = self.ema = None
         self.n = 0
         self.tr_sum = 0.0
         self.hist = deque(maxlen=max(2 * p.swing_len + 1, p.pullback_bars + 1))
@@ -122,7 +143,6 @@ class Hull:
         if self.prev and c.t <= self.prev.t:
             raise ValueError("Closed bars must be unique and ordered")
         p = self.p
-        w = self.weights
         values = {
             "open": c.o,
             "high": c.h,
@@ -132,17 +152,21 @@ class Hull:
             "hlc3": (c.h + c.l + c.c) / 3,
             "ohlc4": (c.o + c.h + c.l + c.c) / 4,
         }
-        v = values[p.source]
-        x, y = w[0].push(v), w[1].push(v)
-        a = w[2].push(2 * x - y if x is not None and y is not None else None)
-        x, y, z = [f.push(c.c) for f in w[3:6]]
-        b = w[6].push(3 * x - y - z if None not in (x, y, z) else None)
-        label = 0
-        if None not in (a, b, self.last_a, self.last_b):
-            if b > a and self.last_b < self.last_a:
-                label = 1
-            if a > b and self.last_a < self.last_b:
-                label = -1
+        fast, mid, slow, smooth = self.b_weights
+        x, y, z = fast.push(c.c), mid.push(c.c), slow.push(c.c)
+        b = smooth.push(3 * x - y - z if None not in (x, y, z) else None)
+        curves = {
+            src: curve.update(values[src], b, self.last_b)
+            for src, curve in self.baselines.items()
+        }
+        low, low_cross = curves.get("low", (None, 0))
+        high, high_cross = curves.get("high", (None, 0))
+        conflict = bool(low_cross and high_cross == -low_cross)
+        a, label = (
+            (None, 0 if conflict else low_cross or high_cross)
+            if p.source == "either"
+            else curves[p.source]
+        )
         self.ema = (
             c.c
             if self.ema is None
@@ -178,7 +202,7 @@ class Hull:
         anchor = when = sl = window = None
         count = 0
         side = 0
-        reason = "no_cross"
+        reason = "source_conflict" if conflict else "no_cross"
         if label:
             if p.stop == "local_pullback":
                 since = self.last_cross[-label]
@@ -211,7 +235,7 @@ class Hull:
                 side = label
                 reason = "ready"
             self.last_cross[label] = c.t
-        self.prev, self.last_a, self.last_b = c, a, b
+        self.prev, self.last_b = c, b
         return Reading(
             close_s,
             self.tf,
@@ -231,4 +255,9 @@ class Hull:
             self.low.price if self.low else None,
             self.high.price if self.high else None,
             structure,
+            low,
+            high,
+            low_cross,
+            high_cross,
+            conflict,
         )

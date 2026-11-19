@@ -24,6 +24,8 @@ class MT:
     ACCOUNT_MARGIN_MODE_RETAIL_HEDGING = 2
     POSITION_TYPE_BUY = ORDER_TYPE_BUY = 0
     ORDER_TYPE_SELL = 1
+    DEAL_TYPE_BUY, DEAL_TYPE_SELL = 0, 1
+    DEAL_ENTRY_IN, DEAL_ENTRY_OUT, DEAL_ENTRY_INOUT, DEAL_ENTRY_OUT_BY = 0, 1, 2, 3
     TRADE_ACTION_DEAL = 1
     TRADE_ACTION_SLTP = 6
     ORDER_TIME_GTC = 0
@@ -68,6 +70,7 @@ class MT:
         self.q = NS(time_msc=T * 1000 + 100, bid=2000.0, ask=2000.1)
         self.positions = []
         self.orders = []
+        self.deals = []
         self.catalog = [self.i]
         self.requests = []
         self.retprice = None
@@ -93,6 +96,9 @@ class MT:
 
     def positions_get(self, ticket=None):
         return [p for p in self.positions if ticket is None or p.ticket == ticket]
+
+    def history_deals_get(self, start, end):
+        return self.deals
 
     def orders_get(self):
         return self.orders

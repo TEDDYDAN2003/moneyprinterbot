@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import time
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from bot.execution.demo_runner import DemoSafetyError, _filling_mode, _side_is_allowed
@@ -197,6 +198,37 @@ class Desk:
             )
         return why
 
+    def _check_flat_at_close(self, name, reading, now):
+        """A broker exit BETWEEN candle close and polling must not resurrect a repeat.
+
+        Snapshot checks cover any surviving leg. Check the bounded interval for a
+        SELL exit of a long (or BUY exit of a short), including manual/SL/TP deals
+        whose magic may differ. An opposite-side exit is not a block on reversal.
+        """
+        if not 0 <= now - reading.close_s <= self.lim.max_entry_age_s:
+            return  # the normal quote-clock check rejects expired/future signals
+        mt = self.mt
+        deals = mt.history_deals_get(
+            datetime.fromtimestamp(reading.close_s, UTC),
+            datetime.fromtimestamp(int(now) + 1, UTC),
+        )
+        if deals is None:
+            raise Block("entry_deal_history_unavailable")
+        closing_type = mt.DEAL_TYPE_SELL if reading.side == 1 else mt.DEAL_TYPE_BUY
+        for deal in deals:
+            if (
+                deal.symbol != name
+                or deal.entry
+                not in (mt.DEAL_ENTRY_OUT, mt.DEAL_ENTRY_OUT_BY, mt.DEAL_ENTRY_INOUT)
+                or deal.type != closing_type
+            ):
+                continue
+            ms = getattr(deal, "time_msc", None)
+            if not isinstance(ms, int) or ms <= 0:
+                raise Block("entry_deal_history_unavailable")
+            if ms >= reading.close_s * 1000:
+                raise Block("same_side_batch_at_signal_close")
+
     def prepare(self, name, d, window, stage, expected=None, remaining=None):
         mt = self.mt
         p = self.syms[name][1]
@@ -213,7 +245,13 @@ class Desk:
         e = self.exposure(ps, os)
         tickets = {r.ticket for r in ps if r.symbol == name}
         if tickets != (expected or set()):
+            if stage == "first_plan" and any(
+                r.symbol == name and r.type == self.typ(d.side) for r in ps
+            ):
+                raise Block("same_side_batch_open")
             raise Block("symbol_busy_or_batch_changed")
+        if stage == "first_plan":
+            self._check_flat_at_close(name, d, time.time())
         i = mt.symbol_info(name)
         grid = Grid.from_info(i)
         if not _side_is_allowed(mt, i, "BUY" if d.side == 1 else "SELL"):

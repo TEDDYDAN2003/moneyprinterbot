@@ -13,6 +13,8 @@ The first two rules also apply to a newly completed pullback after a continuatio
 
 **Example:** after bullish CHoCH, a confirmed HH of 110 and a later confirmed HL of 100 allow a Hull BUY at 104, not 108. A later **close above 110** breaks that high. Once a **new HH at 116 has been confirmed**, a fresh Hull SELL closing at 112 is eligible if its bid is still in `(110, 116]`. High 112 **but close 109**, or **close exactly 110**, does not qualify. A valid close followed by a bid at 110 also fails. No old label is queued for a later retest.
 
+The v2 scanner uses a fresh Either-source 16 cross on the lane. The band is an **eligibility check**, not a one-use region ID. If one same-side ticket is still open, ignore the repeat. When flat **before a later signal close**, the same side and same still-valid band may qualify again. The previously ignored cross is never revived. See [exit and flat-timing rules](HULL_DEMO.md#what-triggers-an-entry).
+
 ## When a level becomes usable
 
 1. Use only finished candles and the scanner’s existing swing definition: `hull.indicator.swing_len` bars on each side (default **3/3**, newer equal wick wins). A pivot candle’s time is not its confirmation time. A swing first learned on the current close cannot be the **previously known** level that same candle broke.
