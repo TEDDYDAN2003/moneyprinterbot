@@ -16,10 +16,9 @@ from bot.backtest.metrics import summarize_pnl
 from bot.zones.engine import Bar
 from bot.zones.feed import tick_minutes
 from bot.zones.hours import Hours
-from bot.zones.orders import EquityGuard
 from bot.zones.replay import file_hash, iso_ms
 
-from .config import LADDER
+from .config import LADDER, RETIRED_LIMITS
 from .entry_clock import QUOTE_POLICY, check_quote
 from .ladder import Protection, propose
 from .orders import Block, Exposure, Grid, count_for, make_plan, select_labels
@@ -71,25 +70,12 @@ class Account:
         self.amendments = 0
         self.p, self.lim, self.grid, self.cash, self.hours = p, lim, grid, cash, hours
         self.eq = initial
-        self.guard = EquityGuard()
         self.pos = None
         self.rows = []
         self.count = Counter()
         self.labels = Counter()
         self.qualified = Counter()
         self.structure_vetoes = Counter()
-        self.sends = []
-
-    def guard_halt(self, day, equity):
-        if not math.isfinite(equity) or equity <= 0:
-            return "invalid_equity"
-        if self.guard.day != day:
-            self.guard.day = day
-            self.guard.start = equity
-            self.guard.day_halt = False
-        self.guard.peak = max(self.guard.peak, equity)
-        self.guard.dd_halt |= self.guard.peak - equity >= self.lim.drawdown_usd - 1e-8
-        return "drawdown_halt" if self.guard.dd_halt else ""
 
     def _exit_group(self, why, ms, px, levels, n):
         d, p, _, stamp = self.pos
@@ -163,40 +149,22 @@ class Account:
                         )
                     except Block:
                         pass  # keep the prior protective pair when new levels cannot fit
-                if new is not None:
-                    now = ms / 1000
-                    self.sends = [s for s in self.sends if s > now - 60]
-                    k = min(n, max(0, self.lim.max_orders_minute - len(self.sends)))
-                    if k:
-                        after[new] += k
-                        self.sends.extend([now] * k)
-                        self.amendments += k
-                        n -= k
-                if n:
+                if new is None:
                     after[old] += n
+                else:
+                    after[new] += n
+                    self.amendments += n
             self.groups = after
             if not after:
                 self.pos = None
                 return
 
-    def equity(self, bid, ask):
-        if not self.pos:
-            return self.eq
-        _, p, _, _ = self.pos
-        n = sum(self.groups.values())
-        return (
-            self.eq
-            + self.cash(p.side, p.lots, p.entry, bid if p.side == 1 else ask) * n
-        )
-
     def step(self, m, ds):
         ms = int(m.ms[0])
         now = ms / 1000
-        day = iso_ms(ms)[:10]
         bid = float(m.bid[0])
         ask = float(m.ask[0])
         self.barriers(m, 0, 1)
-        halt = self.guard_halt(day, self.equity(bid, ask))
         labels = [v for v in ds if v.label]
         self.labels.update(
             f"M{d.tf}:{'BUY' if d.label == 1 else 'SELL'}" for d in labels
@@ -225,42 +193,30 @@ class Account:
                 # The ordered feed starts each minute with its first actual tick.
                 # Use the historic tick clock, never today's wall time or a bar-open fill.
                 timing = check_quote(d.close_s, now, self.lim, ms, bid, ask)
-                why = (
-                    "symbol_busy"
-                    if self.pos
-                    else timing.reason
-                    if timing.reason != "ready"
-                    else halt
-                    or (
+                if self.pos:
+                    why = "symbol_busy"
+                elif timing.reason != "ready":
+                    why = timing.reason
+                elif not math.isfinite(self.eq) or self.eq <= 0:
+                    # When flat, realized equity is the entire account equity.
+                    why = "invalid_equity"
+                else:
+                    why = (
                         self.hours.status(now)[0]
                         if self.p.session == "configured"
                         else ""
                     )
-                )
                 if not why:
                     try:
                         p = make_plan(d, self.p, self.grid, bid, ask, self.cash)
-                        self.sends = [s for s in self.sends if s > now - 60]
-                        n = count_for(
-                            self.p.rate,
-                            self.lim,
-                            Exposure(),
-                            p,
-                            lambda n: (
-                                "order_rate_limit"
-                                if len(self.sends) + n > self.lim.max_orders_minute
-                                else ""
-                            ),
-                        )
+                        n = count_for(self.p.rate, self.lim, Exposure(), p)
                         self.pos = (d, p, n, ms)
                         self.groups = Counter({Protection(0, p.sl, p.tp): n})
-                        self.sends += [now] * n
                         why = "opened"
                     except Block as exc:
                         why = str(exc)
             self.count[why] += 1
         self.barriers(m, 0 if self.pos and self.pos[3] == ms else 1, len(m.ms))
-        self.guard_halt(day, self.equity(float(m.bid[-1]), float(m.ask[-1])))
 
     def finish(self, last):
         if self.pos:
@@ -270,8 +226,7 @@ class Account:
                 int(last.ms[-1]),
                 float(last.bid[-1] if p.side == 1 else last.ask[-1]),
             )
-        # A rate cap can split a batch across realized exits. Count its economic
-        # result once, but keep every closed group in the ledger.
+        # Count each signal batch once, retaining the per-group exit ledger.
         totals = Counter()
         for r in self.rows:
             totals[(r["signal"], r["tf"], r["entry_time"])] += r["net_usd_batch"]
@@ -405,12 +360,13 @@ def study(minutes, cfg, h, p, frames, lo, hi, unit, contract, conversion, rates,
         "profile": p.model_dump(),
         "indicator": h.indicator.model_dump(),
         "limits": h.limits.model_dump(),
+        "retired_limits": list(RETIRED_LIMITS),
         "contract_size": contract,
         "tick_size": unit,
         "conversion": conversion,
         "start_utc": iso_ms(lo * 1000),
         "end_exclusive_utc": iso_ms(hi * 1000),
-        "note": "USD, spread only. Actual crossing quote for SL; TP at limit. Account equity marked at minute boundaries. Ladder sees ordered quotes, checks prior barriers first and shares the per-minute entry/amendment limit. Identical initial fills; no amendment latency, dealer rejection, commission, broker margin/volume checks or guarantee of atomic fills.",
+        "note": "USD, spread only. Actual crossing quote for SL; TP at limit. No peak-equity halt or per-minute send cap. Ladder checks prior barriers first on each ordered quote. Identical initial fills; no amendment latency, dealer rejection, commission, broker margin/volume checks or guarantee of atomic fills.",
     }
     with (out / "labels.csv").open("w", newline="") as f:
         w = csv.DictWriter(

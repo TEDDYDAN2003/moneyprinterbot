@@ -5,13 +5,11 @@ from __future__ import annotations
 import math
 import time
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 
 from bot.execution.demo_runner import DemoSafetyError, _filling_mode, _side_is_allowed
 from bot.zones.hours import Hours
 from bot.zones.monitor import account_check, fresh, save, snapshot
-from bot.zones.orders import EquityGuard
 
 from .config import COUNTS, FIXED, LADDER
 from .entry_clock import FAST_POLL_S, WAITING, TimingBlock, check_quote, utc
@@ -28,6 +26,13 @@ from .orders import (
     valid_cash,
 )
 from .signal import Reading
+
+
+def _finite_or_none(value):
+    # An unavailable MT5 estimate must never become zero or NaN in JSON logs.
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value if math.isfinite(value) else None
 
 
 def resolve(mt, profiles, *, check_lots=True):
@@ -62,7 +67,7 @@ def identity_check(mt, mode, armed, identity=None):
         raise DemoSafetyError(
             "Use a dedicated USD hedging DEMO terminal (including for preflight)"
         )
-    if not math.isfinite(a.equity) or a.equity <= 0:
+    if _finite_or_none(getattr(a, "equity", None)) is None or a.equity <= 0:
         raise DemoSafetyError("Invalid account equity")
     return a
 
@@ -93,7 +98,6 @@ class Desk:
             cfg.get("safety", {}).get("emergency_flatten_hotkey_file", "KILL")
         )
         self.hours = Hours(cfg)
-        self.guard = EquityGuard(**state.get("guard", {}))
         self.ladders = TicketLadders(self)
         self.last_service = time.monotonic()
         self.waiting: dict[str, FirstQuoteWindow] = {}  # never restored after restart
@@ -104,26 +108,6 @@ class Desk:
 
     def account(self):
         return identity_check(self.mt, self.mode, self.armed, self.ident)
-
-    def mark(self, a, now):
-        day = datetime.fromtimestamp(now, UTC).date().isoformat()
-        if not math.isfinite(a.equity) or a.equity <= 0:
-            reason = "invalid_equity"
-        else:
-            if self.guard.day != day:
-                self.guard.day = day
-                self.guard.start = a.equity
-                self.guard.day_halt = False
-            self.guard.peak = max(self.guard.peak, a.equity)
-            self.guard.dd_halt |= (
-                self.guard.peak - a.equity >= self.lim.drawdown_usd - 1e-8
-            )
-            reason = "drawdown_halt" if self.guard.dd_halt else ""
-        g = asdict(self.guard)
-        if self.state.get("guard") != g:
-            self.state["guard"] = g
-            self.persist()
-        return reason
 
     def owned(self, p):
         return p.symbol in self.syms and p.magic == self.h.magic
@@ -179,15 +163,45 @@ class Desk:
             )
         return q, now
 
+    def _margin_check(
+        self, name, d, account, stage, legs, projected, *, per_leg=None, report=True
+    ):
+        """Funding is mandatory even at a 0% discretionary equity reserve."""
+        free = _finite_or_none(getattr(account, "margin_free", None))
+        projected = _finite_or_none(projected)
+        pct = self.lim.min_free_margin_pct
+        required = account.equity * (pct / 100)
+        if free is None or projected is None:
+            why = "no_margin_estimate"
+        elif free < 0 or projected < 0:
+            why = "insufficient_free_margin"
+        elif projected < required:
+            why = "margin_floor"  # explicit positive reserve, not a broker rejection
+        else:
+            return ""
+        if report:
+            self.emit(
+                "margin_veto",
+                symbol=name,
+                tf=d.tf,
+                signal=d.close_s,
+                stage=stage,
+                reason=why,
+                legs_checked=legs,
+                equity_usd=account.equity,
+                free_before_usd=free,
+                estimated_margin_per_leg_usd=per_leg,
+                projected_free_usd=projected,
+                reserve_pct=pct,
+                required_free_usd=required,
+            )
+        return why
+
     def prepare(self, name, d, window, stage, expected=None, remaining=None):
         mt = self.mt
         p = self.syms[name][1]
         a = self.account()
-        now = time.time()
-        why = self.mark(a, now) or (
-            self.hours.status(now)[0] if p.session == "configured" else ""
-        )
-        if why:
+        if p.session == "configured" and (why := self.hours.status(time.time())[0]):
             raise Block(why)
         if self.kill.exists():
             raise Block("kill")
@@ -204,31 +218,28 @@ class Desk:
         grid = Grid.from_info(i)
         if not _side_is_allowed(mt, i, "BUY" if d.side == 1 else "SELL"):
             raise Block("broker_side_disabled")
-        q, now = self._entry_quote(name, window, stage)
+        q, _ = self._entry_quote(name, window, stage)
         plan = make_plan(d, p, grid, q.bid, q.ask, self.cash(name))
-        recent = [v for v in self.state.get("sends", []) if v > now - 60]
-        margin = mt.order_calc_margin(self.typ(d.side), name, p.lots, plan.entry)
-        if (
-            margin is None
-            or not math.isfinite(margin)
-            or margin < 0
-            or not math.isfinite(a.margin_free)
-        ):
-            raise Block("no_margin_estimate")
+        margin = _finite_or_none(
+            mt.order_calc_margin(self.typ(d.side), name, p.lots, plan.entry)
+        )
+        free = _finite_or_none(getattr(a, "margin_free", None))
+        min_legs = min(COUNTS[p.rate]) if remaining is None else remaining
 
-        def more(n):
-            if len(recent) + n > self.lim.max_orders_minute:
-                return "order_rate_limit"
-            if (
-                100 * (a.margin_free - n * margin) / a.equity
-                < self.lim.min_free_margin_pct
-            ):
-                return "margin_floor"
-            return ""
+        def funding_veto(n):
+            projected = (
+                free - n * margin
+                if free is not None and margin is not None and margin >= 0
+                else None
+            )
+            # Don't log a terminal veto if a smaller allowed fast/medium batch can still fit.
+            return self._margin_check(
+                name, d, a, stage, n, projected, per_leg=margin, report=n == min_legs
+            )
 
         if remaining is None:
             try:
-                n = count_for(p.rate, self.lim, e, plan, more)
+                n = count_for(p.rate, self.lim, e, plan, funding_veto)
             except Block as exc:
                 if str(exc) == "portfolio_risk_limit":
                     self.emit(
@@ -244,10 +255,10 @@ class Desk:
                 raise
         else:
             n = remaining
-            why = room(self.lim, e, plan, n) or more(n)
+            why = room(self.lim, e, plan, n) or funding_veto(n)
             if why:
                 raise Block(why)
-        return n, plan, q, i, recent
+        return n, plan, q, i
 
     def close_owned(self, pos, reason):
         if not self.armed or not self.owned(pos):
@@ -400,7 +411,11 @@ class Desk:
         if abs(p.sl - plan.sl) > tol or not (p.sl > 0 and p.tp > 0):
             self.close_owned(p, "unverified_protection")
             return None, "protection_mismatch"
-        if self.exposure(ps, os).risk > self.lim.max_open_risk_usd + 1e-7:
+        # Always inspect the broker snapshot for foreign/unprotected exposure,
+        # pending orders and valid pricing, even without a discretionary dollar cap.
+        filled_exposure = self.exposure(ps, os)
+        cap = self.lim.max_open_risk_usd
+        if cap is not None and filled_exposure.risk > cap + 1e-7:
             self.close_owned(p, "aggregate_fill_risk")
             return None, "fill_risk_exceeded"
         tp, _ = target(
@@ -504,7 +519,7 @@ class Desk:
         sent = 0
         try:
             while True:
-                left, plan, q, i, recent = self.prepare(
+                left, plan, q, i = self.prepare(
                     name,
                     d,
                     window,
@@ -544,15 +559,23 @@ class Desk:
                 }
                 chk = self.mt.order_check(req)
                 a = self.account()
-                if chk is None or chk.retcode != 0:
+                retcode = getattr(chk, "retcode", None)
+                if retcode != 0:
+                    self.emit(
+                        "broker_precheck_rejected",
+                        symbol=name,
+                        tf=d.tf,
+                        signal=d.close_s,
+                        leg=sent + 1,
+                        retcode=retcode,
+                    )
                     raise Block("broker_precheck_rejected")
-                if (
-                    not math.isfinite(chk.margin_free)
-                    or 100 * chk.margin_free / a.equity < self.lim.min_free_margin_pct
+                if why := self._margin_check(
+                    name, d, a, "order_check", 1, getattr(chk, "margin_free", None)
                 ):
-                    raise Block("margin_floor")
+                    raise Block(why)
                 # Do not send the inspected plan after a change in exposures/quote, a kill, or a stale signal.
-                _, again, q2, _, _ = self.prepare(
+                _, again, q2, _ = self.prepare(
                     name, d, window, "pre_send", expected, n - sent
                 )
                 if again != plan or (q.bid, q.ask) != (q2.bid, q2.ask):
@@ -562,7 +585,6 @@ class Desk:
                     "signal": d.close_s,
                     "leg": sent + 1,
                 }
-                self.state["sends"] = [*recent, time.time()]
                 self.persist()
                 self.account()
                 try:

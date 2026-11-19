@@ -212,10 +212,6 @@ class TicketLadders:
         if not d.armed or d.kill.exists():
             return
         d.account()  # recheck dedicated account, permissions and identity
-        now = time.time()
-        recent = [t for t in d.state.get("sends", ()) if t > now - 60]
-        if len(recent) >= d.lim.max_orders_minute:
-            raise Block("ladder_order_rate_limit")
         req = {
             "action": mt.TRADE_ACTION_SLTP,
             "symbol": p.symbol,
@@ -241,7 +237,6 @@ class TicketLadders:
             "tick_time_msc": int(sampled.time_msc),
             "mark": executable(r["side"], sampled.bid, sampled.ask),
         }
-        d.state["sends"] = [*recent, time.time()]
         d.persist()
         d.account()
         try:
@@ -266,9 +261,6 @@ class TicketLadders:
                 raise Block("ladder_quote_or_safety_changed")
         except Block:
             del r["pending"]  # definitely no order_send on this path
-            d.state["sends"] = (
-                recent  # single account writer; release the unsent reservation
-            )
             d.persist()
             raise
         # One ticket-specific request with BOTH legal levels. An exception leaves

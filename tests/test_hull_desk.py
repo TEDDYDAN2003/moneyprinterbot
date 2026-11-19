@@ -216,13 +216,25 @@ def test_final_quote_changed_between_precheck_and_send(hull_desk):
     assert d.batch("XAUUSDm", sig()) == "quote_or_plan_changed" and not mt.requests
 
 
+@pytest.mark.parametrize(
+    "explicit", [False, True], ids=["defaults", "older-local-config"]
+)
 def test_preflight_resolves_only_requested_symbols_and_never_sends(
-    tmp_path, monkeypatch, capsys
+    tmp_path, monkeypatch, capsys, explicit
 ):
     import sys
 
     mt = MT()
     cfg = load_yaml(ROOT / "config.yaml")
+    if explicit:
+        cfg["hull"]["limits"].update(
+            max_positions=60,
+            max_total_lots=54,
+            max_open_risk_usd=1000,
+            min_free_margin_pct=60,
+            drawdown_usd=75,
+            max_orders_minute=40,
+        )
     h = HullConfig.model_validate(cfg["hull"])
     mt.copy_rates_from_pos = lambda *args: []
     mt.initialize = lambda: True
@@ -236,13 +248,58 @@ def test_preflight_resolves_only_requested_symbols_and_never_sends(
         and not mt.requests
     )
     assert answer["mode"] == "READ ONLY" and not list(tmp_path.glob("reports/*"))
+    assert answer["limits"] == h.limits.model_dump()
+    assert answer["retired_limits"] == ["drawdown_usd", "max_orders_minute"]
+    assert set(answer["retired_limits"]).isdisjoint(answer["limits"])
+    ignored = [
+        msg
+        for msg in answer["review_before_demo"]
+        if "Retired Hull limits ignored" in msg
+    ]
+    assert ignored == (
+        ["Retired Hull limits ignored in this config: drawdown_usd, max_orders_minute"]
+        if explicit
+        else []
+    )
+    notices = [
+        msg
+        for msg in answer["review_before_demo"]
+        if "Optional Hull entry limits" in msg
+    ]
+    if explicit:
+        assert len(notices) == 1 and all(
+            f"{k}={v}" in notices[0]
+            for k, v in (
+                ("max_positions", 60),
+                ("max_total_lots", 54),
+                ("max_open_risk_usd", 1000),
+                ("min_free_margin_pct", 60),
+            )
+        )
+    else:
+        assert not notices
 
 
-def test_drawdown_halt_blocks_new_batch_without_resetting_swing(hull_desk):
-    mt, d, _ = hull_desk()
-    d.mark(mt.a, T)
-    mt.a.equity -= 80
-    assert d.batch("XAUUSDm", sig()) == "drawdown_halt" and not mt.requests
+@pytest.mark.parametrize("armed", [False, True])
+def test_legacy_saved_halt_and_full_send_window_do_not_block_or_reset_state(
+    hull_desk, armed
+):
+    old = {"guard": {"dd_halt": True, "peak": 10500.0}, "sends": [T] * 40}
+    state = {**old, "consumed": {"OLD": T - 60}}
+    mt, d, _ = hull_desk(armed=armed, state=state)
+    assert d.batch("XAUUSDm", sig()) == (
+        "demo_batch_sent" if armed else "shadow_plan_only"
+    )
+    assert len(mt.requests) == (10 if armed else 0)
+    if armed:
+        saved = json.loads(d.path.read_text())
+        assert saved["guard"] == old["guard"] and saved["sends"] == old["sends"]
+        assert saved["consumed"] == {"OLD": T - 60, "XAUUSDm": T}
+        _, restarted, _ = hull_desk(armed=True, mt=mt, state=saved)
+        assert (
+            restarted.batch("XAUUSDm", sig()) == "already_consumed"
+            and len(mt.requests) == 10
+        )
 
 
 @pytest.mark.parametrize(

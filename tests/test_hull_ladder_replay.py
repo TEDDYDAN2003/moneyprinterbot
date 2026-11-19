@@ -15,15 +15,18 @@ from bot.zones.feed import Minute
 from bot.zones.hours import Hours
 
 
-def tape(side, pnls, cap=40, policy=LADDER):
+def tape(side, pnls, policy=LADDER):
     cfg = load_yaml(ROOT / "config.yaml")
+    cfg["hull"]["limits"].update(
+        drawdown_usd=75, max_orders_minute=40
+    )  # old full-file config
     h = HullConfig.model_validate(cfg["hull"])
     assert h.exit_policy == LADDER
     p = h.symbols["XAUUSD"].model_copy(update={"rate": "medium", "lots": 0.10})
     cash = lambda d, l, e, px: d * l * 100 * (px - e)
     a = Account(
         p,
-        h.limits.model_copy(update={"max_orders_minute": cap}),
+        h.limits,
         Grid(0.001, 0.001, 3, 0, 0.01, 100, 0.01),
         cash,
         Hours(cfg),
@@ -79,24 +82,40 @@ def test_ordered_ticks_cannot_backdate_higher_stops_or_rescue_old_tp(
 
 
 @pytest.mark.parametrize("side", [1, -1])
-def test_limited_amendments_split_realized_groups_not_batch_count(side):
-    # Four entries, two remaining amendment requests. Other two legs retain initial TP.
-    a, m = tape(side, [-1, 7, 10, 6.5, 6], 6)
-    assert a.pos is None
-    rows = sorted(
-        (r["legs"], r["ladder_rung"], r["exit_reason"], r["net_usd_per_leg"])
-        for r in a.rows
+def test_replay_all_tickets_can_advance_past_old_shared_send_cap(side):
+    # Four entries + 44 amendments in 12 ms; return from +$37 to the +$36 stop.
+    a, m = tape(side, [-1, *range(7, 38, 3), 36])
+    assert not a.pos
+    (row,) = a.rows
+    assert (row["legs"], row["ladder_rung"], row["exit_reason"]) == (
+        4,
+        11,
+        "ladder_stop",
     )
-    assert rows == [(2, 0, "target", 10.0), (2, 1, "ladder_stop", 6.0)]
     metrics = a.finish(m)
-    assert (
-        metrics["batches"] == 1
-        and metrics["positions"] == 4
-        and metrics["closed_groups"] == 2
+    assert metrics["batches"] == 1 and metrics["ladder_ticket_amendments"] == 44
+    assert metrics["net_profit"] == pytest.approx(4 * 36)
+
+
+@pytest.mark.parametrize("invalid", [False, True])
+def test_replay_can_reenter_after_100_dollar_loss_but_not_with_invalid_equity(invalid):
+    a, m = tape(1, [-1, -25])  # four tickets stopped through a gap
+    assert not a.pos and a.eq == pytest.approx(9900)
+    if invalid:
+        a.eq = 0.0
+    t = T + 60
+    next_minute = Minute(
+        Bar(t, 2000.0, 2000.0, 2000.0, 2000.0),
+        m.ms[:1] + 60000,
+        m.bid[:1],
+        m.ask[:1],
+        True,
     )
-    assert metrics["ladder_ticket_amendments"] == 2 and metrics[
-        "net_profit"
-    ] == pytest.approx(32.0)
+    a.step(next_minute, [replace(sig(), close_s=t)])
+    if invalid:
+        assert not a.pos and a.count["invalid_equity"] == 1
+    else:
+        assert a.pos and a.pos[2] == 4 and a.count["opened"] == 2
 
 
 def test_explicit_fixed_policy_keeps_original_replay_behavior():

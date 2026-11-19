@@ -217,7 +217,6 @@ def test_recheck_before_modification_never_sends_the_old_quote_plan(hull_desk, c
     mt, d, _, p = filled(hull_desk)
     quote(mt, p, 7.12)
     old = p.sl, p.tp
-    recent = list(d.state["sends"])
 
     def checked(req):
         if case == "price_retreat":
@@ -237,7 +236,7 @@ def test_recheck_before_modification_never_sends_the_old_quote_plan(hull_desk, c
     assert (
         not mt.requests
         and (p.sl, p.tp) == old
-        and d.state["sends"] == recent
+        and "sends" not in d.state
         and not d.ladders.needs_review()
     )
 
@@ -306,39 +305,40 @@ def test_fixed_legacy_and_new_tickets_can_coexist(hull_desk):
     assert not d.ladders.book and not d.state["target_by_ticket"]
 
 
-def test_budget_is_per_ticket_and_shared_by_entries_and_amendments(
-    hull_desk, monkeypatch
+def test_all_ladders_advance_beyond_40_amendments_on_fresh_ticks_in_one_second(
+    hull_desk,
 ):
-    mt, d, _, p = filled(hull_desk, single=False)
-    assert len(mt.positions) == 4
-    d.lim = d.lim.model_copy(update={"max_orders_minute": 6})
-    quote(mt, p, 7.05)
-    d.supervise()
-    assert len(mt.requests) == 2 and [r["rung"] for r in d.ladders.book.values()] == [
-        1,
-        1,
-        0,
-        0,
-    ]
-    monkeypatch.setattr("bot.hull.desk.time.time", lambda: T + 61)
-    quote(mt, p, 7.05, stamp=(T + 61) * 1000)
-    d.supervise()
-    assert len(mt.requests) == 4 and all(
-        r["rung"] == 1 for r in d.ladders.book.values()
+    mt, d, log, p = filled(hull_desk, single=False)
+    d.state["sends"] = [T] * 40  # left by an earlier build; never read or extended
+    for rung in range(1, 12):
+        quote(mt, p, 7.05 + 3 * (rung - 1))
+        d.supervise()
+        assert all(r["rung"] == rung for r in d.ladders.book.values())
+    assert len(mt.requests) == len(log_for(log, "profit_ladder_step")) == 44
+    assert all(
+        r["action"] == mt.TRADE_ACTION_SLTP and r["tp"] > r["sl"] > 0
+        for r in mt.requests
     )
+    assert d.state["sends"] == [T] * 40
+    d.supervise()  # same tick: no duplicate amendments
+    assert len(mt.requests) == 44
 
 
-def test_definite_frozen_refusal_never_changes_local_protection_and_can_recheck(
-    hull_desk, monkeypatch
+@pytest.mark.parametrize(
+    "code, label",
+    [(10029, "TRADE_RETCODE_FROZEN"), (10024, "TRADE_RETCODE_TOO_MANY_REQUESTS")],
+)
+def test_definite_broker_refusal_never_changes_local_protection_and_can_recheck(
+    hull_desk, monkeypatch, code, label
 ):
     mt, d, log, p = filled(hull_desk)
     key = str(p.ticket)
     old = p.sl, p.tp
-    mt.TRADE_RETCODE_FROZEN = 10029
+    setattr(mt, label, code)
     original = mt.order_send
     mono = [50.0]
     monkeypatch.setattr("bot.hull.desk.time.monotonic", lambda: mono[0])
-    mt.order_send = lambda req: mt.requests.append(dict(req)) or NS(retcode=10029)
+    mt.order_send = lambda req: mt.requests.append(dict(req)) or NS(retcode=code)
     quote(mt, p, 7.1)
     d.supervise()
     assert len(mt.requests) == 1 and (p.sl, p.tp) == old

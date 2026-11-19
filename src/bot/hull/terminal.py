@@ -14,7 +14,7 @@ from pathlib import Path
 from bot.execution.demo_runner import DemoSafetyError, _account_order_lock
 from bot.zones.engine import Bar
 
-from .config import COUNTS, FRAMES, LADDER
+from .config import COUNTS, FRAMES, LADDER, RETIRED_LIMITS
 from .desk import Desk, identity_check, resolve
 from .entry_clock import QUOTE_POLICY, WAITING, poll_delay, utc
 from .ladder import cash_levels
@@ -316,6 +316,7 @@ def run(
             **source_build(),
             "specs": specs,
             "limits": limits.model_dump(),
+            "retired_limits": list(RETIRED_LIMITS),
             "indicator": h.indicator.model_dump(),
         }
         if preflight:
@@ -326,6 +327,28 @@ def run(
             summary["pending_orders"] = len(os)
             summary["history_check"] = {}
             issues = []
+            legacy = [k for k in RETIRED_LIMITS if k in cfg["hull"].get("limits", {})]
+            if legacy:
+                issues.append(
+                    "Retired Hull limits ignored in this config: " + ", ".join(legacy)
+                )
+            # An ignored local demo YAML is a full config, not an overlay on main.
+            # Surface opt-ins so a stale copy is visible before arming.
+            optional = [
+                f"{key}={summary['limits'][key]:g}"
+                for key in (
+                    "max_positions",
+                    "max_total_lots",
+                    "max_open_risk_usd",
+                    "min_free_margin_pct",
+                )
+                if summary["limits"][key]
+            ]
+            if optional:
+                issues.append(
+                    "Optional Hull entry limits enabled in this config; confirm intended: "
+                    + ", ".join(optional)
+                )
             for name, (_, p) in syms.items():
                 checks = {}
                 for tf in frames:
@@ -390,7 +413,7 @@ def run(
             while iterations is None or num < iterations:
                 num += 1
                 now = time.time()
-                d.mark(d.account(), now)
+                d.account()  # identity, permissions and valid equity, even on quiet polls
                 d.supervise()
                 if armed and now - sync >= 15:
                     history_ok = sync_deals(d, now)
