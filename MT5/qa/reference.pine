@@ -1,0 +1,483 @@
+//@version=6
+indicator("FC Hull Either 16 · Market Structure Suggestions", shorttitle="FC Struct", overlay=true, max_bars_back=2100, max_lines_count=300, max_labels_count=300)
+
+// Standalone chart study, not an MT5 connection. Native chart candles only.
+// Structure: internal_structure_v1. Suggestions commit at the signal close; a
+// subsequent chart-open check can cancel a plan, never erase or backdate a label.
+// Flat/busy uses one simulated chart position, not MT5 tickets or their 70/30 ladder.
+const string G_VIEW = "1 · Suggestions and alerts"
+const string G_HULL = "2 · Hull signal"
+const string G_STRUCT = "3 · Confirmed market structure"
+const string G_FILTER = "4 · Chart entry filters"
+const string G_RISK = "5 · Chart stops and exits"
+const string G_MONEY = "6 · Chart account and costs"
+const string G_PLAN = "7 · Chart plans and statistics"
+
+string labelMode = input.string("Valid suggestions only", "Labels and alerts", options=["Valid suggestions only", "Structure-qualified crosses", "Simulated fills only", "All Hull crosses (debug)"], group=G_VIEW, tooltip="Valid: a fresh cross in its confirmed band at the close, with a legal stop and an available chart position. Same-side repeats are hidden while that simulated trade is open; a fresh cross after it closes can qualify in the same band. Structure-qualified: test structure only. Fills: recheck the frozen band at the next chart open; mark the fill candle when it closes. Raw: diagnostics only. This setting changes the display and alerts, not the simulation.")
+bool showCross = input.bool(true, "Show signal labels", group=G_VIEW, tooltip="Hides the marks only. The two alert conditions still use the chosen Labels and alerts setting.")
+bool showBands = input.bool(false, "Draw active BUY and SELL bands", group=G_VIEW, tooltip="Green = allowed BUY area, red = allowed SELL area. After a continuation BOS the old broken level is excluded on the countertrend band. No band = no structure-qualified suggestion.")
+int hullLen = input.int(16, "Hull length", minval=2, maxval=500, group=G_HULL)
+string sourceMode = input.string("Either source", "Signal source mode", options=["Either source", "Directional", "Low only", "High only"], group=G_HULL, tooltip="Either: a strict cross of the Low or High Hull A. Same-direction crosses on one close count once. Opposed crosses on the same close produce no signal.")
+bool alternateOnly = input.bool(false, "Require selected BUY and SELL crosses to alternate", group=G_HULL, tooltip="Leave off for the bot's rule: a later fresh same-side cross can qualify once flat. This optional filter operates on crosses, not on filled positions.")
+bool showChannel = input.bool(true, "Show High and Low Hull A lines", group=G_HULL)
+bool channelFill = input.bool(true, "Shade channel by last displayed signal", group=G_HULL)
+int swingLen = input.int(3, "Confirmed swing: bars on EACH side", minval=1, maxval=100, group=G_STRUCT, tooltip="Bot default: 3 left + 3 right. No pivot or earlier signal is drawn back onto the pivot candle.")
+bool allowLong = input.bool(true, "Allow BUY suggestions and chart longs", group=G_FILTER)
+bool allowShort = input.bool(true, "Allow SELL suggestions and chart shorts", group=G_FILTER)
+bool useEma = input.bool(false, "Also require EMA trend for entries", group=G_FILTER, tooltip="Off matches the bot's labels mode. When on, BUY above / SELL below the EMA. Market structure is always required for chart entries.")
+int emaLength = input.int(200, "EMA length", minval=1, maxval=2000, group=G_FILTER)
+bool showEma = input.bool(true, "Plot EMA when filter is enabled", group=G_FILTER)
+string stopMode = input.string("Local pullback (bot)", "Chart stop anchor", options=["Local pullback (bot)", "Confirmed pivot (original chart)"], group=G_RISK)
+int pullbackBars = input.int(7, "Local pullback: prior bars", minval=1, maxval=100, group=G_RISK, tooltip="Exclude the signal bar. Do not look farther back than the last selected opposite cross.")
+int atrLength = input.int(14, "Wilder ATR length", minval=1, maxval=500, group=G_RISK)
+float atrBuffer = input.float(0.1, "Stop buffer × ATR", minval=0, maxval=100, step=0.05, group=G_RISK)
+float pipSize = input.float(0.01, "Pip size in price units", minval=0.00000001, maxval=1000, step=0.00001, group=G_RISK)
+float extraPips = input.float(0.0, "Extra stop buffer (pips)", minval=0, maxval=100000, step=0.5, group=G_RISK)
+float targetR = input.float(1.5, "Target R multiple", minval=0.1, maxval=100, step=0.1, group=G_RISK, tooltip="Chart target only: measured from the signal CLOSE to its stop. This single-position simulation cannot see MT5 tickets and does not model the bot’s per-ticket 70/30 exits.")
+bool exitOpposite = input.bool(true, "Exit chart trade on a selected opposite", group=G_RISK, tooltip="An opposite with a valid stop and optional EMA can close the old position without itself passing structure. A replacement needs all entry checks. Old exits execute first at the next chart open.")
+
+float initialCapital = input.float(10000.0, "Initial capital", minval=0.01, maxval=1000000000, step=100, group=G_MONEY)
+float equityPercent = input.float(10.0, "Position value (% of equity)", minval=0.01, maxval=100, step=1, group=G_MONEY, tooltip="Not percent at risk. Units = allocated equity / (entry price × point value).")
+float commissionPercent = input.float(0.0, "Commission per side (%)", minval=0, maxval=10, step=0.01, group=G_MONEY)
+int slippageTicks = input.int(0, "Adverse slippage (ticks)", minval=0, maxval=10000, group=G_MONEY)
+float tickSize = input.float(0.01, "Tick size for slippage", minval=0.00000001, maxval=1000, step=0.00001, group=G_MONEY)
+float pointValue = input.float(1.0, "Value of one price unit per simulated unit", minval=0.000001, maxval=1000000, step=0.01, group=G_MONEY)
+
+bool showPlan = input.bool(false, "Draw filled chart plans (entry / SL / TP)", group=G_PLAN)
+int planLength = input.int(15, "Plan line length (bars)", minval=3, maxval=200, group=G_PLAN)
+int maxPlans = input.int(40, "Most recent plans to keep", minval=1, maxval=100, group=G_PLAN)
+bool showTable = input.bool(true, "Show simulation table", group=G_PLAN)
+string tableLocation = input.string("top_right", "Table corner", options=["top_right", "top_left", "bottom_right", "bottom_left"], group=G_PLAN)
+
+// Compute on every bar. Zero filling is ONLY for the inner calculation; a
+// WMA result is withheld until its entire consecutive input window is valid.
+f_wma(float x, simple int n) =>
+    float weighted = ta.wma(nz(x, 0.0), n)
+    float available = math.sum(na(x) ? 0.0 : 1.0, n)
+    available == n ? weighted : na
+
+f_hull_a(float x, simple int n, simple int h, simple int r) =>
+    float fast = f_wma(x, h)
+    float slow = f_wma(x, n)
+    f_wma(2.0 * fast - slow, r)
+
+int halfLen = math.max(1, math.floor(hullLen / 2.0))
+int rootLen = math.max(1, math.round(math.sqrt(hullLen)))
+int thirdLen = math.max(1, math.floor(halfLen / 3.0))
+int halfHalf = math.max(1, math.floor(halfLen / 2.0))
+
+float bFast = f_wma(close, thirdLen)
+float bMid = f_wma(close, halfHalf)
+float bSlow = f_wma(close, halfLen)
+float b = f_wma(3.0 * bFast - bMid - bSlow, halfLen)
+float channelHi = f_hull_a(high, hullLen, halfLen, rootLen)
+float channelLo = f_hull_a(low, hullLen, halfLen, rootLen)
+// Free Chart delegates EMA seeding to its platform helper. Make the convention
+// explicit here: start at the first available close, then use alpha = 2/(N+1).
+float alpha = 2.0 / (emaLength + 1.0)
+var float ema = na
+ema := na(ema[1]) ? close : ema[1] + alpha * (close - ema[1])
+float atr = ta.atr(atrLength)
+
+// Evaluate both baselines every bar. Do not switch a single WMA's input or
+// compare B[1] to a different baseline than B: that can manufacture a cross.
+bool lowReady = not na(channelLo) and not na(channelLo[1]) and not na(b) and not na(b[1])
+bool highReady = not na(channelHi) and not na(channelHi[1]) and not na(b) and not na(b[1])
+// Match FC Hull exactly: equality at this or the previous close is not a crossover.
+bool lowBuy = barstate.isconfirmed and lowReady and b > channelLo and b[1] < channelLo[1]
+bool lowSell = barstate.isconfirmed and lowReady and b < channelLo and b[1] > channelLo[1]
+bool highBuy = barstate.isconfirmed and highReady and b > channelHi and b[1] < channelHi[1]
+bool highSell = barstate.isconfirmed and highReady and b < channelHi and b[1] > channelHi[1]
+
+bool buyCandidate = switch sourceMode
+    "High only" => highBuy
+    "Either source" => lowBuy or highBuy
+    => lowBuy
+bool sellCandidate = switch sourceMode
+    "Low only" => lowSell
+    "Either source" => lowSell or highSell
+    => highSell
+bool conflict = buyCandidate and sellCandidate
+int candidate = conflict ? 0 : buyCandidate ? 1 : sellCandidate ? -1 : 0
+var int lastSignal = 0
+var int buyLabels = 0
+var int sellLabels = 0
+var int conflicts = 0
+var int repeats = 0
+bool repeatSkipped = alternateOnly and candidate != 0 and candidate == lastSignal
+bool rawBuy = candidate == 1 and not repeatSkipped
+bool rawSell = candidate == -1 and not repeatSkipped
+if rawBuy
+    lastSignal := 1
+    buyLabels += 1
+else if rawSell
+    lastSignal := -1
+    sellLabels += 1
+else if conflict
+    conflicts += 1
+else if repeatSkipped
+    repeats += 1
+
+// Window [i-2s, i] with candidate i-s. An equal older extreme is OK;
+// an equal NEWER extreme wins instead. No lookahead or pivot backdating.
+float rightLow = ta.lowest(low, swingLen)
+float rightHigh = ta.highest(high, swingLen)
+float candidateLow = low[swingLen]
+float candidateHigh = high[swingLen]
+bool pivotLow = bar_index >= 2 * swingLen and candidateLow <= rightLow[swingLen + 1] and candidateLow < rightLow
+bool pivotHigh = bar_index >= 2 * swingLen and candidateHigh >= rightHigh[swingLen + 1] and candidateHigh > rightHigh
+
+f_price(float x) => str.tostring(x, format.mintick)
+f_num(float x) => na(x) ? "—" : str.tostring(x, "0.00")
+
+f_level(array<line> lines, array<label> tags, int x1, int x2, float price, string caption, color ink, string stroke) =>
+    line ln = line.new(x1, price, x2, price, xloc=xloc.bar_index, color=ink, style=stroke, width=1)
+    label tag = label.new(x2, price, caption + " " + f_price(price), xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_left, color=ink, textcolor=color.white, size=size.tiny)
+    array.push(lines, ln)
+    array.push(tags, tag)
+
+// internal_structure_v1: 0 none, 1 seed/context only, 2 CHoCH, 3 continuation BOS.
+// Important order: break OLD levels first -> admit newly confirmed pivots ->
+// publish those pivots as "known" for the next bar. Newest equal wick wins.
+var float knownH = na
+var float knownL = na
+var int bias = 0
+var int eventKind = 0
+var float broken = na
+var float origin = na
+var float extreme = na
+var int extremeBar = na
+var float reaction = na
+var float runTip = na
+var int runTipBar = na
+int pivotBar = bar_index - swingLen
+if barstate.isconfirmed
+    int nextSide = 0
+    int nextKind = 0
+    float nextBroken = na
+    float nextOrigin = na
+    if not na(knownH) and not na(knownL)
+        if bias == 0
+            if close > knownH or close < knownL
+                nextSide := close > knownH ? 1 : -1
+                nextKind := 1
+                nextBroken := nextSide == 1 ? knownH : knownL
+                nextOrigin := nextSide == 1 ? knownL : knownH
+        else
+            float guard = not na(reaction) ? reaction : origin
+            if not na(guard) and bias * (close - guard) < 0
+                nextSide := -bias
+                nextKind := 2
+                nextBroken := guard
+                nextOrigin := bias == 1 ? (pivotHigh ? candidateHigh : knownH) : (pivotLow ? candidateLow : knownL)
+            else if not na(extreme) and bias * (close - extreme) > 0
+                if not na(reaction)
+                    nextSide := bias
+                    nextKind := 3
+                    nextBroken := extreme
+                    nextOrigin := reaction
+                else
+                    // Extension before a later HL/LH: same impulse, not a BOS.
+                    extreme := na
+                    extremeBar := na
+                    runTip := na
+                    runTipBar := na
+    if nextKind != 0
+        bias := nextSide
+        eventKind := nextKind
+        broken := nextBroken
+        origin := nextOrigin
+        extreme := na
+        extremeBar := na
+        reaction := na
+        runTip := na
+        runTipBar := na
+    bool tipPivot = bias == 1 ? pivotHigh : pivotLow
+    bool backPivot = bias == 1 ? pivotLow : pivotHigh
+    float tipPx = bias == 1 ? candidateHigh : candidateLow
+    float backPx = bias == 1 ? candidateLow : candidateHigh
+    if eventKind == 1 and backPivot
+        origin := backPx
+    else if eventKind >= 2
+        if na(extreme)
+            float wick = bias == 1 ? high : low
+            if na(runTip) or bias * (wick - runTip) >= 0
+                runTip := wick
+                runTipBar := bar_index
+            if tipPivot and pivotBar == runTipBar and bias * (tipPx - broken) > 0
+                extreme := tipPx
+                extremeBar := pivotBar
+        if not na(extreme) and na(reaction) and backPivot and pivotBar > extremeBar and bias * (backPx - origin) > 0 and bias * (extreme - backPx) > 0
+            reaction := backPx
+    if pivotHigh
+        knownH := candidateHigh
+    if pivotLow
+        knownL := candidateLow
+
+bool trendReady = eventKind >= 2 and not na(extreme) and not na(reaction)
+bool fadeReady = eventKind == 3 and not na(extreme) and not na(broken)
+float mid = trendReady ? (extreme + reaction) / 2.0 : na
+// BUY trend: [HL, midpoint]. BUY counter: [new LL, old broken LL).
+// SELL trend: [midpoint, LH]. SELL counter: (old broken HH, new HH].
+float buyLo = bias == 1 and trendReady ? reaction : bias == -1 and fadeReady ? extreme : na
+float buyHi = bias == 1 and trendReady ? mid : bias == -1 and fadeReady ? broken : na
+float sellLo = bias == -1 and trendReady ? mid : bias == 1 and fadeReady ? broken : na
+float sellHi = bias == -1 and trendReady ? reaction : bias == 1 and fadeReady ? extreme : na
+bool strictBuyHi = bias == -1 and fadeReady
+bool strictSellLo = bias == 1 and fadeReady
+f_inside(float px, float lo, float hi, bool openLo, bool openHi) =>
+    not na(px) and not na(lo) and not na(hi) and (openLo ? px > lo : px >= lo) and (openHi ? px < hi : px <= hi)
+
+int selected = rawBuy ? 1 : rawSell ? -1 : 0
+bool insideBuy = f_inside(close, buyLo, buyHi, false, strictBuyHi)
+bool insideSell = f_inside(close, sellLo, sellHi, strictSellLo, false)
+int structureSide = rawBuy and insideBuy ? 1 : rawSell and insideSell ? -1 : 0
+
+// Independent of structure: freeze the selected stop anchor on THIS close.
+var int lastBuyBar = na
+var int lastSellBar = na
+float anchorPx = na
+if selected != 0
+    if stopMode == "Confirmed pivot (original chart)"
+        anchorPx := rawBuy ? knownL : knownH
+    else
+        int since = rawBuy ? lastSellBar : lastBuyBar
+        for k = 1 to pullbackBars
+            if bar_index >= k and (na(since) or bar_index - k >= since)
+                float w = rawBuy ? low[k] : high[k]
+                anchorPx := na(anchorPx) ? w : rawBuy ? math.min(anchorPx, w) : math.max(anchorPx, w)
+    if rawBuy
+        lastBuyBar := bar_index
+    else
+        lastSellBar := bar_index
+float rawSL = anchorPx - selected * (atrBuffer * atr + extraPips * pipSize)
+bool stopOK = selected != 0 and not na(rawSL) and rawSL > 0 and selected * (close - rawSL) > 0
+bool emaOK = not useEma or (not na(ema) and selected * (close - ema) > 0)
+bool exitGrade = stopOK and emaOK
+float stopPlan = rawSL
+if stopOK and stopMode == "Local pullback (bot)"
+    // Outward rounding to the chart's trade tick; no hidden spread buffer.
+    stopPlan := (rawBuy ? math.floor(rawSL / syminfo.mintick + 1e-9) : math.ceil(rawSL / syminfo.mintick - 1e-9)) * syminfo.mintick
+
+var array<line> planLines = array.new<line>()
+var array<label> planTags = array.new<label>()
+var int pendingSide = 0
+var float pendingSL = na
+var float pendingTP = na
+var float pendingLo = na
+var float pendingHi = na
+var bool pendingOpenLo = false
+var bool pendingOpenHi = false
+var int pendingAt = na
+var int side = 0
+var float entry = na
+var float stop = na
+var float target = na
+var float units = 0.0
+var float entryFee = 0.0
+var bool closeNext = false
+var float cash = initialCapital
+var float peak = initialCapital
+var float maxDD = 0.0
+var float totalNet = 0.0
+var float grossWin = 0.0
+var float grossLoss = 0.0
+var int wins = 0
+var int losses = 0
+var int flats = 0
+var int structureCount = 0
+var int suggestionCount = 0
+var int fillCount = 0
+var int openVetoCount = 0
+var string lastDecision = "Waiting for a cross"
+float feeRate = commissionPercent / 100.0
+float slip = slippageTicks * tickSize
+int suggestion = 0
+int filledSide = 0
+int maybeCloseTie = 0
+
+// Single-position chart proxy. Phase 0: prior position's opening gap/queued exit.
+// Phase 1: try the prior close's plan ONCE at this open, then process bar range.
+// Do not use this bar's high, low or new structural levels to admit an open fill.
+if barstate.isconfirmed
+    for phase = 0 to 1
+        if phase == 1 and pendingSide != 0
+            float px = open + pendingSide * slip
+            bool nextBar = not na(pendingAt) and time == pendingAt
+            bool frozenOK = f_inside(px, pendingLo, pendingHi, pendingOpenLo, pendingOpenHi)
+            bool bracketOK = pendingSide * (open - pendingSL) > 0 and pendingSide * (px - pendingSL) > 0 and pendingSide * (pendingTP - px) > 0
+            float qty = px > 0 ? math.max(0.0, cash * equityPercent / 100.0) / (px * pointValue) : 0.0
+            if side == 0 and nextBar and frozenOK and bracketOK and qty > 0
+                side := pendingSide
+                filledSide := side
+                fillCount += 1
+                entry := px
+                stop := pendingSL
+                target := pendingTP
+                units := qty
+                entryFee := math.abs(px * qty * pointValue) * feeRate
+                cash -= entryFee
+                if showPlan
+                    if array.size(planLines) >= 3 * maxPlans
+                        for k = 0 to 2
+                            line.delete(array.shift(planLines))
+                            label.delete(array.shift(planTags))
+                    int endBar = bar_index + planLength
+                    f_level(planLines, planTags, bar_index, endBar, entry, "Sim entry", #808080, line.style_dotted)
+                    f_level(planLines, planTags, bar_index, endBar, stop, "SL", #EF4444, line.style_dashed)
+                    f_level(planLines, planTags, bar_index, endBar, target, "TP", #16A34A, line.style_dashed)
+            else
+                openVetoCount += 1
+                lastDecision := not nextBar ? "Open veto: missing next bar" : not frozenOK ? "Open veto: left frozen band" : "Open veto: bracket/size/busy"
+            pendingSide := 0
+            pendingSL := na
+            pendingTP := na
+            pendingLo := na
+            pendingHi := na
+            pendingAt := na
+        if side != 0
+            bool isLong = side == 1
+            float rawExit = na
+            bool withSlip = false
+            if phase == 0
+                bool gapStop = isLong ? open <= stop : open >= stop
+                bool gapTarget = isLong ? open >= target : open <= target
+                if gapStop or gapTarget or closeNext
+                    rawExit := open
+                    withSlip := gapStop or not gapTarget
+            else
+                bool hitStop = isLong ? low <= stop : high >= stop
+                bool hitTarget = isLong ? high >= target : low <= target
+                if hitStop or hitTarget
+                    rawExit := hitStop ? stop : target
+                    withSlip := hitStop  // both touched: adverse barrier first
+                    bool endedAtExtreme = hitStop ? (isLong ? close == low : close == high) : (isLong ? close == high : close == low)
+                    if endedAtExtreme
+                        maybeCloseTie := side  // OHLC cannot prove the exit preceded this signal close
+            if not na(rawExit)
+                float exitPx = rawExit - side * (withSlip ? slip : 0.0)
+                float move = side * (exitPx - entry) * units * pointValue
+                float exitFee = math.abs(exitPx * units * pointValue) * feeRate
+                float pnl = move - entryFee - exitFee
+                cash += move - exitFee
+                totalNet += pnl
+                if pnl > 1e-9
+                    wins += 1
+                    grossWin += pnl
+                else if pnl < -1e-9
+                    losses += 1
+                    grossLoss -= pnl
+                else
+                    flats += 1
+                side := 0
+                entry := na
+                stop := na
+                target := na
+                units := 0.0
+                entryFee := 0.0
+    // A qualified opposite may conditionally reverse, but the old exit is
+    // independent of permission to enter. A repeat in an open trade never queues.
+    closeNext := exitOpposite and side != 0 and selected == -side and exitGrade
+    bool slotOK = (side == 0 or closeNext) and selected != maybeCloseTie
+    bool sideAllowed = rawBuy ? allowLong : allowShort
+    if structureSide != 0
+        structureCount += 1
+    if selected != 0
+        if structureSide == 0
+            lastDecision := "Rejected: structure / price"
+        else if not sideAllowed or not emaOK
+            lastDecision := "Rejected: direction / EMA"
+        else if not stopOK or stopPlan <= 0
+            lastDecision := "Rejected: no valid stop"
+        else if not slotOK or pendingSide != 0
+            lastDecision := "Rejected: chart position busy"
+        else if cash <= 0
+            lastDecision := "Rejected: no chart capital"
+        else
+            suggestion := selected
+            suggestionCount += 1
+            pendingSide := selected
+            pendingSL := stopPlan
+            pendingTP := close + (close - stopPlan) * targetR
+            pendingLo := rawBuy ? buyLo : sellLo
+            pendingHi := rawBuy ? buyHi : sellHi
+            pendingOpenLo := rawSell and strictSellLo
+            pendingOpenHi := rawBuy and strictBuyHi
+            pendingAt := time_close
+            lastDecision := rawBuy ? (bias == 1 ? "BUY: bull discount" : "BUY: below bear BOS") : (bias == -1 ? "SELL: bear premium" : "SELL: above bull BOS")
+    else if conflict
+        lastDecision := "Rejected: conflicting crosses"
+    else if repeatSkipped
+        lastDecision := "Rejected: alternation setting"
+    float marked = cash + (side == 0 ? 0.0 : (close - entry) * side * units * pointValue)
+    peak := math.max(peak, marked)
+    maxDD := math.max(maxDD, peak - marked)
+
+// The view controls BOTH BUY/SELL marks and the two selectable alert conditions.
+// It cannot change structural state, plan eligibility, exits, or what gets filled.
+int displaySide = switch labelMode
+    "Structure-qualified crosses" => structureSide
+    "Simulated fills only" => filledSide
+    "All Hull crosses (debug)" => selected
+    => suggestion
+var int lastDisplay = 0
+if displaySide != 0
+    lastDisplay := displaySide
+color stateInk = lastDisplay == 1 ? #15803D : lastDisplay == -1 ? #C6354C : #64748B
+plot(b, "Hull B (close)", color=stateInk, linewidth=2, style=plot.style_linebr)
+ph = plot(showChannel ? channelHi : na, "Hull A (high)", color=#CE6374, style=plot.style_linebr)
+pl = plot(showChannel ? channelLo : na, "Hull A (low)", color=#269B83, style=plot.style_linebr)
+fill(ph, pl, color=showChannel and channelFill ? color.new(stateInk, 89) : na, title="Last displayed side", fillgaps=false)
+plot(useEma and showEma ? ema : na, "Optional chart EMA", color=#F59E0B, linewidth=2)
+bp1 = plot(showBands ? buyLo : na, "Active BUY band low", color=#259981, style=plot.style_linebr)
+bp2 = plot(showBands ? buyHi : na, "Active BUY band high", color=#259981, style=plot.style_linebr)
+sp1 = plot(showBands ? sellLo : na, "Active SELL band low", color=#C85866, style=plot.style_linebr)
+sp2 = plot(showBands ? sellHi : na, "Active SELL band high", color=#C85866, style=plot.style_linebr)
+fill(bp1, bp2, color=color.new(#259981, 90), title="BUY structure band", fillgaps=false)
+fill(sp1, sp2, color=color.new(#C85866, 90), title="SELL structure band", fillgaps=false)
+plotshape(showCross and displaySide == 1, title="BUY · selected view", style=shape.labelup, location=location.belowbar, color=#15803D, text="BUY", textcolor=color.white, size=size.tiny)
+plotshape(showCross and displaySide == -1, title="SELL · selected view", style=shape.labeldown, location=location.abovebar, color=#C6354C, text="SELL", textcolor=color.white, size=size.tiny)
+plotshape(showCross and labelMode == "All Hull crosses (debug)" and conflict, title="Debug: conflict (no signal)", style=shape.xcross, location=location.abovebar, color=#C47B12, size=size.tiny)
+alertcondition(displaySide == 1, title="Hull BUY · selected view", message="Hull BUY | {{ticker}} | {{interval}} | selected chart view | bar close {{close}}")
+alertcondition(displaySide == -1, title="Hull SELL · selected view", message="Hull SELL | {{ticker}} | {{interval}} | selected chart view | bar close {{close}}")
+plot(selected, "Raw cross (+1/-1/0)", display=display.data_window)
+plot(structureSide, "Structure pass at close (+1/-1/0)", display=display.data_window)
+plot(suggestion, "Valid chart suggestion (+1/-1/0)", display=display.data_window)
+plot(filledSide, "Next-open chart fill (+1/-1/0)", display=display.data_window)
+plot(conflict ? 1 : 0, "Source conflict", display=display.data_window)
+// Last confirmed simulation state. Closed-trade statistics do not liquidate an
+// open position at the right edge. Gross loss is tracked as a positive magnitude.
+int done = wins + losses + flats
+string corner = switch tableLocation
+    "top_left" => position.top_left
+    "bottom_right" => position.bottom_right
+    "bottom_left" => position.bottom_left
+    => position.top_right
+var table stats = table.new(corner, 2, 17, bgcolor=color.new(#0F172A, 8), frame_color=#475569, frame_width=1)
+f_row(table t, int row, string name, string value) =>
+    table.cell(t, 0, row, name, text_halign=text.align_left, text_color=row == 0 ? #FACC15 : #CBD5E1, text_size=size.small)
+    table.cell(t, 1, row, value, text_halign=text.align_right, text_color=color.white, text_size=size.small)
+
+if showTable and barstate.islast
+    float winRate = done > 0 ? 100.0 * wins / done : na
+    float pf = grossLoss > 0 ? grossWin / grossLoss : na
+    float avgWin = wins > 0 ? grossWin / wins : na
+    float avgLoss = losses > 0 ? -grossLoss / losses : na
+    f_row(stats, 0, "HULL · CHART SIM", syminfo.ticker)
+    f_row(stats, 1, "Trades · W/L/BE", str.tostring(done) + " · " + str.tostring(wins) + "/" + str.tostring(losses) + "/" + str.tostring(flats))
+    f_row(stats, 2, "Win rate", done > 0 ? f_num(winRate) + "%" : "—")
+    f_row(stats, 3, "Net / avg", f_num(totalNet) + " / " + f_num(done > 0 ? totalNet / done : na))
+    f_row(stats, 4, "PF / max DD", f_num(pf) + " / " + f_num(maxDD))
+    f_row(stats, 5, "Avg win / loss", f_num(avgWin) + " / " + f_num(avgLoss))
+    f_row(stats, 6, "Position", side == 1 ? "BUY open" : side == -1 ? "SELL open" : "Flat")
+    f_row(stats, 7, "SL / TP", side == 0 ? "—" : f_price(stop) + " / " + f_price(target))
+    f_row(stats, 8, "EMA / target R", (useEma ? str.tostring(emaLength) : "Off") + " / " + str.tostring(targetR))
+    f_row(stats, 9, "Pip size", str.tostring(pipSize, "0.########"))
+    f_row(stats, 10, "Mode / length", sourceMode + " / " + str.tostring(hullLen))
+    f_row(stats, 11, "Raw BUY / SELL", str.tostring(buyLabels) + " / " + str.tostring(sellLabels))
+    f_row(stats, 12, "Conflicts / alternate skips", str.tostring(conflicts) + " / " + str.tostring(repeats))
+    string phaseName = eventKind <= 1 ? "Context only" : na(extreme) ? (bias == 1 ? "Wait HH" : "Wait LL") : na(reaction) ? (fadeReady ? (bias == 1 ? "SELL band · wait HL" : "BUY band · wait LH") : (bias == 1 ? "Wait HL" : "Wait LH")) : (bias == 1 ? "Bull range" : "Bear range")
+    f_row(stats, 13, "Structure", (eventKind == 3 ? "BOS · " : eventKind == 2 ? "CHoCH · " : "") + phaseName)
+    f_row(stats, 14, "Structure / valid closes", str.tostring(structureCount) + " / " + str.tostring(suggestionCount))
+    f_row(stats, 15, "Chart fills / open vetoes", str.tostring(fillCount) + " / " + str.tostring(openVetoCount))
+    f_row(stats, 16, "Last decision", lastDecision)

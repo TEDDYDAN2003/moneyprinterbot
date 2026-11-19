@@ -3,3 +3,11 @@ src/bot/zones/*.py text eol=lf
 research/candle_retest/** text eol=lf
 src/bot/hull/*.py text eol=lf
 research/hull_labels/** text eol=lf
+
+# Keep the published read-only companions and portable fixtures reproducible.
+HullJournal/** text eol=lf
+HullJournal/Start-Journal.cmd text eol=crlf
+HullJournal/examples/*.csv text eol=crlf
+MT5/** text eol=lf
+indicators/FC-Hull-Either-16-Structure.pine text eol=lf
+downloads/*.zip binary

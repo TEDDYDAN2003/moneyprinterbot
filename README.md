@@ -15,6 +15,18 @@ HULL START XAUUSD:0.09:10:slow EURUSD:0.01:10:slow GBPUSD:0.01:10:slow
 
 `trio-slow` is an explicit shortcut for **only** those three profiles. It does not change `config.yaml` or add those symbols to other requests. Format: `SYMBOL:LOTS_PER_TICKET:TP_USD_PER_TICKET:RATE`. The current demo profiles request **10 tickets on slow** (not one), 3–4 on medium, and 6–7 on fast if the batch fits. Lot and TP are **per ticket**. For `trio-slow`, that means up to 0.90 lot on a gold signal or 0.10 lot on a selected FX signal, each with a $100 **initial** gross target across ten tickets. The general EURUSD/GBPUSD presets use **1.00 lot per ticket**; they are not the `trio-slow` shortcut.
 
+## Trade journal and chart indicators
+
+**[Download the Windows journal and MT5 indicator kit](downloads/Hull-Ledger-Analytics-and-MT5.zip).** Neither tool places orders or changes how the scanner trades.
+
+| Tool | Start here | What it shows |
+|---|---|---|
+| Hull Ledger | [Windows setup and upgrade guide](HullJournal/START-HERE.md) · [Offline dashboard](HullJournal/Hull-Journal.html) | Actual closed MT5 demo tickets and completed setups. Filter by symbol, timeframe, trading session, entry reason or exit reason; compare gross P/L, costs and net. The HTML sample is synthetic. |
+| MT5 chart indicator | [MQL5 source](MT5/FC-Hull-Either-16-Structure.mq5) · [Install and compile in MetaEditor](MT5/INSTALL-MT5.md) | Structure-filtered Either 16 suggestions and **simulated** chart fills. Install under `MQL5/Indicators`, not `Experts`. |
+| TradingView chart indicator | [Pine v6 source](indicators/FC-Hull-Either-16-Structure.pine) | Defaults to **Valid suggestions only**. The separate [raw-cross indicator](indicators/FC-Hull-Either-16-v2.pine) is still available for comparison. |
+
+Upgrading the journal? Preserve its existing `data` folder or point the new reporter at it with `--out`. You do **not** need to restart or arm the trading bot.
+
 ## Standing instructions for the desktop agent
 
 **On every start, restart, profile change or arming request, first open/read `docs/Hull-demo-start.html` in this checkout and follow this README.** If you cannot render the page, read its source; if it or the Hull CLI is missing, stop and get the updated checkout. Use the operator’s pasted selection, **not** whichever boxes are checked by default on a freshly opened page. The page formats text only; it cannot connect to MT5 or start a process.

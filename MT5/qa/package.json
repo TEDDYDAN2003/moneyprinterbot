@@ -1,0 +1,8 @@
+{
+  "name": "fc-hull-port-check",
+  "version": "1.0.0",
+  "private": true,
+  "devDependencies": {
+    "pinets": "0.13.1"
+  }
+}

@@ -1,6 +1,6 @@
 # Which Hull suggestions can open a position?
 
-**A closed Hull cross is a label. It is not automatically an entry.** The Python scanner, read-only observer and ordered-quote replay apply the same `internal_structure_v1` entry rules. Each symbol has independent M1, M2 and M5 structure. A level on M5 does not qualify an M1 label. This is not a change to the chart indicator, position sizing or exit policy.
+**A closed Hull cross is a label. It is not automatically an entry.** The Python scanner, read-only observer and ordered-quote replay apply the same `internal_structure_v1` entry rules. Each symbol has independent M1, M2 and M5 structure. A level on M5 does not qualify an M1 label. Position sizing and exit policy are independent of this entry filter. The [TradingView](../indicators/FC-Hull-Either-16-Structure.pine) and [MT5](../MT5/INSTALL-MT5.md) chart studies apply the structure rules to chart candles; their simulated position is not a broker ticket. Use [Hull Ledger](../HullJournal/START-HERE.md) to review actual closed demo trades.
 
 | Confirmed structure on the signal timeframe | Required fresh Hull label | Allowed price, at signal close and at the executable quote |
 |---|---|---|

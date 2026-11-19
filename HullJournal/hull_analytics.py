@@ -1,0 +1,52 @@
+"""Stable journal dimensions. A session is an analytical FX window, not an exchange calendar."""
+
+from datetime import UTC, datetime
+from functools import lru_cache
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+# Local wall-clock hours, Mon-Fri, start inclusive/end exclusive. Order fixes overlap bucket names.
+SESSIONS = (
+    ("Sydney", "Australia/Sydney", 8, 17),
+    ("Tokyo", "Asia/Tokyo", 9, 18),
+    ("London", "Europe/London", 8, 17),
+    ("New York", "America/New_York", 8, 17),
+)
+REASON_LABELS = {
+    "bull_discount_buy": "BUY · bullish discount",
+    "bear_premium_sell": "SELL · bearish premium",
+    "buy_below_bear_bos": "BUY · below bearish BOS",
+    "sell_above_bull_bos": "SELL · above bullish BOS",
+}
+REASON_NOTES = {
+    "bull_discount_buy": "The confirmed bullish swing range allowed a BUY between the higher low and the midpoint.",
+    "bear_premium_sell": "The confirmed bearish swing range allowed a SELL between the midpoint and the lower high.",
+    "buy_below_bear_bos": "After a bearish continuation break and a confirmed new low, the BUY closed below the broken low inside the countertrend band.",
+    "sell_above_bull_bos": "After a bullish continuation break and a confirmed new high, the SELL closed above the broken high inside the countertrend band.",
+}
+
+
+def entry_reason(model):
+    if not model:
+        return "Not recorded"
+    return REASON_LABELS.get(model, "Recorded: " + model.replace("_", " "))
+
+
+@lru_cache(maxsize=100_000)
+def session_minute(utc_minute):
+    ts = datetime.fromtimestamp(utc_minute * 60, UTC)
+    names = []
+    try:
+        for name, zone, first, last in SESSIONS:
+            local = ts.astimezone(ZoneInfo(zone))
+            if local.weekday() < 5 and first <= local.hour < last:
+                names.append(name)
+    except ZoneInfoNotFoundError:
+        return "Timezone data unavailable"
+    return " + ".join(names) if names else "Off-session"
+
+
+def add_dimensions(row):
+    row["entry_reason"] = entry_reason(row["setup_type"])
+    for key in ("open", "close"):
+        when = datetime.fromisoformat(row[key + "_time_utc"])
+        row[key + "_session"] = session_minute(int(when.timestamp()) // 60)

@@ -1,0 +1,8 @@
+# Private reporter state and exports; only explicitly synthetic CSVs belong in Git.
+data/
+*.sqlite3*
+*.tmp
+writer.lock
+*.csv
+!examples/tickets.csv
+!examples/setups.csv

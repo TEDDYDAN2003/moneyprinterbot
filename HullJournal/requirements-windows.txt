@@ -1,0 +1,6 @@
+# The journal otherwise uses only the Python 3.11+ standard library.
+# Prefer the MT5 package already installed in your working bot environment.
+MetaTrader5; platform_system == 'Windows'
+
+# IANA timezone rules (including DST) for session columns on Windows.
+tzdata; platform_system == 'Windows'
