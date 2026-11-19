@@ -78,7 +78,7 @@ Review that report again, including the account, all symbol specs, batch risk an
 & $python -m bot.cli trade-all --config config.demo.local.yaml --arm-demo @profiles
 ```
 
-The local demo config must set `run.mode: demo`. The scanner refuses live, contest and netting accounts. Never reuse stale arming approval for changed profiles, resize lots or start a second scanner for the same account.
+The local demo config must set `run.mode: demo` and define every key in `$profiles` under `hull.symbols`; this ignored file can lag `config.yaml`, causing `Unknown or repeated symbol key`. Copy only the missing Hull symbol entries from `config.yaml` while preserving terminal, account and other local settings. Validate and preflight with the exact profiles before arming. The scanner refuses live, contest and netting accounts. Never reuse stale arming approval for changed profiles, resize lots or start a second scanner for the same account.
 
 For ladder-enabled profiles, report preflight's per-ticket ladder preview rather than replacing it with an assumed total.
 
