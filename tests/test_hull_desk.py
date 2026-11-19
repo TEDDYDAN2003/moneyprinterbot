@@ -216,13 +216,23 @@ def test_final_quote_changed_between_precheck_and_send(hull_desk):
     assert d.batch("XAUUSDm", sig()) == "quote_or_plan_changed" and not mt.requests
 
 
+@pytest.mark.parametrize(
+    "explicit", [False, True], ids=["defaults", "older-local-config"]
+)
 def test_preflight_resolves_only_requested_symbols_and_never_sends(
-    tmp_path, monkeypatch, capsys
+    tmp_path, monkeypatch, capsys, explicit
 ):
     import sys
 
     mt = MT()
     cfg = load_yaml(ROOT / "config.yaml")
+    if explicit:
+        cfg["hull"]["limits"].update(
+            max_positions=60,
+            max_total_lots=54,
+            max_open_risk_usd=1000,
+            min_free_margin_pct=60,
+        )
     h = HullConfig.model_validate(cfg["hull"])
     mt.copy_rates_from_pos = lambda *args: []
     mt.initialize = lambda: True
@@ -236,6 +246,24 @@ def test_preflight_resolves_only_requested_symbols_and_never_sends(
         and not mt.requests
     )
     assert answer["mode"] == "READ ONLY" and not list(tmp_path.glob("reports/*"))
+    assert answer["limits"] == h.limits.model_dump()
+    notices = [
+        msg
+        for msg in answer["review_before_demo"]
+        if "Optional Hull entry limits" in msg
+    ]
+    if explicit:
+        assert len(notices) == 1 and all(
+            f"{k}={v}" in notices[0]
+            for k, v in (
+                ("max_positions", 60),
+                ("max_total_lots", 54),
+                ("max_open_risk_usd", 1000),
+                ("min_free_margin_pct", 60),
+            )
+        )
+    else:
+        assert not notices
 
 
 def test_drawdown_halt_blocks_new_batch_without_resetting_swing(hull_desk):

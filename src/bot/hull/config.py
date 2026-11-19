@@ -44,12 +44,14 @@ class Profile(Strict):
 
 
 class Limits(Strict):
-    max_positions: int = Field(60, ge=1, le=100)
-    max_total_lots: float = Field(54.0, gt=0)
-    max_open_risk_usd: float = Field(1000.0, gt=0)
+    # None = no discretionary cap. Explicit older/local values remain binding.
+    max_positions: int | None = Field(None, ge=1, le=100)
+    max_total_lots: float | None = Field(None, gt=0)
+    max_open_risk_usd: float | None = Field(None, gt=0)
     daily_loss_usd: float = Field(0.0, ge=0)
     drawdown_usd: float = Field(75.0, gt=0)
-    min_free_margin_pct: float = Field(60.0, gt=0, le=100)
+    # Minimum free margin after funding, as a percentage of current equity.
+    min_free_margin_pct: float = Field(0.0, ge=0, le=100)
     max_orders_minute: int = Field(40, ge=1, le=200)
     max_quote_age_s: float = Field(4.0, gt=0, le=15)
     max_entry_age_s: float = Field(8.0, gt=0, le=30)

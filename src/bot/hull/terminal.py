@@ -326,6 +326,23 @@ def run(
             summary["pending_orders"] = len(os)
             summary["history_check"] = {}
             issues = []
+            # An ignored local demo YAML is a full config, not an overlay on main.
+            # Surface opt-ins so a stale copy is visible before arming.
+            optional = [
+                f"{key}={summary['limits'][key]:g}"
+                for key in (
+                    "max_positions",
+                    "max_total_lots",
+                    "max_open_risk_usd",
+                    "min_free_margin_pct",
+                )
+                if summary["limits"][key]
+            ]
+            if optional:
+                issues.append(
+                    "Optional Hull entry limits enabled in this config; confirm intended: "
+                    + ", ".join(optional)
+                )
             for name, (_, p) in syms.items():
                 checks = {}
                 for tf in frames:

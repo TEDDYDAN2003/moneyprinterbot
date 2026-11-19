@@ -150,11 +150,17 @@ class Exposure:
 
 
 def room(lim, e, p, n):
-    if e.count + n > lim.max_positions:
+    if lim.max_positions is not None and e.count + n > lim.max_positions:
         return "portfolio_position_limit"
-    if e.lots + n * p.lots > lim.max_total_lots + 1e-8:
+    if (
+        lim.max_total_lots is not None
+        and e.lots + n * p.lots > lim.max_total_lots + 1e-8
+    ):
         return "portfolio_lot_limit"
-    if e.risk + n * p.risk_usd > lim.max_open_risk_usd + 1e-7:
+    if (
+        lim.max_open_risk_usd is not None
+        and e.risk + n * p.risk_usd > lim.max_open_risk_usd + 1e-7
+    ):
         return "portfolio_risk_limit"
     return ""
 

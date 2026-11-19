@@ -76,6 +76,8 @@ python -m bot.cli hull-preflight --config config.demo.local.yaml @profiles
 python -m bot.cli trade-all --config config.demo.local.yaml --arm-demo @profiles
 ```
 
+**Upgrading a local demo config?** A pull updates neither the ignored YAML nor a running scanner. Check the local preflight’s `limits`: the default count, gross-lot and stop-risk caps are `null` and the extra free-margin reserve is `0`. Older positive overrides still apply. [Which four keys to change, and which funding checks stay on](docs/HULL_DEMO.md#hull-portfolio-limits-and-broker-funding).
+
 No live-money mode. Do not transfer an old approval to different profiles, delete safety state, or test connectivity by placing an order. Report accepted/skipped batches, modeled risk, broker fills, attached SL/TP and the `demo.jsonl` path.
 
 ## Reference

@@ -13,7 +13,7 @@ When `hull.indicator.exit_opposite` is `true` (the existing default), the termin
 ## How to read an entry timeline
 
 - **Bar open is not signal close.** An M1 bar stamped 19:52 opens then; its signal can first be known at 19:53:00, in the same time basis. The logs use UTC. With the shipped limits, the last permitted check is 19:53:08, inclusive. A usable tick must satisfy `signal close ≤ tick time ≤ check time ≤ deadline` and be no more than 4 s old. Keep the terminal host clock synchronized; never shift timestamps to manufacture freshness.
-- The scanner wakes around native closes and aims to poll every 250 ms during the entry window (MT5/OS latency can be longer). If its first quote is absent, from before close, or already too old, the selected entry can wait **in this running process only** while other symbols continue. On the first fresh quote it checks the actual BUY ask or SELL bid, the frozen structure band and the full plan. Outside the band, excessive spread, risk, busy symbol, malformed/future-dated quote or broker rejection are **not** reasons to try again. A late tick is never backdated. No retry after a send, no partial top-up, no replay on restart, no repeated opposite exit just because another quote was sampled.
+- The scanner wakes around native closes and aims to poll every 250 ms during the entry window (MT5/OS latency can be longer). If its first quote is absent, from before close, or already too old, the selected entry can wait **in this running process only** while other symbols continue. On the first fresh quote it checks the actual BUY ask or SELL bid, the frozen structure band and the full plan. Outside the band, excessive spread, a funding or configured limit veto, busy symbol, malformed/future-dated quote or broker rejection are **not** reasons to try again. A late tick is never backdated. No retry after a send, no partial top-up, no replay on restart, no repeated opposite exit just because another quote was sampled.
 - In `shadow.jsonl` / `demo.jsonl`, find `closed_label` for the symbol, timeframe and `signal_close_utc`. `reason: ready` refers to the raw signal; `entry_side` / `entry_reason` tell you if the closed bar qualified. For a selected entry, `entry_quote_check` gives `tick_utc`, raw broker `tick_time_msc`, `checked_at_utc`, age, deadline, bid/ask, and `stage`. `disposition: wait` is not a veto; `fresh_quote` confirms timing only. `label_decision.outcome` gives the final result: e.g. `shadow_plan_only`, `spread_cap`, `quote_outside_buy_below_bear_bos`, or `entry_window_expired`. At expiry, `tick_status` distinguishes a missing or pre-close quote from a valid but late check. An actual broker fill needs a demo deal, not just a `batch_preview`.
 
 ## Which candle supplies the stop?
@@ -25,7 +25,7 @@ The blue arrows in your screenshots indicate the preceding local pullback, not n
 3. Freeze that wick at the decision. Use the script's Wilder ATR14 buffer: `buy SL = low − 0.1 × ATR`, `sell SL = high + 0.1 × ATR`; optional extra pips default to zero. Round outward to a legal price tick. Amount `atr_buffer: 0` puts the stop on the wick (outward tick rounding still applies). There is **no $5 stop or fixed per-position dollar limit**. Never widen the stop after entry or squeeze it toward the entry to pass a risk check.
 4. `confirmed_pivot` is available if you want the *original chart simulator's* alternative: latest 3-left/3-right confirmed pivot with newer equal extremes preferred. This is **not** the screenshot-driven local-pullback default.
 
-The order SL is the computed chart price, **not** that price plus an unreported spread allowance. Longs exit on bid; shorts exit on ask. A spread expansion can stop a short even if the bid chart doesn't revisit its high. If SL is already breached, too close for the broker, or incompatible with the portfolio budget, skip.
+The order SL is the computed chart price, **not** that price plus an unreported spread allowance. Longs exit on bid; shorts exit on ask. A spread expansion can stop a short even if the bid chart doesn't revisit its high. If SL is already breached or too close for the broker, skip. The bot still prices the loss at that stop even when no portfolio dollar cap is set.
 
 ## Profit ladder for new tickets
 
@@ -66,6 +66,33 @@ python -m bot.cli trade-all --profile XAUUSD:0.09:10:fast --profile EURUSD:0.01:
 
 Or apply one set of overrides: `--symbols EURUSD GBPUSD --lots 0.01 --target-usd 10 --rate medium`. Do not mix these with `--profile`. Omit `--timeframe` to run all three. Use `--timeframe M2` only for a single-lane comparison.
 
+## Hull portfolio limits and broker funding
+
+The default applies to every selected Hull profile. There is **no bot-imposed ceiling** on open ticket count, gross lots or modeled USD loss at stops, and **no extra percentage of equity** is set aside as a margin reserve. Lots, batch counts, chart stops, per-ticket targets and the profit ladder are unchanged. For example, an otherwise eligible Gold batch of 10 × 0.10 lots with $204.87 modeled risk per ticket records **$2,048.70** in `batch_preview.risk_batch` rather than rejecting it against the old $1,000 cap. This is potential loss, not required margin; actual loss can be larger. The $75 equity drawdown halt blocks **new** entries; it does not cap the loss on positions already open. The 40 sends/minute budget remains.
+
+**Broker funding is still mandatory.** Before entry (and again for the remaining tickets), the bot subtracts the full requested count × MT5’s single-ticket margin estimate from current free margin. A funded batch can leave less than 60% of equity free, even zero; an unfunded batch cannot proceed. In armed demo mode each ticket also needs an accepted MT5 `order_check` with valid projected free margin. Only a confirmed broker result establishes a fill. The offline replay does not simulate broker margin or approvals.
+
+| New log reason | What to check |
+|---|---|
+| `insufficient_free_margin` | Free margin is negative now or would be negative after funding. |
+| `margin_floor` | Funding fits, but free margin would be below an **explicit positive** Hull reserve in this config. This reason cannot occur with the shipped 0% reserve. |
+| `no_margin_estimate` | Required margin data were missing or invalid. No send. |
+| `broker_precheck_rejected` | MT5 returned no check result or rejected the request; see the recorded `retcode` when available. |
+
+For the first three reasons, `margin_veto` identifies the stage (`first_plan`, `next_leg`, `pre_send` or `order_check`), number of legs checked, equity, current/projected free margin and required reserve in USD. An unknown value is `null`. A batch preview is **not** a promise of a fill.
+
+**Updating an existing Windows demo config:** `git pull` does not edit the ignored `config.demo.local.yaml`. Positive limits in that file still take effect. To adopt the defaults, edit just these four keys **inside the existing `hull.limits` mapping** (or remove just those keys to inherit their code defaults). Do not add a duplicate mapping, replace the file or edit the separate top-level `risk` / `zones` settings.
+
+```yaml
+# Within hull.limits only; keep its other settings.
+max_positions: null
+max_total_lots: null
+max_open_risk_usd: null
+min_free_margin_pct: 0
+```
+
+Use read-only `hull-preflight --config config.demo.local.yaml` **with the same profiles** before a new demo start. Verify the three `null` values and `0` in `limits`; `review_before_demo` lists any of these four limits that are enabled. Review the account, exposure and other warnings as usual. A running scanner does not reload these settings, and an update does not replay past setups.
+
 ## Windows demo checklist
 
 1. Install 64-bit Windows Python 3.11+ supported by the MT5 package. Start MT5 and log in locally to a dedicated **USD hedging DEMO** account. Identify running scanners and exposure first. Never interrupt an armed/unknown process, modify its checkout or touch manual positions; stop and ask. Follow the [checkout/version check](../README.md#check-the-checkout-before-reusing-an-observer). Don't change permissions on a real account. In the project root:
@@ -77,11 +104,11 @@ Or apply one set of overrides: `--symbols EURUSD GBPUSD --lots 0.01 --target-usd
    ```
    The preflight reads symbol specs, permissions, existing exposure, and the most recent historical label/anchor for each native timeframe. These historical labels are **never submitted**. Investigate wrong/ambiguous names, unavailable history, stale/wide spreads and invalid volume rather than bypassing guards. If auto-detection picks the wrong terminal, set `mt5.terminal_path` in your local config.
 2. `python -m bot.cli trade-all --profile XAUUSD:0.09:10:slow` is a **read-only observer**, not a shadow P&L backtest. Compare `closed_label`, `entry_side`, `entry_reason`, `anchor_s`, `raw_sl` and `batch_preview` with closed candles on **your broker feed**. That need not be the OANDA feed pictured. A risk veto logs per-leg loss and the minimum batch's loss separately. `--max-iterations` allows a bounded smoke run; a one-iteration run only warms history.
-3. Only on explicit approval, copy `config.yaml` to the ignored `config.demo.local.yaml`, set **only** `run.mode: demo` in that copy, verify Algo Trading / external Python permissions on the demo terminal, and launch **one** process:
+3. For a **new** local demo config, copy `config.yaml` to the ignored `config.demo.local.yaml` and set `run.mode: demo` in the copy. If one already exists, **do not overwrite it**; review the [four Hull defaults](#hull-portfolio-limits-and-broker-funding). Re-run read-only preflight on the local file with the same profiles and review the report. Only after separate explicit arming approval and verification of demo-terminal permissions, launch **one** process:
    ```powershell
    python -m bot.cli trade-all --config config.demo.local.yaml --profile XAUUSD:0.09:10:slow --arm-demo
    ```
    Paper is the shipped default. No `--arm-demo` = no sends. A real, contest, non-USD, netting, disconnected or changed account cannot arm. All examples are operator instructions: the development sandbox did not connect to a terminal or place orders.
-4. The checked-in demo limits (from the scaled profiles, **not changed by the quote-timing fix**) are **60 open tickets, 54 gross lots, $1,000 modeled open risk**, $75 peak-equity drawdown halt, at least 60% free margin and 40 sends/minute. The current Hull guard is drawdown-based; it does **not** enforce a separate daily loss stop (`daily_loss_usd` ships as 0). Do not rely on that field for a daily stop. Read the effective preflight limits and verify the **whole batch** fits; there is no fixed $5 per-ticket stop. Actual losses can exceed modeled risk. Do not raise a limit, resize a ticket or move SL to force an entry.
+4. Check the **effective** limits, not just the checked-in YAML. The account guard is drawdown-based; `daily_loss_usd` ships as 0 and is **not** a separate daily stop. Do not resize tickets, move the SL or change an operator-selected limit to force an entry.
 5. Logs: `reports/hull_runtime/<account-hash>/{shadow,demo}.jsonl`; recorded broker deals separate profit, fee, commission and swap. Durable intent, per-ticket goals, equity high-water and manual hold live in `~/.moneyprinterbot/hull/<account-hash>/state.json`. An OS lock prevents two armed Hull scanners under the same Windows user from trading the same account. Foreign positions or pending orders block new batches. A rejected/uncertain/partial send may need manual reconciliation; **do not delete state to retry**. Check actual tickets/deals, full size and protection, preserve a backup, then remove only a resolved `manual_hold` while stopped. Keep symbol whitelist/magic unchanged while tickets are open.
 6. Ctrl+C stops the software; broker SL/TP remain attached. The `KILL` file in the **bot's working directory** blocks new orders and requests closure of owned, allowlisted positions while the scanner is running and quotes/permissions permit. No ordinary session or momentum exit; configured session/rollover gates block new entries only. Review market-specific hours, especially CFDs/synthetics. Software exits cannot work while disconnected.

@@ -27,9 +27,14 @@ The broker aliases are `USTEC_x100m` for `NAS100USD` and `US30m` for `US30`. Slo
 git status --short --branch
 if ((git branch --show-current) -ne 'main') { throw 'Stop: use a clean main checkout.' }
 if (git status --porcelain) { throw 'Stop: preserve local changes and make the checkout clean before updating.' }
-Get-CimInstance Win32_Process -Filter "name='python.exe'" |
-  Where-Object { $_.CommandLine -match 'bot\.cli.*trade-all' } |
+Get-CimInstance Win32_Process -Filter "name='python.exe' OR name='pythonw.exe'" |
+  Where-Object { $_.CommandLine -match 'bot\.cli\s+(trade-all|trade|demo)\b' } |
   Select-Object ProcessId,CommandLine
+```
+
+Inspect the process list and open exposure **before** the next block. Do not update over an armed or unknown scanner, interrupt ticket management, or start duplicates. For a safe, clean checkout:
+
+```powershell
 git pull --ff-only origin main
 if ($LASTEXITCODE -ne 0) { throw 'Stop: fast-forward pull failed.' }
 & $python -m pip install -e ".[test]" MetaTrader5 tzdata
@@ -40,7 +45,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Stop: tests failed.' }
 if ($LASTEXITCODE -ne 0) { throw 'Stop: configuration validation failed.' }
 ```
 
-Inspect any listed process and stop here if it is armed, unknown, or already observing the account. Stop if the pull fails, the checkout is dirty, tests fail or the configuration is invalid. Do not reset, force, checkout over local work or discard uncommitted changes.
+Stop if the pull fails, the checkout is dirty, tests fail or the configuration is invalid. Do not reset, force, checkout over local work or discard uncommitted changes.
 
 Before reusing or launching a running scanner, compare its startup checkout and policy IDs with the current `git rev-parse HEAD`. Never update over an armed process or open duplicate scanners.
 
@@ -72,7 +77,9 @@ The ordinary start command above is a read-only observer. It does not send order
 & $python -m bot.cli hull-preflight --config config.demo.local.yaml @profiles
 ```
 
-Review that report again, including the account, all symbol specs, batch risk and `review_before_demo`. Only if those checks pass, start the armed scanner in a separate command:
+A pull does not rewrite an existing `config.demo.local.yaml`. Under **`hull.limits` only**, the defaults are `max_positions: null`, `max_total_lots: null`, `max_open_risk_usd: null` and `min_free_margin_pct: 0`. Preflight lists any enabled overrides in `review_before_demo`. To adopt the new defaults in an existing file, change or remove just those four keys; keep your other settings. See [how funding and vetoes work](docs/HULL_DEMO.md#hull-portfolio-limits-and-broker-funding).
+
+Review that report again, including the account, all symbol specs, effective limits and `review_before_demo`. Only if those checks pass, start the armed scanner in a separate command:
 
 ```powershell
 & $python -m bot.cli trade-all --config config.demo.local.yaml --arm-demo @profiles
