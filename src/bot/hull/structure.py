@@ -58,6 +58,19 @@ class Structure:
     impulse_tip: Pivot | None = None  # observed wick; not a claim of pivot confirmation
 
     @property
+    def continuation_side(self):
+        """Permission already known BEFORE a forming bar (no break-close exception)."""
+        return (
+            self.bias
+            if (
+                self.event in ("choch", "bos")
+                and self.origin is not None
+                and self.pullback_seen_s is not None
+            )
+            else 0
+        )
+
+    @property
     def phase(self) -> str:
         if self.event in ("none", "seed"):
             return "unconfirmed_context"

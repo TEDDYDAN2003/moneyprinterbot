@@ -302,13 +302,14 @@ zones:
 
 # ACTIVE demo entry path. Indicator source = the user's Hull BUY/SELL labels.
 hull:
+  entry_timing: live_continuation_v1  # trend + pullback closed; first observed live cross, reversals still close-only
   exit_policy: profit_ladder_70_30_v1  # new tickets only; all rungs use the original per-ticket USD goal
   enabled: [XAUUSD]  # opt in other keys via --symbols or repeated --profile
   magic: 26111825
   indicator:
     hull_len: 16
-    source: either            # independent High/Low Hull A curves; one signal per closed bar
-    signal: labels        # raw closed-bar crosses; internal structure gates new entries
+    source: either            # independent High/Low Hull A curves; strict cross against the previous completed bar
+    signal: labels        # raw Hull crosses; completed structure gates new entries
     exit_opposite: true   # original opposite-label exit, independent of entry eligibility
     ema_length: 200
     stop: local_pullback  # recent preceding wicks, not a market-structure HH/HL

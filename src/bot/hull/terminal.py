@@ -7,18 +7,26 @@ import json
 import subprocess
 import time
 from contextlib import ExitStack
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
 from bot.execution.demo_runner import DemoSafetyError, _account_order_lock
 from bot.zones.engine import Bar
 
-from .config import BATCH_ENTRY_POLICY, COUNTS, FRAMES, LADDER, RETIRED_LIMITS
+from .config import (
+    BATCH_ENTRY_POLICY,
+    COUNTS,
+    FRAMES,
+    LADDER,
+    LIVE_CONTINUATION,
+    RETIRED_LIMITS,
+)
 from .desk import Desk, identity_check, resolve
-from .entry_clock import QUOTE_POLICY, WAITING, poll_delay, utc
+from .entry_clock import LIVE_QUOTE_POLICY, QUOTE_POLICY, WAITING, poll_delay
 from .ladder import cash_levels
-from .orders import Grid, select_labels
+from .live import LiveSampler
+from .orders import Grid, choose, select_labels
 from .signal import Hull
 from .structure import ENTRY_POLICY
 
@@ -28,8 +36,7 @@ def describe(r):
         **asdict(r),
         **r.entry_audit(),
         "direction": "BUY" if r.label == 1 else "SELL" if r.label == -1 else "NONE",
-        "bar_open_utc": utc(r.close_s - 60 * r.tf),
-        "signal_close_utc": utc(r.close_s),
+        **r.clock_fields(),
         "anchor_bar_utc": datetime.fromtimestamp(r.anchor_s, UTC).isoformat()
         if r.anchor_s is not None
         else None,
@@ -37,7 +44,8 @@ def describe(r):
 
 
 class Stream:
-    def __init__(self, tf, cfg, pip):
+    def __init__(self, tf, cfg, pip, *, live=False):
+        self.live = live
         self.tf, self.cfg, self.pip = tf, cfg, pip
         self.h = Hull(tf, cfg, pip)
         self.last_label = None
@@ -50,7 +58,7 @@ class Stream:
         )
 
     def refresh(self, mt, name, now):
-        # Native M2 bars: no M3/M15 substitution; index 0 is never supplied to the indicator.
+        # Closed (authoritative) clock. Index zero is read separately and NEVER committed.
         period = getattr(mt, f"TIMEFRAME_M{self.tf}")
         cold = self.h.prev is None
         reload = cold or now - self.h.prev.t > self.tf * 60 * 4
@@ -62,6 +70,8 @@ class Stream:
             self.h = Hull(self.tf, self.cfg, self.pip)
             self.last_label = None
         decision = None
+        updates = 0
+        gap = False
         last = -1
         for r in rates:
             t = int(r["time"])
@@ -70,15 +80,22 @@ class Stream:
             last = t
             if t + self.tf * 60 > now or (self.h.prev and t <= self.h.prev.t):
                 continue
+            gap |= self.h.prev is not None and t != self.h.prev.t + self.tf * 60
+            updates += 1
+            prior_side = self.h.structure.view.continuation_side
             decision = self.h.update(
                 Bar(t, *[float(r[k]) for k in ("open", "high", "low", "close")])
             )
+            if self.live and prior_side and decision.label == prior_side:
+                # It belonged to the live path, even if polling missed it, it was
+                # vetoed, or the scanner joined mid-bar. Still a real CLOSED exit label.
+                decision = replace(decision, confirmation_only=True)
             if decision.label:
                 self.last_label = decision
         # Reconnect/initial history may contain old labels. Never enter from warm-up.
         return (
             (None, "warmup_only")
-            if reload
+            if reload or gap or updates > 1
             else (decision, "updated" if decision else "unchanged")
         )
 
@@ -156,13 +173,19 @@ def dispatch(d, name, labels, *, data_ok, history_ok, rewarmed):
     window = d.waiting.get(name)
     unavailable = not (data_ok and history_ok)
     if window is not None:
-        stamp = window.reading.close_s
+        stamp = window.reading.signal_msc
         # A native lane normally emits only once. Never replay its exit or reset
         # the window if the same closed reading is presented twice.
         labels = [
-            r for r in labels if r.close_s != stamp or r.tf not in window.observed_lanes
+            r
+            for r in labels
+            if r.signal_msc != stamp or r.tf not in window.observed_lanes
         ]
-        if unavailable or rewarmed or any(r.side and r.close_s > stamp for r in labels):
+        if (
+            unavailable
+            or rewarmed
+            or any(r.side and r.signal_msc > stamp for r in labels)
+        ):
             reason = (
                 "data_or_deal_history_unavailable"
                 if unavailable
@@ -174,7 +197,8 @@ def dispatch(d, name, labels, *, data_ok, history_ok, rewarmed):
             window = None
     if not labels and window is None:
         return
-    original, entry, why = select_labels(labels)
+    original, _ = choose(r for r in labels if not r.trigger)
+    _, entry, why = select_labels(labels)
     raw_tf = original.tf if original else None
     if unavailable:
         why = "data_or_deal_history_unavailable"
@@ -196,13 +220,15 @@ def dispatch(d, name, labels, *, data_ok, history_ok, rewarmed):
             # Arbitrate those immutable readings before the first usable quote only.
             # No older label, later price or duplicate can grant a second reservation.
             if labels:
-                same = [r for r in labels if r.close_s == window.reading.close_s]
+                same = [r for r in labels if r.signal_msc == window.reading.signal_msc]
                 _, pick, why = select_labels([window.reading, *same])
                 if pick is None:
                     d.cancel_wait(name, why)  # conflicting qualified directions
                     return
                 window.observed_lanes.update(r.tf for r in same)
-                window.reading = pick
+                # Do not convert a reserved closed-label wait into a live entry.
+                if not pick.trigger:
+                    window.reading = pick
             why = d.resume_first_quote(name)
             if why != WAITING:
                 d.emit(
@@ -211,6 +237,7 @@ def dispatch(d, name, labels, *, data_ok, history_ok, rewarmed):
                     tf=window.reading.tf,
                     raw_selected_tf=window.raw_tf,
                     close_s=window.reading.close_s,
+                    **window.reading.clock_fields(),
                     polls=window.polls,
                     outcome=why,
                 )
@@ -220,15 +247,20 @@ def dispatch(d, name, labels, *, data_ok, history_ok, rewarmed):
                 name,
                 entry,
                 raw_tf=raw_tf,
-                observed_lanes=(r.tf for r in labels if r.close_s == entry.close_s),
+                observed_lanes=(
+                    r.tf for r in labels if r.signal_msc == entry.signal_msc
+                ),
+                live_peers=(r for r in labels if r.trigger and r.entry_side),
             )
     if why != WAITING:
+        context = entry or max(labels, key=lambda r: r.signal_msc)
         d.emit(
             "label_decision",
             symbol=name,
             tf=entry.tf if entry else None,
             raw_selected_tf=raw_tf,
-            close_s=entry.close_s if entry else max(v.close_s for v in labels),
+            close_s=context.close_s,
+            **context.clock_fields(),
             outcome=why,
         )
 
@@ -275,6 +307,7 @@ def run(
         key = hashlib.sha256(repr(identity).encode()).hexdigest()[:16]
         syms = resolve(mt, profiles)
         limits = h.limits
+        live = h.entry_timing == LIVE_CONTINUATION
         specs = {}
         for name, (code, p) in syms.items():
             i = mt.symbol_info(name)
@@ -282,6 +315,8 @@ def run(
             q = mt.symbol_info_tick(name)
             specs[name] = {
                 "key": code,
+                "bid_chart_verified": getattr(i, "chart_mode", None)
+                == getattr(mt, "SYMBOL_CHART_MODE_BID", 0),
                 **p.model_dump(),
                 **asdict(g),
                 "contract_size": i.trade_contract_size,
@@ -314,7 +349,8 @@ def run(
             "entry_policy": ENTRY_POLICY,
             "signal_policy": h.indicator.signal_policy,
             "batch_entry_policy": BATCH_ENTRY_POLICY,
-            "entry_quote_policy": QUOTE_POLICY,
+            "entry_timing": h.entry_timing,
+            "entry_quote_policy": LIVE_QUOTE_POLICY if live else QUOTE_POLICY,
             **source_build(),
             "specs": specs,
             "limits": limits.model_dump(),
@@ -329,6 +365,10 @@ def run(
             summary["pending_orders"] = len(os)
             summary["history_check"] = {}
             issues = []
+            if not live:
+                issues.append(
+                    "Confirmed-close-only timing selected: no intrabar continuation entries"
+                )
             legacy = [k for k in RETIRED_LIMITS if k in cfg["hull"].get("limits", {})]
             if legacy:
                 issues.append(
@@ -353,8 +393,12 @@ def run(
                 )
             for name, (_, p) in syms.items():
                 checks = {}
+                if live and not specs[name]["bid_chart_verified"]:
+                    issues.append(
+                        f"{name}: live continuation disabled; cannot verify native BID chart"
+                    )
                 for tf in frames:
-                    lane = Stream(tf, h.indicator, p.pip_size)
+                    lane = Stream(tf, h.indicator, p.pip_size, live=live)
                     _, status = lane.refresh(mt, name, time.time())
                     v = lane.last_label
                     checks[f"M{tf}"] = {
@@ -408,10 +452,18 @@ def run(
             d = Desk(mt, cfg, h, syms, identity, state, path, emit, armed)
             locks.callback(d.cancel_all_waits)
             streams = {
-                (name, tf): Stream(tf, h.indicator, p.pip_size)
+                (name, tf): Stream(tf, h.indicator, p.pip_size, live=live)
                 for name, (_, p) in syms.items()
                 for tf in frames
             }
+            samplers = {
+                name: LiveSampler({tf: streams[name, tf] for tf in frames}, emit)
+                for name in syms
+                if live and specs[name]["bid_chart_verified"]
+            }
+            d.live_check = lambda name, r, q: samplers[name].still_crossed(
+                mt, name, r, q
+            )
             num = 0
             sync = 0.0
             history_ok = not armed
@@ -451,6 +503,26 @@ def run(
                                 ),
                                 **describe(reading),
                             )
+                    if name in samplers:
+                        sampler = samplers[name]
+                        if not data_ok or not history_ok:
+                            sampler.disconnected = True
+                        elif rewarmed:
+                            sampler.reset(time.time())
+                        else:
+                            for r in sampler.sample(
+                                mt, name, time.time, limits.max_quote_age_s
+                            ):
+                                emit(
+                                    "live_hull_cross",
+                                    symbol=name,
+                                    detected_lag_ms=round(
+                                        (time.time() - r.signal_s) * 1000, 3
+                                    ),
+                                    **describe(r),
+                                )
+                                if r.entry_side:
+                                    ds.append(r)
                     dispatch(
                         d,
                         name,
@@ -466,7 +538,11 @@ def run(
                             frames,
                             poll,
                             limits.max_entry_age_s,
-                            bool(d.waiting or (armed and d.ladders.book)),
+                            bool(
+                                d.waiting
+                                or (armed and d.ladders.book)
+                                or any(s.watching() for s in samplers.values())
+                            ),
                         )
                     )
     finally:

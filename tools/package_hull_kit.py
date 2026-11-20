@@ -48,7 +48,7 @@ MT5: copy MT5/FC-Hull-Either-16-Structure.mq5 to MQL5/Indicators, open THAT file
 
 TradingView: paste indicators/FC-Hull-Either-16-Structure.pine into Pine Editor. Save and add the updated study. Select Valid suggestions only and recreate any alerts tied to an old script snapshot.
 
-Rules: see docs/HULL_STRUCTURE.md. These chart studies do not send orders or update a running scanner. To update the Python bot, install the matching repository revision and verify entry_policy: protected_swing_v2 in the observer. Do not replace a running armed scanner or delete its state.
+Rules: see docs/HULL_STRUCTURE.md. These chart studies do not send orders or update a running scanner. To update the Python bot, install the matching repository revision and verify entry_policy: protected_swing_v2 and entry_timing: live_continuation_v1 in the observer. Do not replace a running armed scanner or delete its state.
 """
 
 

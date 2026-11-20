@@ -114,7 +114,8 @@ def target(grid, side, lots, entry, usd, cash):
     return grid.price(start + side * hi), worth(hi)
 
 
-def make_plan(d, p, grid, bid, ask, cash):
+def protected_prices(d, p, grid, bid, ask):
+    """Validate signal, spread, volume, frozen band and initial stop on THIS quote."""
     if not d.entry_side or d.raw_sl is None:
         raise Block(d.entry_reason)
     if not all(math.isfinite(v) for v in (bid, ask, d.raw_sl)) or not 0 < bid <= ask:
@@ -124,8 +125,7 @@ def make_plan(d, p, grid, bid, ask, cash):
     grid.volume(p.lots)
     side = d.side
     entry, mark = (ask, bid) if side == 1 else (bid, ask)
-    # Same frozen zone at the signal CLOSE and each executable ask/bid. A quote
-    # drifting back into the zone can never resurrect an invalid closed label.
+    # Same frozen band at the trigger and at each executable ask/bid.
     if why := d.structure.veto(side, entry):
         raise Block("quote_" + why)
     # Use the actual chart-derived price; never replace with a cash stop or add a hidden spread buffer.
@@ -133,6 +133,12 @@ def make_plan(d, p, grid, bid, ask, cash):
     dist = max(grid.gap, grid.tick)
     if sl <= 0 or side * (mark - sl) < dist - grid.tick * 1e-6:
         raise Block("swing_breached_or_too_close")
+    return entry, mark, sl, dist
+
+
+def make_plan(d, p, grid, bid, ask, cash):
+    entry, mark, sl, dist = protected_prices(d, p, grid, bid, ask)
+    side = d.side
     risk = -valid_cash(cash, side, p.lots, entry, sl)
     if risk <= 0:
         raise Block("nonpositive_cash_risk")
@@ -178,10 +184,12 @@ def choose(ds):
     ready = [d for d in ds if d.side]
     if not ready:
         return None, "no_executable_label"
-    t = max(d.close_s for d in ready)
-    same = [d for d in ready if d.close_s == t]
+    t = max(d.signal_msc for d in ready)
+    same = [d for d in ready if d.signal_msc == t]
     if len({d.side for d in same}) > 1:
-        return None, "opposite_labels_same_close"
+        return None, "opposite_labels_same_trigger" if any(
+            d.trigger for d in same
+        ) else "opposite_labels_same_close"
     return max(same, key=lambda d: d.tf), "ready"
 
 
@@ -192,10 +200,10 @@ def select_labels(ds):
     revived by a newer veto. Only qualified lanes vote on a NEW position.
     """
     original, why = choose(ds)
-    latest = max((d.close_s for d in ds if d.side), default=None)
+    latest = max((d.signal_msc for d in ds if d.side), default=None)
     if latest is None:
         return original, None, why
-    valid = [d for d in ds if d.close_s == latest and d.entry_side]
+    valid = [d for d in ds if d.signal_msc == latest and d.entry_side]
     if not valid:
         return (
             original,

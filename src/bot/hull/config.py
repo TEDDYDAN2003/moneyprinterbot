@@ -16,6 +16,8 @@ COUNTS = {"slow": (10,), "medium": (4, 3), "fast": (7, 6)}
 FRAMES = (1, 2, 5)
 LADDER = "profit_ladder_70_30_v1"
 FIXED = "fixed_tp"
+LIVE_CONTINUATION = "live_continuation_v1"
+CLOSE_ONLY = "confirmed_close_only"
 BATCH_ENTRY_POLICY = "first_eligible_while_flat_v1"
 # Removed in Hull only. Older full-file demo configs may still contain the keys.
 RETIRED_LIMITS = ("drawdown_usd", "max_orders_minute")
@@ -76,6 +78,9 @@ class Limits(Strict):
 
 
 class HullConfig(Strict):
+    entry_timing: Literal["live_continuation_v1", "confirmed_close_only"] = (
+        LIVE_CONTINUATION
+    )
     exit_policy: Literal["profit_ladder_70_30_v1", "fixed_tp"] = LADDER
     indicator: Indicator = Indicator()
     limits: Limits = Limits()

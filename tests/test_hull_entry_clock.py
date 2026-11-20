@@ -13,7 +13,7 @@ from hull_mt import MT, ROOT, T, scanner_clock, sig
 
 from bot.config.loader import load_yaml
 from bot.hull.config import HullConfig, Limits, selection
-from bot.hull.entry_clock import QUOTE_POLICY, WAITING, check_quote, poll_delay
+from bot.hull.entry_clock import LIVE_QUOTE_POLICY, WAITING, check_quote, poll_delay
 from bot.hull.signal import Hull
 from bot.hull.structure import Structure
 from bot.hull.terminal import dispatch, run
@@ -305,7 +305,20 @@ def test_eurusd_1952_bar_1953_close_waits_for_quote_not_replayed(
         return NS(time_msc=ms, bid=round(ask - 0.00005, 5), ask=ask)
 
     def rates(n, tf, shift, count):
-        assert n == symbol and tf == 1 and shift == 1
+        assert n == symbol and tf == 1
+        if shift == 0:
+            assert count == 1 and wall[0] >= end
+            px = quote(n).bid
+            return [
+                dict(
+                    time=end,
+                    open=r.close,
+                    high=max(px, r.close),
+                    low=min(px, r.close),
+                    close=px,
+                )
+            ]
+        assert shift == 1
         return [
             {"time": b.t, "open": b.o, "high": b.h, "low": b.l, "close": b.c}
             for b in bars
@@ -343,7 +356,7 @@ def test_eurusd_1952_bar_1953_close_waits_for_quote_not_replayed(
     summary = records[0]["summary"]
     assert (
         summary["entry_policy"] == "protected_swing_v2"
-        and summary["entry_quote_policy"] == QUOTE_POLICY
+        and summary["entry_quote_policy"] == LIVE_QUOTE_POLICY
     )
     (label,) = [v for v in records if v["event"] == "closed_label"]
     assert (

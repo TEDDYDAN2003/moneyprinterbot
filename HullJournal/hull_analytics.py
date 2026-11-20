@@ -24,8 +24,8 @@ REASON_LABELS = {
 REASON_NOTES = {
     "bull_choch_buy": "A fresh Hull BUY closed strictly above the protected bearish LH on the bullish CHoCH candle.",
     "bear_choch_sell": "A fresh Hull SELL closed strictly below the protected bullish HL on the bearish CHoCH candle.",
-    "bull_protected_pullback_buy": "After a completed pullback, the fresh BUY closed above the protected higher low. An internal swing alone does not move that boundary.",
-    "bear_protected_pullback_sell": "After a completed pullback, the fresh SELL closed below the protected lower high. An internal swing alone does not move that boundary.",
+    "bull_protected_pullback_buy": "After a completed pullback, the fresh BUY triggered above the protected higher low. An internal swing alone does not move that boundary.",
+    "bear_protected_pullback_sell": "After a completed pullback, the fresh SELL triggered below the protected lower high. An internal swing alone does not move that boundary.",
     "bull_discount_buy": "The confirmed bullish swing range allowed a BUY between the higher low and the midpoint.",
     "bear_premium_sell": "The confirmed bearish swing range allowed a SELL between the midpoint and the lower high.",
     "buy_below_bear_bos": "After a bearish continuation break and a confirmed new low, the BUY closed below the broken low inside the countertrend band.",

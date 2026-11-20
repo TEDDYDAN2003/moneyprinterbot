@@ -246,6 +246,9 @@ def test_preflight_resolves_only_requested_symbols_and_never_sends(
     assert (
         answer["timeframes"] == [1, 2, 5]
         and answer["signal_policy"] == "fc_hull_either_v2"
+        and answer["entry_timing"] == "live_continuation_v1"
+        and answer["entry_quote_policy"] == "current_live_tick_or_confirmed_close_v1"
+        and answer["specs"]["XAUUSDm"]["bid_chart_verified"]
         and answer["batch_entry_policy"] == "first_eligible_while_flat_v1"
         and list(answer["specs"]) == ["XAUUSDm"]
         and not mt.requests
@@ -322,6 +325,9 @@ def test_cli_native_m2_entry_filter_and_independent_exit(
 
     cfg = load_yaml(ROOT / "config.yaml")
     cfg["run"]["mode"] = "demo"
+    cfg["hull"]["entry_timing"] = (
+        "confirmed_close_only"  # exercise the explicit legacy mode
+    )
     cfg["hull"]["indicator"]["exit_opposite"] = exit_opposite
     h = HullConfig.model_validate(cfg["hull"])
     mt = MT()

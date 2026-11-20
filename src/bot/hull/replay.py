@@ -18,7 +18,7 @@ from bot.zones.feed import tick_minutes
 from bot.zones.hours import Hours
 from bot.zones.replay import file_hash, iso_ms
 
-from .config import BATCH_ENTRY_POLICY, LADDER, RETIRED_LIMITS
+from .config import BATCH_ENTRY_POLICY, CLOSE_ONLY, LADDER, RETIRED_LIMITS
 from .entry_clock import QUOTE_POLICY, check_quote
 from .ladder import Protection, propose
 from .orders import Block, Exposure, Grid, count_for, make_plan, select_labels
@@ -164,6 +164,10 @@ class Account:
                 return
 
     def step(self, m, ds):
+        if any(r.trigger for r in ds):
+            raise ValueError(
+                "Closed-label benchmark cannot simulate live Hull triggers"
+            )
         ms = int(m.ms[0])
         now = ms / 1000
         bid = float(m.bid[0])
@@ -370,6 +374,8 @@ def study(minutes, cfg, h, p, frames, lo, hi, unit, contract, conversion, rates,
         "entry_policy": ENTRY_POLICY,
         "signal_policy": h.indicator.signal_policy,
         "batch_entry_policy": BATCH_ENTRY_POLICY,
+        "entry_timing": CLOSE_ONLY,
+        "configured_scanner_entry_timing": h.entry_timing,
         "entry_quote_policy": QUOTE_POLICY,
         "new_ticket_exit_policy": h.exit_policy,
         "per_ticket_target": p.target_usd,
@@ -382,7 +388,7 @@ def study(minutes, cfg, h, p, frames, lo, hi, unit, contract, conversion, rates,
         "conversion": conversion,
         "start_utc": iso_ms(lo * 1000),
         "end_exclusive_utc": iso_ms(hi * 1000),
-        "note": "USD, spread only. Actual crossing quote for SL; TP at limit. No peak-equity halt or per-minute send cap. Ladder checks prior barriers first on each ordered quote. Identical initial fills; no amendment latency, dealer rejection, commission, broker margin/volume checks or guarantee of atomic fills.",
+        "note": "Closed-label benchmark only. Does not simulate intrabar continuation triggers. USD, spread only. Actual crossing quote for SL; TP at limit. No peak-equity halt or per-minute send cap. Ladder checks prior barriers first on each ordered quote. Identical initial fills; no amendment latency, dealer rejection, commission, broker margin/volume checks or guarantee of atomic fills.",
     }
     with (out / "labels.csv").open("w", newline="") as f:
         w = csv.DictWriter(

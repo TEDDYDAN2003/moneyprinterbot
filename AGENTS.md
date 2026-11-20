@@ -49,7 +49,7 @@ Stop if the pull fails, the checkout is dirty, tests fail or the configuration i
 
 Before reusing or launching a running scanner, compare its startup checkout and policy IDs with the current `git rev-parse HEAD`. Never update over an armed process or open duplicate scanners.
 
-For the current Hull release, check preflight and the running `started.summary` for `entry_policy: protected_swing_v2`, `signal_policy: fc_hull_either_v2`, `indicator.source: either`, `indicator.hull_len: 16`, and `batch_entry_policy: first_eligible_while_flat_v1`. Do not auto-edit a private profile: to adopt v2 on an older full local YAML, the operator changes just `hull.indicator.source` and `hull.indicator.hull_len`. A second BUY is ignored while any BUY ticket remains; a later fresh BUY after flat may qualify in the same zone (SELL mirrors BUY). Keep initial protection, the existing opposite-label exit and the 70/30 ladder. [Detailed behavior](docs/HULL_DEMO.md#what-triggers-an-entry).
+For the current Hull release, check preflight and the running `started.summary` for `entry_timing: live_continuation_v1`, `entry_quote_policy: current_live_tick_or_confirmed_close_v1`, verified BID charts, `entry_policy: protected_swing_v2`, `signal_policy: fc_hull_either_v2`, `indicator.source: either`, `indicator.hull_len: 16`, and `batch_entry_policy: first_eligible_while_flat_v1`. Do not auto-edit a private profile: to adopt v2 on an older full local YAML, the operator changes just `hull.indicator.source` and `hull.indicator.hull_len`. A second BUY is ignored while any BUY ticket remains; a later fresh BUY after flat may qualify in the same zone (SELL mirrors BUY). Keep initial protection, the existing opposite-label exit and the 70/30 ladder. [Detailed behavior](docs/HULL_DEMO.md#what-triggers-an-entry).
 
 ## Read-only demo preflight
 
@@ -69,7 +69,7 @@ Read the full report before starting. Confirm the account, resolved symbols, M1/
 & $python -m bot.cli trade-all --config config.yaml @profiles
 ```
 
-This observes M1, M2 and M5 and sends no orders. It waits for fresh completed-candle labels and never migrates existing tickets.
+This observes M1, M2 and M5 and sends no orders. It logs `live_hull_cross` for already-confirmed trend/pullback continuations and `closed_label` for closed decisions. It never migrates existing tickets.
 
 ## Armed demo account
 

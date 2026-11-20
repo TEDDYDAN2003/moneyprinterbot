@@ -16,7 +16,6 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from fixtures import BIG, MAGIC, FakeMT, T, deal
-
 from journal import Desktop, Reporter, main, make_server, single_writer
 from ledger import (
     FIELDS,
@@ -205,6 +204,113 @@ class JournalTests(unittest.TestCase):
         self.assertEqual(due, T + 60)
         self.assertFalse(self.read(mt, T + 20)[0]["setups"])
         self.assertEqual(self.read(mt, T + 60)[0]["setups"][0]["ticket_count"], "2")
+
+    def test_live_quote_exact_receipt_join_before_bar_end_no_confirmed_close(self):
+        from ledger import iso
+
+        ms = (T + 2) * 1000 + 360
+        ds = ticket(end=T + 5, delay=3, tag_override="broker changed")
+        mt = FakeMT(ds, T + 6)
+        log = self.logpath(mt)
+        self.emit(log, self.receipt(ds, f"i2_{ms}_1"))
+        self.emit(
+            log,
+            dict(
+                event="live_hull_cross",
+                symbol="XAUUSDm",
+                tf=2,
+                entry_side=1,
+                entry_setup="bull_protected_pullback_buy",
+                close_s=T + 120,
+                trigger_msc=ms,
+                trigger={"ms": ms, "bid": 103.22, "ask": 103.32},
+            ),
+        )
+        self.emit(
+            log,
+            dict(
+                event="label_decision",
+                symbol="XAUUSDm",
+                tf=2,
+                close_s=T + 120,
+                trigger_msc=ms,
+                entry_timing="live_hull_cross",
+                outcome="demo_batch_sent",
+            ),
+        )
+        rows, _, _ = self.read(mt, repo=self.folder)
+        for r in (rows["tickets"][0], rows["setups"][0]):
+            self.assertEqual(
+                (r["entry_timing"], r["signal_trigger_utc"], r["signal_close_utc"]),
+                ("live_hull_cross", iso(ms), ""),
+            )
+            self.assertEqual(
+                (
+                    r["signal_bar_open_utc"],
+                    r["signal_bar_end_utc"],
+                    r["trigger_bid"],
+                    r["trigger_ask"],
+                ),
+                (iso(T * 1000), iso((T + 120) * 1000), "103.22", "103.32"),
+            )
+            self.assertEqual(
+                (r["open_price"], r["setup_type"], r["timeframe"]),
+                ("103", "bull_protected_pullback_buy", "M2"),
+            )
+        self.assertEqual(rows["tickets"][0]["attribution"], "Bot receipt")
+        self.assertEqual(rows["setups"][0]["ticket_count"], "1")
+
+    def test_live_comment_alone_never_guesses_model_or_confuses_trigger_with_close(
+        self,
+    ):
+        from ledger import iso
+
+        ms = T * 1000 + 360
+        live = ticket(tag_override=f"i2_{ms}_1")
+        other = ticket(pid=500, stamp=T + 120)
+        mt = FakeMT(live + other, T + 350)
+        log = self.logpath(mt)
+        self.emit(
+            log,
+            dict(
+                event="closed_label",
+                symbol="XAUUSDm",
+                tf=2,
+                close_s=T + 120,
+                entry_side=1,
+                entry_setup="bull_choch_buy",
+            ),
+        )
+        rows, _, _ = self.read(mt, repo=self.folder)
+        for group in rows.values():
+            a, b = sorted(group, key=lambda r: r["open_time_utc"])
+            self.assertNotEqual(a["setup_id"], b["setup_id"])
+            self.assertEqual(
+                (
+                    a["signal_trigger_utc"],
+                    a["entry_timing"],
+                    a["signal_close_utc"],
+                    a["setup_type"],
+                    a["signal_bar_end_utc"],
+                    a["trigger_ask"],
+                ),
+                (iso(ms), "live_hull_cross", "", "", "", ""),
+            )
+            self.assertEqual(
+                (b["signal_close_utc"], b["entry_timing"], b["setup_type"]),
+                (iso((T + 120) * 1000), "confirmed_close", "bull_choch_buy"),
+            )
+
+    def test_live_trigger_second_window_recovers_older_sibling_without_ms_as_seconds(
+        self,
+    ):
+        ms = T * 1000 + 360
+        early = ticket(end=T + 8, tag_override=f"i2_{ms}_1")
+        late = ticket(402, 2, end=T + 5 * 86400, tag_override=f"i2_{ms}_2")
+        rows, _, _ = self.read(FakeMT(early + late, T + 5 * 86400 + 10), days=1)
+        self.assertEqual(len(rows["tickets"]), 2)
+        self.assertEqual(rows["setups"][0]["ticket_count"], "2")
+        self.assertEqual(rows["setups"][0]["net_profit"], "15.00")
 
     def test_actual_partial_batch_not_planned_count(self):
         ds = ticket(end=T + 4)

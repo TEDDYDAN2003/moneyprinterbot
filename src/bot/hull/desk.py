@@ -22,11 +22,12 @@ from .orders import (
     Grid,
     count_for,
     make_plan,
+    protected_prices,
     room,
     target,
     valid_cash,
 )
-from .signal import Reading
+from .signal import LiveTick, Reading
 
 
 def _finite_or_none(value):
@@ -101,6 +102,9 @@ class Desk:
         self.hours = Hours(cfg)
         self.ladders = TicketLadders(self)
         self.last_service = time.monotonic()
+        self.live_check = (
+            None  # installed by the native scanner; no live quote chasing without it
+        )
         self.waiting: dict[str, FirstQuoteWindow] = {}  # never restored after restart
 
     def persist(self):
@@ -140,22 +144,45 @@ class Desk:
         now = time.time()  # timestamp this actual read, not the start of the scan loop
         d = window.reading
         check = check_quote(
-            d.close_s,
+            d.signal_s,
             now,
             self.lim,
             getattr(q, "time_msc", None),
             getattr(q, "bid", None),
             getattr(q, "ask", None),
             monotonic_expired=time.monotonic() > window.end_mono,
+            live_bar_end=d.close_s if d.trigger else None,
         )
         if check.reason != "ready":
             raise TimingBlock(check, stage)
+        if d.trigger and LiveTick.read(q) != d.trigger:
+            # A newer executable quote can only price a leg while the live Hull
+            # cross is STILL present. Never park or replay a vanished signal.
+            if self.live_check is None:
+                raise Block("live_trigger_quote_changed")
+            if not self.live_check(name, d, q):
+                raise Block("live_cross_no_longer_verified")
+            # Native snapshot verification takes time too; don't carry an expired
+            # tick past the live bar end, entry deadline, or quote-age check.
+            now = time.time()
+            check = check_quote(
+                d.signal_s,
+                now,
+                self.lim,
+                q.time_msc,
+                q.bid,
+                q.ask,
+                live_bar_end=d.close_s,
+                monotonic_expired=time.monotonic() > window.end_mono,
+            )
+            if check.reason != "ready":
+                raise TimingBlock(check, stage)
         if stage == "first_plan":
             self.emit(
                 "entry_quote_check",
                 symbol=name,
                 tf=d.tf,
-                signal=d.close_s,
+                signal=d.signal_s,
                 stage=stage,
                 polls=window.polls,
                 disposition="fresh_quote",
@@ -185,7 +212,7 @@ class Desk:
                 "margin_veto",
                 symbol=name,
                 tf=d.tf,
-                signal=d.close_s,
+                signal=d.signal_s,
                 stage=stage,
                 reason=why,
                 legs_checked=legs,
@@ -198,18 +225,18 @@ class Desk:
             )
         return why
 
-    def _check_flat_at_close(self, name, reading, now):
-        """A broker exit BETWEEN candle close and polling must not resurrect a repeat.
+    def _check_flat_at_trigger(self, name, reading, now):
+        """A broker exit BETWEEN trigger and polling must not resurrect a repeat.
 
         Snapshot checks cover any surviving leg. Check the bounded interval for a
         SELL exit of a long (or BUY exit of a short), including manual/SL/TP deals
-        whose magic may differ. An opposite-side exit is not a block on reversal.
+        whose magic may differ. A closed reversal may follow an opposite exit; a live continuation must have been flat.
         """
-        if not 0 <= now - reading.close_s <= self.lim.max_entry_age_s:
+        if not 0 <= now - reading.signal_s <= self.lim.max_entry_age_s:
             return  # the normal quote-clock check rejects expired/future signals
         mt = self.mt
         deals = mt.history_deals_get(
-            datetime.fromtimestamp(reading.close_s, UTC),
+            datetime.fromtimestamp(reading.signal_msc // 1000, UTC),
             datetime.fromtimestamp(int(now) + 1, UTC),
         )
         if deals is None:
@@ -220,13 +247,19 @@ class Desk:
                 deal.symbol != name
                 or deal.entry
                 not in (mt.DEAL_ENTRY_OUT, mt.DEAL_ENTRY_OUT_BY, mt.DEAL_ENTRY_INOUT)
-                or deal.type != closing_type
+                or (deal.type != closing_type and not reading.trigger)
             ):
                 continue
             ms = getattr(deal, "time_msc", None)
             if not isinstance(ms, int) or ms <= 0:
                 raise Block("entry_deal_history_unavailable")
-            if ms >= reading.close_s * 1000:
+            if ms >= reading.signal_msc:
+                if reading.trigger:
+                    raise Block(
+                        "same_side_batch_at_live_trigger"
+                        if deal.type == closing_type
+                        else "symbol_busy_at_live_trigger"
+                    )
                 raise Block("same_side_batch_at_signal_close")
 
     def prepare(self, name, d, window, stage, expected=None, remaining=None):
@@ -251,11 +284,14 @@ class Desk:
                 raise Block("same_side_batch_open")
             raise Block("symbol_busy_or_batch_changed")
         if stage == "first_plan":
-            self._check_flat_at_close(name, d, time.time())
+            self._check_flat_at_trigger(name, d, time.time())
         i = mt.symbol_info(name)
         grid = Grid.from_info(i)
         if not _side_is_allowed(mt, i, "BUY" if d.side == 1 else "SELL"):
             raise Block("broker_side_disabled")
+        if stage == "first_plan" and d.trigger:
+            # A later, narrower spread or recovered stop cannot rescue the first cross.
+            protected_prices(d, p, grid, d.trigger.bid, d.trigger.ask)
         q, _ = self._entry_quote(name, window, stage)
         plan = make_plan(d, p, grid, q.bid, q.ask, self.cash(name))
         margin = _finite_or_none(
@@ -343,7 +379,7 @@ class Desk:
 
     def close_opposite(self, name, reading):
         """Close all owned positions against a fresh opposite Hull label."""
-        if not self.armed or not reading.side:
+        if not self.armed or not reading.side or reading.trigger is not None:
             return 0
         ps, _ = snapshot(self.mt)
         closed = 0
@@ -517,6 +553,7 @@ class Desk:
                 tf=w.reading.tf,
                 raw_selected_tf=w.raw_tf,
                 close_s=w.reading.close_s,
+                **w.reading.clock_fields(),
                 outcome=reason,
                 polls=w.polls,
                 previous_wait=w.last_wait_reason,
@@ -526,26 +563,34 @@ class Desk:
         for name in list(self.waiting):
             self.cancel_wait(name, "first_quote_wait_stopped")
 
-    def batch(self, name, d, *, raw_tf=None, observed_lanes=()):
+    def _live_reserved(self, name, d):
+        last = self.state.get("live_bars", {}).get(name, {}).get(str(d.tf))
+        return last == [d.close_s, d.side]
+
+    def batch(self, name, d, *, raw_tf=None, observed_lanes=(), live_peers=()):
         seen = self.state.setdefault("consumed", {})
-        if seen.get(name, 0) >= d.close_s:
+        if seen.get(name, 0) >= d.signal_s or self._live_reserved(name, d):
             return "already_consumed"
         self.cancel_wait(name, "first_quote_wait_superseded")
         # Reserve ONCE before touching broker order APIs. Only the original,
         # in-memory first-quote window may resume this reservation. A restart cannot.
-        seen[name] = d.close_s
+        seen[name] = d.signal_s  # seconds, backwards-compatible with closed-only state
+        for peer in (d, *live_peers):
+            if peer.trigger and peer.signal_msc == d.signal_msc:
+                record = self.state.setdefault("live_bars", {}).setdefault(name, {})
+                record[str(peer.tf)] = [peer.close_s, peer.side]
         self.persist()
         if not d.entry_side:
             return d.entry_reason
         mono = time.monotonic()
-        remaining = d.close_s + self.lim.max_entry_age_s - time.time()
+        remaining = d.signal_s + self.lim.max_entry_age_s - time.time()
         window = FirstQuoteWindow(d, mono + remaining, raw_tf, {d.tf, *observed_lanes})
         return self._attempt(name, window)
 
     def resume_first_quote(self, name):
         # Take the reservation out before processing; only another waitable check can put it back.
         w = self.waiting.pop(name)
-        if self.state["consumed"].get(name) != w.reading.close_s:
+        if self.state["consumed"].get(name) != w.reading.signal_s:
             return "first_quote_wait_superseded"
         return self._attempt(name, w)
 
@@ -571,12 +616,13 @@ class Desk:
                         "batch_preview",
                         symbol=name,
                         tf=d.tf,
-                        signal=d.close_s,
+                        signal=d.signal_s,
                         rate=self.syms[name][1].rate,
                         legs=n,
                         exit_policy=self.h.exit_policy,
                         goal_per_leg=self.syms[name][1].target_usd,
                         risk_batch=n * plan.risk_usd,
+                        **d.clock_fields(),
                         **asdict(plan),
                     )
                     if not self.armed:
@@ -593,7 +639,11 @@ class Desk:
                     "magic": self.h.magic,
                     "type_time": self.mt.ORDER_TIME_GTC,
                     "type_filling": _filling_mode(self.mt, i),
-                    "comment": f"h{d.tf}_{d.close_s}_{sent + 1}",
+                    "comment": (
+                        f"i{d.tf}_{d.trigger.ms}_{sent + 1}"
+                        if d.trigger
+                        else f"h{d.tf}_{d.close_s}_{sent + 1}"
+                    ),
                 }
                 chk = self.mt.order_check(req)
                 a = self.account()
@@ -603,7 +653,7 @@ class Desk:
                         "broker_precheck_rejected",
                         symbol=name,
                         tf=d.tf,
-                        signal=d.close_s,
+                        signal=d.signal_s,
                         leg=sent + 1,
                         retcode=retcode,
                     )
@@ -620,14 +670,15 @@ class Desk:
                     raise Block("quote_or_plan_changed")
                 self.state["manual_hold"] = {
                     "symbol": name,
-                    "signal": d.close_s,
+                    "signal": d.signal_s,
+                    **d.clock_fields(),
                     "leg": sent + 1,
                 }
                 self.persist()
                 self.account()
                 try:
                     q3, checked = self._entry_quote(name, window, "final_send")
-                except TimingBlock:
+                except Block:
                     # No send has happened on this leg. Do not requeue after a precheck.
                     self.state.pop("manual_hold")
                     self.persist()
@@ -641,8 +692,9 @@ class Desk:
                     "demo_result",
                     symbol=name,
                     leg=sent + 1,
-                    signal=d.close_s,
+                    signal=d.signal_s,
                     request=req,
+                    **d.clock_fields(),
                     send_check_utc=utc(checked),
                     send_tick_time_msc=int(q3.time_msc),
                     retcode=getattr(res, "retcode", None),
@@ -669,7 +721,7 @@ class Desk:
                     "entry_quote_check",
                     symbol=name,
                     tf=d.tf,
-                    signal=d.close_s,
+                    signal=d.signal_s,
                     stage=exc.stage,
                     polls=window.polls,
                     disposition="wait" if wait else "reject",

@@ -22,6 +22,8 @@ ENTRY_WINDOW = (
     60  # The shipped scanner caps entry age at 30s. Allow late sequential receipts.
 )
 TAG = re.compile(r"h(1|2|5)_(\d{9,11})_([1-9]\d{0,3})\Z")
+LIVE_TAG = re.compile(r"i(1|2|5)_([1-9]\d{11,13})_([1-9]\d{0,3})\Z")
+LIVE_KEY_MIN = 10**11  # disjoint from every accepted legacy seconds key
 CASH = ("gross_profit", "commission", "swap", "fee")
 FIELDS = [
     "schema_version",
@@ -61,6 +63,12 @@ FIELDS = [
     "close_session",
     "bot_exit_request",
     "bot_exit_request_utc",
+    "entry_timing",
+    "signal_trigger_utc",
+    "signal_bar_open_utc",
+    "signal_bar_end_utc",
+    "trigger_bid",
+    "trigger_ask",
 ]
 NUMERIC = {
     "schema_version",
@@ -139,6 +147,8 @@ def db_open(path):
       CREATE TABLE IF NOT EXISTS receipts(id TEXT PRIMARY KEY,symbol TEXT, tag TEXT,side TEXT,sl TEXT,tp TEXT);
       CREATE TABLE IF NOT EXISTS labels(symbol TEXT,tf INTEGER,signal INTEGER,side TEXT,model TEXT,
           PRIMARY KEY(symbol,tf,signal,side));
+      CREATE TABLE IF NOT EXISTS live_triggers(symbol TEXT,tf INTEGER,signal INTEGER,side TEXT,bar_end INTEGER,bid TEXT,ask TEXT,
+          PRIMARY KEY(symbol,tf,signal,side));
       CREATE TABLE IF NOT EXISTS exit_notes(symbol TEXT,ticket TEXT,at_ms INTEGER,why TEXT,
           PRIMARY KEY(symbol,ticket,at_ms,why));
       CREATE TABLE IF NOT EXISTS finished(symbol TEXT,tf INTEGER,signal INTEGER,outcome TEXT,
@@ -198,11 +208,22 @@ def norm(x):
 
 
 def tag(s):
-    m = TAG.fullmatch(str(s or ""))
+    text = str(s or "")
+    m = TAG.fullmatch(text) or LIVE_TAG.fullmatch(text)
     if not m:
         return None
     tf, stamp, leg = map(int, m.groups())
-    return (tf, stamp, leg) if 0 < stamp < 32_503_680_000 else None
+    maximum = 32_503_680_000 * (1000 if text.startswith("i") else 1)
+    return (tf, stamp, leg) if 0 < stamp < maximum else None
+
+
+def trigger_ms(key):
+    return key if key >= LIVE_KEY_MIN else key * 1000
+
+
+def signal_window(key):
+    ms = trigger_ms(key)
+    return ms // 1000, (ms + 999) // 1000 + ENTRY_WINDOW
 
 
 def import_log(c, path, magic):
@@ -215,7 +236,7 @@ def import_log(c, path, magic):
     bad = int(old.get("bad", 0))
     changed = False
     with path.open("rb") as f:
-        if old.get("format") != 2 or old.get("path") != str(path) or off > size:
+        if old.get("format") != 3 or old.get("path") != str(path) or off > size:
             off = bad = 0
         if off:
             f.seek(max(off - 96, 0))
@@ -234,6 +255,7 @@ def import_log(c, path, magic):
                 for w in (
                     b'"demo_result"',
                     b'"closed_label"',
+                    b'"live_hull_cross"',
                     b'"label_decision"',
                     b'"exit_request"',
                 )
@@ -283,15 +305,38 @@ def import_log(c, path, magic):
                                 str(ev["reason"]),
                             ),
                         )
-                elif typ == "closed_label" and ev.get("entry_side") in (1, -1):
-                    vals = (
-                        sy,
-                        int(ev["tf"]),
-                        int(ev["close_s"]),
-                        "BUY" if ev["entry_side"] == 1 else "SELL",
-                        str(ev.get("entry_setup") or ""),
+                elif typ in ("closed_label", "live_hull_cross") and ev.get(
+                    "entry_side"
+                ) in (1, -1):
+                    tf, end = int(ev["tf"]), int(ev["close_s"])
+                    side = "BUY" if ev["entry_side"] == 1 else "SELL"
+                    stamp = end
+                    if typ == "live_hull_cross":
+                        stamp = int(ev["trigger_msc"])
+                        quote = ev["trigger"]
+                        if (
+                            tf not in (1, 2, 5)
+                            or not (end - 60 * tf) * 1000 <= stamp < end * 1000
+                            or stamp != quote["ms"]
+                            or not 0 < dec(quote["bid"]) <= dec(quote["ask"])
+                        ):
+                            raise ValueError("Inconsistent live label")
+                        c.execute(
+                            "INSERT OR IGNORE INTO live_triggers VALUES(?,?,?,?,?,?,?)",
+                            (
+                                sy,
+                                tf,
+                                stamp,
+                                side,
+                                end,
+                                plain(quote["bid"]),
+                                plain(quote["ask"]),
+                            ),
+                        )
+                    c.execute(
+                        "INSERT OR IGNORE INTO labels VALUES(?,?,?,?,?)",
+                        (sy, tf, stamp, side, str(ev.get("entry_setup") or "")),
                     )
-                    c.execute("INSERT OR IGNORE INTO labels VALUES(?,?,?,?,?)", vals)
                 elif (
                     typ == "label_decision"
                     and ev.get("tf")
@@ -305,7 +350,16 @@ def import_log(c, path, magic):
                 ):
                     c.execute(
                         "INSERT OR REPLACE INTO finished VALUES(?,?,?,?)",
-                        (sy, int(ev["tf"]), int(ev["close_s"]), str(ev["outcome"])),
+                        (
+                            sy,
+                            int(ev["tf"]),
+                            int(
+                                ev["trigger_msc"]
+                                if ev.get("entry_timing") == "live_hull_cross"
+                                else ev["close_s"]
+                            ),
+                            str(ev["outcome"]),
+                        ),
                     )
                 changed |= c.total_changes != before
             except (
@@ -322,7 +376,7 @@ def import_log(c, path, magic):
     put(
         c,
         "log_cursor",
-        {"format": 2, "path": str(path), "off": off, "tail": tail, "bad": bad},
+        {"format": 3, "path": str(path), "off": off, "tail": tail, "bad": bad},
     )
     return changed, True
 
@@ -461,17 +515,13 @@ def sync(c, mt, now, *, days=30, magic=MAGIC, repo=None, reconcile=False):
             for ent in entries:
                 ref = tag(ent["comment"]) or tag(receipt_tags.get(ent["id"]))
                 sy = ent["symbol"]
-                if (
-                    not ref
-                    or ref[1] >= covered_from
-                    or ref[1] + ENTRY_WINDOW > now
-                    or (sy, ref[1]) in windows
-                ):
+                if not ref:
                     continue
                 stamp = ref[1]
-                related = mt.history_deals_get(
-                    dt(stamp - 1), dt(stamp + ENTRY_WINDOW + 1)
-                )
+                lower, upper = signal_window(stamp)
+                if lower >= covered_from or upper > now or (sy, stamp) in windows:
+                    continue
+                related = mt.history_deals_get(dt(lower - 1), dt(upper + 1))
                 if related is None:
                     raise JournalError(
                         "Original setup entry window unavailable; poll not committed."
@@ -584,6 +634,10 @@ def make_views(c):
         (s, t, stamp, side): model
         for s, t, stamp, side, model in c.execute("SELECT * FROM labels")
     }
+    live_triggers = {
+        (s, t, stamp, side): (end, bid, ask)
+        for s, t, stamp, side, end, bid, ask in c.execute("SELECT * FROM live_triggers")
+    }
     finished = {
         (s, t, stamp): o for s, t, stamp, o in c.execute("SELECT * FROM finished")
     }
@@ -695,7 +749,6 @@ def make_views(c):
                 leg=str(link[2]) if link else "",
                 ticket_count="1",
                 setup_type=model,
-                signal_close_utc=iso(link[1] * 1000) if link else "",
                 open_time_utc=iso(start),
                 close_time_utc=iso(end),
                 duration_s=plain(D(end - start) / 1000),
@@ -714,6 +767,20 @@ def make_views(c):
                 initial_tp=brackets[0][1] if brackets else "",
                 attribution=" + ".join(sorted(sources)) if link else "Unattributed",
             )
+            if link:
+                is_live = stamp >= LIVE_KEY_MIN
+                r["entry_timing"] = "live_hull_cross" if is_live else "confirmed_close"
+                r["signal_trigger_utc"] = iso(trigger_ms(stamp))
+                if not is_live:
+                    r["signal_close_utc"] = r["signal_trigger_utc"]
+                    bar_end = stamp
+                else:
+                    bar_end, r["trigger_bid"], r["trigger_ask"] = live_triggers.get(
+                        (sy, tf, stamp, side), (None, "", "")
+                    )
+                if bar_end is not None:
+                    r["signal_bar_open_utc"] = iso((bar_end - tf * 60) * 1000)
+                    r["signal_bar_end_utc"] = iso(bar_end * 1000)
             # The audit contains the position ticket but no exit deal ID. Show the
             # request separately, never overwrite the final broker deal reason.
             if why == "Hull exit":
@@ -752,7 +819,7 @@ def make_views(c):
     wait = 0
     for key, rs in members.items():
         sy, tf, stamp, side = key
-        end_window = stamp + ENTRY_WINDOW
+        begin_window, end_window = signal_window(stamp)
         result = finished.get((sy, tf, stamp), "")
         # A receipt without a broker deal, an unresolved sibling or any open leg prevents completion.
         final_receipt = (
@@ -766,8 +833,10 @@ def make_views(c):
         blocked = (
             None in rs
             or key in missing
-            or (floor > stamp and (sy, stamp) not in windows)
-            or any(a <= end_window and b >= stamp for a, b in unknown.get(sy, []))
+            or (floor > begin_window and (sy, stamp) not in windows)
+            or any(
+                a <= end_window and b >= begin_window for a, b in unknown.get(sy, [])
+            )
         )
         if blocked or (not final_receipt and now < end_window):
             wait += 1
@@ -789,7 +858,18 @@ def make_views(c):
             setup_id=first["setup_id"],
             ticket_count=str(len(rs)),
             setup_type=first["setup_type"],
-            signal_close_utc=first["signal_close_utc"],
+            **{
+                k: first[k]
+                for k in (
+                    "signal_close_utc",
+                    "entry_timing",
+                    "signal_trigger_utc",
+                    "signal_bar_open_utc",
+                    "signal_bar_end_utc",
+                    "trigger_bid",
+                    "trigger_ask",
+                )
+            },
             open_time_utc=first["open_time_utc"],
             close_time_utc=last["close_time_utc"],
             duration_s=plain(dur.total_seconds()),

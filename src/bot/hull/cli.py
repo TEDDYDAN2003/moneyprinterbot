@@ -11,7 +11,10 @@ def register(sub):
             "hull-preflight",
             "inspect demo terminal, symbol metadata and sizing; no orders",
         ),
-        ("hull-replay", "ordered tick replay of Hull labels; never connects to MT5"),
+        (
+            "hull-replay",
+            "closed-label benchmark with ordered quotes; not intrabar entry replay",
+        ),
     ]:
         p = sub.add_parser(
             name, aliases=["demo"] if name == "trade" else [], help=helptext
@@ -41,7 +44,7 @@ def register(sub):
                 "--poll-seconds",
                 type=float,
                 default=1.0,
-                help="normal poll interval (0.25–10 s); poll faster around a selected bar close",
+                help="normal poll interval (0.25–10 s); poll faster for armed pullback watches and around native closes",
             )
             p.add_argument("--max-iterations", type=int)
         if name == "hull-replay":

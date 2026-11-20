@@ -54,6 +54,7 @@ class MT:
         )
         self.i = NS(
             name="XAUUSDm",
+            chart_mode=0,
             trade_tick_size=0.001,
             point=0.001,
             digits=3,

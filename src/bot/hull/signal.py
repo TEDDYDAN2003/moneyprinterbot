@@ -1,14 +1,16 @@
-"""Port of the supplied Free Chart Hull calculation. Only accept FINISHED OHLC bars."""
+"""Port of the supplied Free Chart Hull calculation. Commit only finished OHLC; live projections are side-effect free."""
 
 from __future__ import annotations
 
 import math
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from itertools import chain, islice
 
 from bot.zones.engine import Bar
 
 from .config import FRAMES, Indicator
+from .entry_clock import utc
 from .structure import ENTRY_POLICY, InternalStructure, Pivot, Structure
 
 ENTRY_AUDIT_FIELDS = (
@@ -33,18 +35,24 @@ class WMA:
         self.n = n
         self.div = n * (n + 1) / 2
 
-    def push(self, v):
-        if v is None:
-            self.q.clear()
-            return None
-        self.q.append(v)
-        if len(self.q) == self.n:
-            # Match ordinary JS multiply/add ordering even on Python versions with compensated sum().
-            weighted = 0.0
-            for i, x in enumerate(self.q, 1):
-                weighted += i * x
-            return weighted / self.div
-        return None
+    def next(self, v, commit):
+        if commit:
+            if v is None:
+                self.q.clear()
+                return None
+            self.q.append(v)
+            if len(self.q) != self.n:
+                return None
+            terms = self.q
+        else:
+            if v is None or len(self.q) + 1 < self.n:
+                return None
+            # Same multiply/add order as push, without modifying the closed buffer.
+            terms = chain(islice(self.q, int(len(self.q) == self.n), None), (v,))
+        weighted = 0.0
+        for i, x in enumerate(terms, 1):
+            weighted += i * x
+        return weighted / self.div
 
 
 class Baseline:
@@ -55,10 +63,14 @@ class Baseline:
         self.smooth = WMA(max(1, math.floor(math.sqrt(length) + 0.5)))
         self.last = None
 
-    def update(self, source, b, prev_b):
-        x, y = self.fast.push(source), self.slow.push(source)
-        a = self.smooth.push(2 * x - y if x is not None and y is not None else None)
-        prev_a, self.last = self.last, a
+    def update(self, source, b, prev_b, commit):
+        x, y = self.fast.next(source, commit), self.slow.next(source, commit)
+        a = self.smooth.next(
+            2 * x - y if x is not None and y is not None else None, commit
+        )
+        prev_a = self.last
+        if commit:
+            self.last = a
         cross = 0
         if None not in (a, b, prev_a, prev_b):
             if b > a and prev_b < prev_a:
@@ -69,8 +81,32 @@ class Baseline:
 
 
 @dataclass(frozen=True, slots=True)
+class LiveTick:
+    ms: int
+    bid: float
+    ask: float
+
+    @classmethod
+    def read(cls, q):
+        if q is None:
+            return None
+        ms = getattr(q, "time_msc", None)
+        b, a = getattr(q, "bid", None), getattr(q, "ask", None)
+        if not (
+            isinstance(ms, int)
+            and ms > 0
+            and isinstance(b, (float, int))
+            and isinstance(a, (float, int))
+            and 0 < b <= a
+            and math.isfinite(a)
+        ):
+            return None
+        return cls(ms, b, a)
+
+
+@dataclass(frozen=True, slots=True)
 class Reading:
-    close_s: int
+    close_s: int  # scheduled candle end; NOT the trigger time on a live projection
     tf: int
     close: float
     a: float | None
@@ -97,6 +133,29 @@ class Reading:
     cross_high: int = 0
     source_conflict: bool = False
 
+    trigger: LiveTick | None = None
+    confirmation_only: bool = (
+        False  # chart cross whose continuation belonged to the live path
+    )
+
+    @property
+    def signal_msc(self):
+        return self.trigger.ms if self.trigger else self.close_s * 1000
+
+    @property
+    def signal_s(self):
+        return self.trigger.ms / 1000 if self.trigger else self.close_s
+
+    def clock_fields(self):
+        return {
+            "entry_timing": "live_hull_cross" if self.trigger else "confirmed_close",
+            "trigger_msc": self.signal_msc,
+            "trigger_utc": utc(self.signal_s),
+            "bar_open_utc": utc(self.close_s - self.tf * 60),
+            "bar_end_utc": utc(self.close_s),
+            "signal_close_utc": None if self.trigger else utc(self.close_s),
+        }
+
     @property
     def entry_reason(self) -> str:
         if not self.label:
@@ -105,7 +164,19 @@ class Reading:
             return self.reason if self.reason != "ready" else "no_executable_label"
         if self.side != self.label:
             return "no_matching_hull_label"
-        return self.structure.veto(self.side, self.close) or "ready"
+        if self.trigger:
+            if self.side != self.structure.bias:
+                return "opposite_label_requires_close"
+            seen = self.structure.pullback_seen_s
+            if (
+                not self.structure.continuation_side
+                or seen is None
+                or seen > self.close_s - self.tf * 60
+            ):
+                return "live_requires_completed_pullback"
+        return self.structure.veto(self.side, self.close) or (
+            "continuation_live_only" if self.confirmation_only else "ready"
+        )
 
     @property
     def entry_side(self) -> int:
@@ -158,6 +229,24 @@ class Hull:
     def update(self, c: Bar) -> Reading:
         if self.prev and c.t <= self.prev.t:
             raise ValueError("Closed bars must be unique and ordered")
+        return self._read(c, None)
+
+    def preview(self, c: Bar, tick: LiveTick) -> Reading:
+        """One projection from the SAME last closed candle on every tick. Never commit it."""
+        period = self.tf * 60
+        if (
+            self.prev is None
+            or c.t != self.prev.t + period
+            or c.c != tick.bid
+            or not c.t * 1000 <= tick.ms < (c.t + period) * 1000
+        ):
+            raise ValueError(
+                "Live bid candle and broker tick must follow the closed state"
+            )
+        return self._read(c, tick)
+
+    def _read(self, c, tick):
+        commit = tick is None
         p = self.p
         values = {
             "open": c.o,
@@ -169,10 +258,10 @@ class Hull:
             "ohlc4": (c.o + c.h + c.l + c.c) / 4,
         }
         fast, mid, slow, smooth = self.b_weights
-        x, y, z = fast.push(c.c), mid.push(c.c), slow.push(c.c)
-        b = smooth.push(3 * x - y - z if None not in (x, y, z) else None)
+        x, y, z = fast.next(c.c, commit), mid.next(c.c, commit), slow.next(c.c, commit)
+        b = smooth.next(3 * x - y - z if None not in (x, y, z) else None, commit)
         curves = {
-            src: curve.update(values[src], b, self.last_b)
+            src: curve.update(values[src], b, self.last_b, commit)
             for src, curve in self.baselines.items()
         }
         low, low_cross = curves.get("low", (None, 0))
@@ -183,38 +272,46 @@ class Hull:
             if p.source == "either"
             else curves[p.source]
         )
-        self.ema = (
+        ema = (
             c.c
             if self.ema is None
             else self.ema + 2 / (p.ema_length + 1) * (c.c - self.ema)
         )
-        tr = (
-            c.h - c.l
-            if self.prev is None
-            else max(c.h - c.l, abs(c.h - self.prev.c), abs(c.l - self.prev.c))
-        )
-        self.n += 1
-        if self.atr is None:
-            self.tr_sum += tr
-            if self.n == p.atr_length:
-                self.atr = self.tr_sum / p.atr_length
-        else:
-            self.atr = (self.atr * (p.atr_length - 1) + tr) / p.atr_length
         prior = list(self.hist)[-p.pullback_bars :] if label else []
-        self.hist.append(c)
-        s = p.swing_len
         close_s = c.t + self.tf * 60
-        pl = ph = None
-        if len(self.hist) >= 2 * s + 1:
-            span = list(self.hist)[-(2 * s + 1) :]
-            mid = span[s]
-            left = span[:s]
-            right = span[s + 1 :]
-            if all(mid.l <= q.l for q in left) and all(mid.l < q.l for q in right):
-                self.low = pl = Pivot(mid.l, mid.t, close_s)
-            if all(mid.h >= q.h for q in left) and all(mid.h > q.h for q in right):
-                self.high = ph = Pivot(mid.h, mid.t, close_s)
-        structure = self.structure.update(c, close_s, ph, pl)
+        if commit:
+            self.ema = ema
+            tr = (
+                c.h - c.l
+                if self.prev is None
+                else max(c.h - c.l, abs(c.h - self.prev.c), abs(c.l - self.prev.c))
+            )
+            self.n += 1
+            if self.atr is None:
+                self.tr_sum += tr
+                if self.n == p.atr_length:
+                    self.atr = self.tr_sum / p.atr_length
+            else:
+                self.atr = (self.atr * (p.atr_length - 1) + tr) / p.atr_length
+            self.hist.append(c)
+            s = p.swing_len
+            pl = ph = None
+            if len(self.hist) >= 2 * s + 1:
+                span = list(self.hist)[-(2 * s + 1) :]
+                mid = span[s]
+                left = span[:s]
+                right = span[s + 1 :]
+                if all(mid.l <= q.l for q in left) and all(mid.l < q.l for q in right):
+                    self.low = pl = Pivot(mid.l, mid.t, close_s)
+                if all(mid.h >= q.h for q in left) and all(mid.h > q.h for q in right):
+                    self.high = ph = Pivot(mid.h, mid.t, close_s)
+            structure = self.structure.update(c, close_s, ph, pl)
+        else:
+            # Freeze structure, stop anchors AND ATR at the previous completed bar.
+            # A wick cannot confirm a pivot, a pullback, a CHoCH or a BOS here.
+            structure = self.structure.view
+            if structure.break_now:
+                structure = replace(structure, break_now=False)
         anchor = when = sl = window = None
         count = 0
         side = 0
@@ -244,21 +341,27 @@ class Hull:
             if sl is None:
                 reason = "no_known_swing_or_atr"
             elif sl <= 0 or label * (c.c - sl) <= 0:
-                reason = "swing_already_lost_at_close"
-            elif p.signal == "ema_plan" and label * (c.c - self.ema) <= 0:
+                reason = (
+                    "swing_already_lost_at_close"
+                    if commit
+                    else "swing_already_lost_at_trigger"
+                )
+            elif p.signal == "ema_plan" and label * (c.c - ema) <= 0:
                 reason = "ema_filter"
             else:
                 side = label
                 reason = "ready"
-            self.last_cross[label] = c.t
-        self.prev, self.last_b = c, b
+            if commit:
+                self.last_cross[label] = c.t
+        if commit:
+            self.prev, self.last_b = c, b
         return Reading(
             close_s,
             self.tf,
             c.c,
             a,
             b,
-            self.ema,
+            ema,
             self.atr,
             label,
             side,
@@ -276,4 +379,5 @@ class Hull:
             low_cross,
             high_cross,
             conflict,
+            tick,
         )
