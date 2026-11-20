@@ -36,9 +36,9 @@ def test_exact_batch_range_per_ticket_tp_dynamic_sl_no_five_dollar_clip(
     assert len(mt.positions) == legs
     for p in mt.positions:
         assert p.sl == sl and p.volume == 0.1 and p.magic == d.h.magic
-        assert (p.tp - p.price_open) * 10 >= 10 and (
+        assert (p.tp - p.price_open) * 10 >= 11 - 1e-8 and (
             p.tp - 0.001 - p.price_open
-        ) * 10 < 10
+        ) * 10 < 11 - 1e-8
     if rate == "slow":
         assert (mt.q.ask - sl) * 10 > 5
     assert len(d.ladders.book) == legs and not d.state.get("manual_hold")
@@ -81,12 +81,12 @@ def test_fixed_mode_retargets_to_actual_open_and_cash_exit_is_preserved(hull_des
         and len(mt.requests) == 20
         and mt.requests[0]["action"] == 1
         and mt.requests[1]["action"] == 6
-        and mt.positions[0].tp == pytest.approx(2001.12)
+        and mt.positions[0].tp == pytest.approx(2001.22)
     )
-    mt.positions[0].profit = 9.99
+    mt.positions[0].profit = 10.99
     d.supervise()
     assert len(mt.positions) == 10
-    mt.positions[0].profit = 10.0
+    mt.positions[0].profit = 11.0
     d.supervise()
     assert len(mt.positions) == 9
 

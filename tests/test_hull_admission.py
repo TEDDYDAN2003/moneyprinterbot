@@ -67,7 +67,7 @@ def test_shipped_and_omitted_settings_match_and_do_not_change_old_explicit_confi
 )
 def test_each_cap_is_independent_and_still_opt_in(over, expected):
     # The replay and desk both call room(). A funded signal can exceed all three old ceilings.
-    plan = Plan(1, 0.1, 2000.10, 1979.613, 2001.10, 204.87, 10.0)
+    plan = Plan(1, 0.1, 2000.10, 1979.613, 2001.20, 204.87, 11.0, 10.0, 1.0)
     assert room(Limits(**over), Exposure(60, 54.0, 0.0), plan, 10) == expected
 
 

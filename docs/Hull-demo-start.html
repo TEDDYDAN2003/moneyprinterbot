@@ -8,7 +8,7 @@
 <body><main>
 <header><span>Moneyprinterbot / Desktop setup</span><span class="badge">Read-only start</span></header>
 <h1>Copy your Hull profiles</h1>
-<p class="muted">Your Windows agent follows the repository <code>README.md</code>. Pick the symbols, lot, TP and rate here; send <strong>only the start line or selected rows</strong>. This page does not connect to MT5 or place orders.</p>
+<p class="muted">Your Windows agent follows the repository <code>README.md</code>. Pick the symbols, lot, base target and rate here; send <strong>only the start line or selected rows</strong>. This page does not connect to MT5 or place orders.</p>
 <noscript><p>To use the three slow profiles without JavaScript, send <strong>HULL START trio-slow</strong> to the desktop agent with the updated repository. For other profiles, use <code>HULL START SYMBOL:LOT:TP_USD:RATE</code>.</p></noscript>
 <section class="panel" aria-labelledby="pick-title">
 <h2 id="pick-title">1 · Choose profiles</h2>
@@ -16,8 +16,8 @@
 <p>Hull v2: <strong>Either source, length 16</strong>. One normal batch on a qualified cross while flat; repeats while any same-side ticket remains do not add or close trades. A fresh cross after flat can reuse the same region. Existing SL and 70/30 ladder stay in place. An older local demo config must explicitly use <code>source: either</code> and <code>hull_len: 16</code>. <a href="HULL_DEMO.md#what-triggers-an-entry">Signal and migration details</a>.</p>
 <button class="secondary preset" type="button" id="trio">trio-slow · gold 0.09, EUR/GBP 0.01 lot per ticket</button>
 <button class="secondary preset" type="button" id="trio-config">Configured trio · gold 0.10, EUR/GBP 1.00 lot per ticket</button>
-<div class="scroll"><table id="profile-table"><thead><tr><th>Use / symbol</th><th>Lot per ticket</th><th>TP USD / ticket</th><th>Rate</th><th>Batch if all fill</th></tr></thead><tbody id="profiles"></tbody></table></div>
-<p class="note">Slow = <strong>10 tickets</strong>; medium = 3–4; fast = 6–7. Batch totals are estimates, <strong>not</strong> per-ticket inputs. By default Hull has no ticket, gross-lot or stop-risk cap and reserves no extra free margin. Hull does not halt at a drawdown or cap sends per minute. Each batch still needs funding; broker limits and any optional portfolio or margin overrides still apply. TP is the initial target per ticket. With the default profit ladder, +$7 on a $10 ticket requests SL +$6 and TP +$12; at +$10 it requests SL +$9 and TP +$15. Each later step adds $3 to all three levels. Targets and stop fills are not guaranteed.</p>
+<div class="scroll"><table id="profile-table"><thead><tr><th>Use / symbol</th><th>Lot per ticket</th><th>Base USD / ticket</th><th>Rate</th><th>Batch if all fill</th></tr></thead><tbody id="profiles"></tbody></table></div>
+<p class="note">Slow = <strong>10 tickets</strong>; medium = 3–4; fast = 6–7. Batch dollars shown are configured bases only (before spread cushions), <strong>not</strong> per-ticket inputs. By default Hull has no ticket, gross-lot or stop-risk cap and reserves no extra free margin. Hull does not halt at a drawdown or cap sends per minute. Each batch still needs funding; broker limits and any optional portfolio or margin overrides still apply. Each new ticket adds one entry-spread cash value to its base. A $10 base and a $13 cash spread give a $23 gross goal. The first ladder move at +$16.10 requests SL +$13.80 and TP +$27.60. The spread and goal can differ between tickets. Targets and stop fills are not guaranteed.</p>
 </section>
 <section class="panel" aria-labelledby="send-title">
 <h2 id="send-title">2 · Paste this into your desktop agent</h2>
@@ -57,7 +57,7 @@ for (const [key, lot] of presets) {
   // key and lot come from the fixed preset list, never from a message or URL.
   row.innerHTML = `<td><label><input class="use" type="checkbox"> ${displayKey}</label></td>
     <td><input class="lot" type="number" min="0.00000001" step="any" aria-label="${displayKey} lot per ticket"></td>
-    <td><input class="tp" type="number" min="0.00000001" step="any" aria-label="${displayKey} target USD per ticket"></td>
+    <td><input class="tp" type="number" min="0.00000001" step="any" aria-label="${displayKey} base USD per ticket"></td>
     <td><select aria-label="${displayKey} rate"><option>slow</option><option>medium</option><option>fast</option></select></td><td class="batch"></td>`;
   row.querySelector('.use').checked = key === 'XAUUSD'; // Never implicitly select the trio.
   row.querySelector('.lot').value = lot;
@@ -68,7 +68,7 @@ function range(amount, low, high) {
   return low === high ? fmt(amount*low) : `${fmt(amount*low)}–${fmt(amount*high)}`;
 }
 function update() {
-  const profiles = [], rows = ['Use / symbol | Lot per ticket | TP USD / ticket | Rate | Batch if all fill'];
+  const profiles = [], rows = ['Use / symbol | Lot per ticket | Base USD / ticket | Rate | Batch if all fill'];
   let invalid = false;
   feedback.textContent = '';
   for (const row of body.rows) {
@@ -83,7 +83,7 @@ function update() {
       invalid = true;
       continue;
     }
-    const batch = `${range(size, ...span)} lot · $${range(target, ...span)}`;
+    const batch = `${range(size, ...span)} lot · $${range(target, ...span)} base`;
     total.textContent = batch;
     profiles.push(`${row.dataset.key}:${size}:${target}:${rate.value}`);
     rows.push([row.dataset.key, size, target, rate.value, batch].join(' | '));

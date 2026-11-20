@@ -122,11 +122,75 @@ def test_one_tick_is_not_a_safety_bypass_or_a_reprice_loop(hull_desk, case, outc
     assert desk.batch(NAME, r) == "already_consumed"
 
 
-def test_one_nonexecuting_tick_at_pre_send_with_same_plan_is_allowed(hull_desk):
-    mt, desk, _ = hull_desk("medium")
+@pytest.mark.parametrize("side", [1, -1])
+@pytest.mark.parametrize("moved_again", [False, True])
+def test_pre_send_spread_change_uses_the_one_unsent_reprice(
+    hull_desk, side, moved_again
+):
+    mt, desk, log = hull_desk("medium")
+    r = sig(1999.95 if side == 1 else 2000.55, side=side)
     first = mt.q
-    q = iter([first])
-    moved = NS(time_msc=first.time_msc + 20, bid=2000.001, ask=first.ask)
-    mt.symbol_info_tick = lambda _: next(q, moved)
-    assert desk.batch(NAME, sig()) == "demo_batch_sent"
-    assert len(mt.requests) == 4 and all(r["price"] == first.ask for r in mt.requests)
+    # One tick narrower on the non-entry side: same price & risk, different cushion and TP.
+    moved = NS(
+        time_msc=first.time_msc + 20,
+        bid=2000.001 if side == 1 else first.bid,
+        ask=2000.099 if side == -1 else first.ask,
+    )
+    # First plan / pre_send / unsent reprice / pre_send / final_send.
+    quotes = iter([first, moved, moved, moved])
+    final = (
+        NS(time_msc=moved.time_msc + 20, bid=first.bid, ask=first.ask)
+        if moved_again
+        else moved
+    )
+    mt.symbol_info_tick = lambda _: next(quotes, final)
+    checks = []
+
+    def check(req):
+        checks.append(dict(req))
+        return NS(retcode=0, margin_free=8900.0)
+
+    mt.order_check = check
+    status = desk.batch(NAME, r)
+    assert (
+        checks[0]["price"] == checks[1]["price"] and checks[0]["tp"] != checks[1]["tp"]
+    )
+    assert not desk.state.get("manual_hold") and not desk.waiting
+    if moved_again:
+        assert (
+            status == "final_quote_or_safety_changed"
+            and len(checks) == 2
+            and not mt.requests
+        )
+    else:
+        assert (
+            status == "demo_batch_sent"
+            and len(mt.positions) == 4
+            and checks[1:] == mt.requests
+        )
+        for event, log_entry in log:
+            if event == "demo_result":
+                assert log_entry["entry_spread_usd"] == pytest.approx(0.99)
+                assert log_entry["initial_goal_usd"] == pytest.approx(10.99)
+                assert log_entry["request"]["tp"] == checks[1]["tp"]
+    assert desk.batch(NAME, r) == "already_consumed"
+
+
+def test_changed_cash_conversion_without_quote_move_is_not_a_reprice_license(hull_desk):
+    mt, desk, _ = hull_desk("medium")
+    cash = mt.order_calc_profit
+    checks = []
+
+    def price(kind, name, lots, entry, mark):
+        value = cash(kind, name, lots, entry, mark)
+        return (
+            value * 1.1 if checks and (entry, mark) == (mt.q.ask, mt.q.bid) else value
+        )
+
+    def check(req):
+        checks.append(dict(req))
+        return NS(retcode=0, margin_free=8900.0)
+
+    mt.order_calc_profit, mt.order_check = price, check
+    assert desk.batch(NAME, sig()) == "quote_or_plan_changed"
+    assert len(checks) == 1 and not mt.requests and not desk.state.get("manual_hold")

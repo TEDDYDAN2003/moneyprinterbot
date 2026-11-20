@@ -79,39 +79,88 @@ class Plan:
     sl: float
     tp: float
     risk_usd: float
-    reward_usd: float
+    reward_usd: float  # modeled profit at the tick-rounded TP, not the ladder base
+    configured_target_usd: float
+    entry_spread_usd: float
+
+    @property
+    def goal_usd(self):
+        return self.configured_target_usd + self.entry_spread_usd
 
 
 def valid_cash(fn, side, lots, entry, exit):
     x = fn(side, lots, entry, exit)
-    if x is None or not math.isfinite(x):
+    if isinstance(x, bool) or not isinstance(x, (float, int)) or not math.isfinite(x):
         raise Block("cash_conversion_unavailable")
     return float(x)
 
 
-def target(grid, side, lots, entry, usd, cash):
-    # Smallest favorable tradable tick that reaches the USD goal, including FX/CFDs.
+def spread_goal(side, lots, bid, ask, base, cash):
+    """Add one explicit cushion, valued as an immediate round-trip loss on this quote.
+
+    order_calc_profit already prices executable fills. This *additional* profit goal
+    is not a fee and must never be deducted again from broker P/L. Some brokers
+    legitimately round a very small spread loss to zero in account currency.
+    """
+    if side not in (-1, 1) or not (math.isfinite(ask) and 0 < bid <= ask):
+        raise Block("bad_quote")
+    entry, mark = (ask, bid) if side == 1 else (bid, ask)
+    pnl = valid_cash(cash, side, lots, entry, mark) if bid != ask else 0.0
+    if pnl > 0:
+        raise Block("invalid_spread_valuation")
+    spread = abs(pnl)
+    goal = base + spread
+    if not (base > 0 and math.isfinite(goal)):
+        raise Block("invalid_cash_target")
+    return spread, goal
+
+
+def target(grid, side, lots, entry, usd, cash, *, cash_per_price=None):
+    """First favorable tradable tick reaching the goal. No cached prices across solves.
+
+    A slope from an already-priced stop or TP is ONLY a hint. Verify the bracket
+    with broker-valued P/L, including the preceding tick; use bounded search for
+    nonlinear FX, asymmetric tick values, or coarse currency rounding.
+    """
+    if not (usd > 0 and math.isfinite(usd)):
+        raise Block("invalid_cash_target")
     start = grid.index(entry, side == -1)
-    lo = 0
-    hi = 1
     limit = start - 1 if side == -1 else 2**40
     if limit < 1:
         raise Block("unreachable_cash_target")
+    values = {}
 
-    def worth(steps):
-        return valid_cash(cash, side, lots, entry, grid.price(start + side * steps))
+    def enough(steps):
+        if steps not in values:
+            price = grid.price(start + side * steps)
+            values[steps] = valid_cash(cash, side, lots, entry, price)
+        return values[steps] + 1e-9 >= usd
 
-    while worth(hi) + 1e-9 < usd:
-        if hi >= limit:
-            raise Block("unreachable_cash_target")
-        lo, hi = hi, min(2 * hi, limit)
+    hi, lo = 1, 0
+    if cash_per_price and math.isfinite(cash_per_price) and cash_per_price > 0:
+        guess = (usd / cash_per_price + side * (entry - grid.price(start))) / grid.tick
+        if math.isfinite(guess):
+            hi = min(limit, max(1, round(guess)))
+    if enough(hi):
+        if hi > 1:
+            if not enough(hi - 1):
+                lo = hi - 1
+            else:
+                hi -= 1
+    else:
+        # Try the next tick first (the linear estimate can round down by one).
+        lo, hi = hi, min(limit, hi + 1)
+        while not enough(hi):
+            if hi >= limit:
+                raise Block("unreachable_cash_target")
+            lo, hi = hi, min(2 * hi, limit)
     while hi - lo > 1:
         k = (hi + lo) // 2
-        if worth(k) + 1e-9 >= usd:
+        if enough(k):
             hi = k
         else:
             lo = k
-    return grid.price(start + side * hi), worth(hi)
+    return grid.price(start + side * hi), values[hi]
 
 
 def protected_prices(d, p, grid, bid, ask):
@@ -142,10 +191,13 @@ def make_plan(d, p, grid, bid, ask, cash):
     risk = -valid_cash(cash, side, p.lots, entry, sl)
     if risk <= 0:
         raise Block("nonpositive_cash_risk")
-    tp, reward = target(grid, side, p.lots, entry, p.target_usd, cash)
+    spread, goal = spread_goal(side, p.lots, bid, ask, p.target_usd, cash)
+    tp, reward = target(
+        grid, side, p.lots, entry, goal, cash, cash_per_price=risk / abs(entry - sl)
+    )
     if side * (tp - mark) < dist - grid.tick * 1e-6:
         raise Block("cash_target_inside_broker_distance")
-    return Plan(side, p.lots, entry, sl, tp, risk, reward)
+    return Plan(side, p.lots, entry, sl, tp, risk, reward, p.target_usd, spread)
 
 
 @dataclass(frozen=True, slots=True)

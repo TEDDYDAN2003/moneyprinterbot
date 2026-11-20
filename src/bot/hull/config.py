@@ -1,4 +1,4 @@
-"""Only explicitly selected profiles are eligible. Lot & target amounts are per ticket."""
+"""Only explicitly selected profiles are eligible. Lot and configured USD base are per ticket."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ COUNTS = {"slow": (10,), "medium": (4, 3), "fast": (7, 6)}
 FRAMES = (1, 2, 5)
 LADDER = "profit_ladder_70_30_v1"
 FIXED = "fixed_tp"
+TARGET_POLICY = "base_plus_entry_spread_v1"  # all newly opened Hull tickets, never retrofit saved goals
 LIVE_CONTINUATION = "live_continuation_v1"
 CLOSE_ONLY = "confirmed_close_only"
 BATCH_ENTRY_POLICY = "first_eligible_while_flat_v1"
@@ -112,7 +113,7 @@ def selection(
         for raw in profiles:
             fields = raw.split(":")
             if len(fields) != 4:
-                raise ValueError("--profile expects SYMBOL:LOT:TARGET_USD:RATE")
+                raise ValueError("--profile expects SYMBOL:LOT:BASE_USD:RATE")
             k, l, t, r = fields
             entries.append((k, {"lots": float(l), "target_usd": float(t), "rate": r}))
     else:

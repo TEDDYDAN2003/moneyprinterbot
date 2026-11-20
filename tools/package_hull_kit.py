@@ -24,6 +24,9 @@ JOURNAL = [
     "ui/style.css",
     "ui/app.js",
     "ui/analytics.js",
+    "ui/market_windows.js",
+    "ui/market_windows.tpl",
+    "ui/market_windows.json",
 ]
 MT5 = [
     "FC-Hull-Either-16-Structure.mq5",
@@ -39,10 +42,16 @@ MT5 = [
     "qa/protected_cases.json",
     "qa/reference.pine",
 ]
+SESSION_EVIDENCE = [
+    "README.md",
+    "archives.json",
+    "windows.csv",
+    "windows_by_utc_date.csv",
+]
 PINE = "indicators/FC-Hull-Either-16-Structure.pine"
 INTRO = """HULL LEDGER + PROTECTED SWING v2 CHART STUDIES
 
-Journal: extract the entire kit, read HullJournal/START-HERE.md, and use Start-Journal.cmd on the Windows MT5 computer. Keep your existing private data directory. The included examples are synthetic.
+Journal: extract the entire kit, read HullJournal/START-HERE.md, and use Start-Journal.cmd on the Windows MT5 computer. Keep your existing private data directory. The journal examples are synthetic; Symbol performance also contains separately labelled historical Exness price research. See research/session_volatility/ for the quote evidence.
 
 MT5: copy MT5/FC-Hull-Either-16-Structure.mq5 to MQL5/Indicators, open THAT file in MetaEditor and compile with F7. Refresh Navigator and attach the Protected v2 indicator. Do not paste Pine in MetaEditor.
 
@@ -58,6 +67,7 @@ def main():
     names = [
         *("HullJournal/" + f for f in JOURNAL),
         *("MT5/" + f for f in MT5),
+        *("research/session_volatility/" + f for f in SESSION_EVIDENCE),
         PINE,
         "docs/HULL_STRUCTURE.md",
     ]

@@ -1,0 +1,236 @@
+[
+  {
+    "name": "Exness_JP225m_2026_09.zip",
+    "url": "https://ticks.ex2archive.com/ticks/JP225m/2026/09/Exness_JP225m_2026_09.zip",
+    "sha256": "b9ef2f8db073b9dab016ae081fa731fd34392ae2a5ea0fc589fe8814ef2de42f",
+    "ticks": 2484479,
+    "invalid_quotes": 0,
+    "partial_nonempty_bars": 208,
+    "complete_bars": 5809
+  },
+  {
+    "name": "Exness_JP225m_2026_10.zip",
+    "url": "https://ticks.ex2archive.com/ticks/JP225m/2026/10/Exness_JP225m_2026_10.zip",
+    "sha256": "b756393cc763d2023a74dd5cdc5724209f7c330a6d25e4fa8d50e1399f0b1771",
+    "ticks": 3675119,
+    "invalid_quotes": 0,
+    "partial_nonempty_bars": 105,
+    "complete_bars": 5934
+  },
+  {
+    "name": "Exness_DE30m_2026_09.zip",
+    "url": "https://ticks.ex2archive.com/ticks/DE30m/2026/09/Exness_DE30m_2026_09.zip",
+    "sha256": "25935e60c8f3716a00dc2accc2f7acd0be208a74c0c536a260917241a5f2ee86",
+    "ticks": 2160383,
+    "invalid_quotes": 0,
+    "partial_nonempty_bars": 166,
+    "complete_bars": 5846
+  },
+  {
+    "name": "Exness_DE30m_2026_10.zip",
+    "url": "https://ticks.ex2archive.com/ticks/DE30m/2026/10/Exness_DE30m_2026_10.zip",
+    "sha256": "a9d58608fb6c7672417d07323f42dfe0ea22f9ff7054f4928ca2cdb9aef5af59",
+    "ticks": 2768445,
+    "invalid_quotes": 0,
+    "partial_nonempty_bars": 58,
+    "complete_bars": 5926
+  },
+  {
+    "name": "Exness_US500m_2026_09.zip",
+    "url": "https://ticks.ex2archive.com/ticks/US500m/2026/09/Exness_US500m_2026_09.zip",
+    "sha256": "83a374ce873f60f752176469e0d1e677fc55535a7517a77b23a38bfccd4b557f",
+    "ticks": 3792641,
+    "invalid_quotes": 0,
+    "partial_nonempty_bars": 15,
+    "complete_bars": 6005
+  },
+  {
+    "name": "Exness_US500m_2026_10.zip",
+    "url": "https://ticks.ex2archive.com/ticks/US500m/2026/10/Exness_US500m_2026_10.zip",
+    "sha256": "dcb8fabd81eff8c52450988e623e9dce8114abb2954bc2e3a6e7d672ef9af550",
+    "ticks": 5928940,
+    "invalid_quotes": 0,
+    "partial_nonempty_bars": 9,
+    "complete_bars": 6031
+  },
+  {
+    "name": "Exness_USTEC_x100m_2026_09.zip",
+    "url": "https://ticks.ex2archive.com/ticks/USTEC_x100m/2026/09/Exness_USTEC_x100m_2026_09.zip",
+    "sha256": "84791d368c1b694b71a0073b4b70872702051f0d0c5ffd05df4c17bcfbc12491",
+    "ticks": 25780060,
+    "invalid_quotes": 0,
+    "partial_nonempty_bars": 1,
+    "complete_bars": 6019
+  },
+  {
+    "name": "Exness_USTEC_x100m_2026_10.zip",
+    "url": "https://ticks.ex2archive.com/ticks/USTEC_x100m/2026/10/Exness_USTEC_x100m_2026_10.zip",
+    "sha256": "54f33f87b331031863f959e306487cdd94d677033c1e79ad3f708a9661150c82",
+    "ticks": 31365646,
+    "invalid_quotes": 0,
+    "partial_nonempty_bars": 2,
+    "complete_bars": 4958
+  },
+  {
+    "name": "Exness_US30m_2026_09.zip",
+    "url": "https://ticks.ex2archive.com/ticks/US30m/2026/09/Exness_US30m_2026_09.zip",
+    "sha256": "db631ff8417e02525eacabe1a111c3f4a8c2b3f8d48b22bb4636612abc34df66",
+    "ticks": 4078401,
+    "invalid_quotes": 0,
+    "partial_nonempty_bars": 37,
+    "complete_bars": 5983
+  },
+  {
+    "name": "Exness_US30m_2026_10.zip",
+    "url": "https://ticks.ex2archive.com/ticks/US30m/2026/10/Exness_US30m_2026_10.zip",
+    "sha256": "1130469266eb0feaf8dd8605e8842582402f4ed32440e88d6faf0fcf08b10bde",
+    "ticks": 5648726,
+    "invalid_quotes": 0,
+    "partial_nonempty_bars": 17,
+    "complete_bars": 6022
+  },
+  {
+    "name": "Exness_XAUUSDm_2026_09.zip",
+    "url": "https://ticks.ex2archive.com/ticks/XAUUSDm/2026/09/Exness_XAUUSDm_2026_09.zip",
+    "sha256": "2f85861bfc1cbacb5fabc241832a58a6552159ceee84f25952bfc0706a500df8",
+    "ticks": 6593803,
+    "invalid_quotes": 0,
+    "partial_nonempty_bars": 26,
+    "complete_bars": 6015
+  },
+  {
+    "name": "Exness_XAUUSDm_2026_10.zip",
+    "url": "https://ticks.ex2archive.com/ticks/XAUUSDm/2026/10/Exness_XAUUSDm_2026_10.zip",
+    "sha256": "f9066c09dc1d8d6e55b5a89dda37f33994fd69a605c96eccf29ead9c05278feb",
+    "ticks": 5914197,
+    "invalid_quotes": 0,
+    "partial_nonempty_bars": 26,
+    "complete_bars": 6022
+  },
+  {
+    "name": "Exness_GBPJPYm_2026_09.zip",
+    "url": "https://ticks.ex2archive.com/ticks/GBPJPYm/2026/09/Exness_GBPJPYm_2026_09.zip",
+    "sha256": "391492fdfcad1fa98f3042a57b26b614471e178a6b30ffb10fbdb3006a6bf28d",
+    "ticks": 1604727,
+    "invalid_quotes": 0,
+    "partial_nonempty_bars": 35,
+    "complete_bars": 6272
+  },
+  {
+    "name": "Exness_GBPJPYm_2026_10.zip",
+    "url": "https://ticks.ex2archive.com/ticks/GBPJPYm/2026/10/Exness_GBPJPYm_2026_10.zip",
+    "sha256": "400efdcd55940fa75511a77519fe3e89e6e262ffbadbd7f8ae7cdfd2ff97acae",
+    "ticks": 1410757,
+    "invalid_quotes": 0,
+    "partial_nonempty_bars": 38,
+    "complete_bars": 6203
+  },
+  {
+    "name": "Exness_EURUSDm_2026_09.zip",
+    "url": "https://ticks.ex2archive.com/ticks/EURUSDm/2026/09/Exness_EURUSDm_2026_09.zip",
+    "sha256": "9ca940e572c87328ce626e1a42c6f1fe69fbf6e0ab83e83c9a53488fe52ca394",
+    "ticks": 820806,
+    "invalid_quotes": 0,
+    "partial_nonempty_bars": 163,
+    "complete_bars": 6162
+  },
+  {
+    "name": "Exness_EURUSDm_2026_10.zip",
+    "url": "https://ticks.ex2archive.com/ticks/EURUSDm/2026/10/Exness_EURUSDm_2026_10.zip",
+    "sha256": "6b6b48b92cff520b9f3d53753299ddcd9f0274214d235048e3952ab9f12e9ad8",
+    "ticks": 1038972,
+    "invalid_quotes": 0,
+    "partial_nonempty_bars": 105,
+    "complete_bars": 6180
+  },
+  {
+    "name": "Exness_GBPUSDm_2026_09.zip",
+    "url": "https://ticks.ex2archive.com/ticks/GBPUSDm/2026/09/Exness_GBPUSDm_2026_09.zip",
+    "sha256": "9c8a74918caa06c09c60d6ea64ae8640fc784077dd30d2bb7eaa8f9a2384fb90",
+    "ticks": 1199878,
+    "invalid_quotes": 0,
+    "partial_nonempty_bars": 112,
+    "complete_bars": 6210
+  },
+  {
+    "name": "Exness_GBPUSDm_2026_10.zip",
+    "url": "https://ticks.ex2archive.com/ticks/GBPUSDm/2026/10/Exness_GBPUSDm_2026_10.zip",
+    "sha256": "ea88dad1141f9ac1d4c02c3299c950ee79715091849b4c3847ae397ee33ea963",
+    "ticks": 1279479,
+    "invalid_quotes": 0,
+    "partial_nonempty_bars": 94,
+    "complete_bars": 6195
+  },
+  {
+    "name": "Exness_USDJPYm_2026_09.zip",
+    "url": "https://ticks.ex2archive.com/ticks/USDJPYm/2026/09/Exness_USDJPYm_2026_09.zip",
+    "sha256": "cffb54b2cd9b861a15d8f5d6e446419d6d669c039ee04fa742edfdff9748e5ab",
+    "ticks": 2108049,
+    "invalid_quotes": 0,
+    "partial_nonempty_bars": 88,
+    "complete_bars": 6228
+  },
+  {
+    "name": "Exness_USDJPYm_2026_10.zip",
+    "url": "https://ticks.ex2archive.com/ticks/USDJPYm/2026/10/Exness_USDJPYm_2026_10.zip",
+    "sha256": "f495b4f60d16cef105bbb9412be4c9e722167bceb8f27f16565fc422de0e3632",
+    "ticks": 1588575,
+    "invalid_quotes": 0,
+    "partial_nonempty_bars": 51,
+    "complete_bars": 6224
+  },
+  {
+    "name": "Exness_AUDUSDm_2026_09.zip",
+    "url": "https://ticks.ex2archive.com/ticks/AUDUSDm/2026/09/Exness_AUDUSDm_2026_09.zip",
+    "sha256": "c409635dde79a1669bbd57b9352b1e6fc75810b1f4adf12a5bea375aedde703a",
+    "ticks": 627898,
+    "invalid_quotes": 0,
+    "partial_nonempty_bars": 255,
+    "complete_bars": 6073
+  },
+  {
+    "name": "Exness_AUDUSDm_2026_10.zip",
+    "url": "https://ticks.ex2archive.com/ticks/AUDUSDm/2026/10/Exness_AUDUSDm_2026_10.zip",
+    "sha256": "a2a8fa4be5004aa8cf4545ee74975ac46a2540efd9d3d06809b6006561f58cd7",
+    "ticks": 623635,
+    "invalid_quotes": 0,
+    "partial_nonempty_bars": 171,
+    "complete_bars": 6122
+  },
+  {
+    "name": "Exness_HK50m_2026_09.zip",
+    "url": "https://ticks.ex2archive.com/ticks/HK50m/2026/09/Exness_HK50m_2026_09.zip",
+    "sha256": "a3ad094b21b84fac6a44eb064e853f0ece770c8eb7040a8347d5e65569146486",
+    "ticks": 621816,
+    "invalid_quotes": 0,
+    "partial_nonempty_bars": 196,
+    "complete_bars": 5294
+  },
+  {
+    "name": "Exness_HK50m_2026_10.zip",
+    "url": "https://ticks.ex2archive.com/ticks/HK50m/2026/10/Exness_HK50m_2026_10.zip",
+    "sha256": "0ff1751d7a66fa4cb1720794459f3edd093210bb369d8a59f5c4c40a3dcadd88",
+    "ticks": 662410,
+    "invalid_quotes": 0,
+    "partial_nonempty_bars": 83,
+    "complete_bars": 4875
+  },
+  {
+    "name": "Exness_XAGUSDm_2026_09.zip",
+    "url": "https://ticks.ex2archive.com/ticks/XAGUSDm/2026/09/Exness_XAGUSDm_2026_09.zip",
+    "sha256": "92ab42b65bcfff2bfe2a826e5d2e2396da21ccec3ea17733a37915d7db8385a4",
+    "ticks": 1693374,
+    "invalid_quotes": 0,
+    "partial_nonempty_bars": 41,
+    "complete_bars": 5997
+  },
+  {
+    "name": "Exness_XAGUSDm_2026_10.zip",
+    "url": "https://ticks.ex2archive.com/ticks/XAGUSDm/2026/10/Exness_XAGUSDm_2026_10.zip",
+    "sha256": "fc5880270faa7c3722d65f5fe475dabb016f23cbf49e78758216de4fe6e761c8",
+    "ticks": 1755226,
+    "invalid_quotes": 0,
+    "partial_nonempty_bars": 39,
+    "complete_bars": 6005
+  }
+]

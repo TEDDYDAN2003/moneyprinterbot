@@ -18,7 +18,13 @@ from bot.zones.feed import tick_minutes
 from bot.zones.hours import Hours
 from bot.zones.replay import file_hash, iso_ms
 
-from .config import BATCH_ENTRY_POLICY, CLOSE_ONLY, LADDER, RETIRED_LIMITS
+from .config import (
+    BATCH_ENTRY_POLICY,
+    CLOSE_ONLY,
+    LADDER,
+    RETIRED_LIMITS,
+    TARGET_POLICY,
+)
 from .entry_clock import QUOTE_POLICY, check_quote
 from .ladder import Protection, propose
 from .orders import Block, Exposure, Grid, count_for, make_plan, select_labels
@@ -101,6 +107,9 @@ class Account:
                 "entry": p.entry,
                 "initial_sl": p.sl,
                 "initial_tp": p.tp,
+                "configured_target_usd": p.configured_target_usd,
+                "entry_spread_usd": p.entry_spread_usd,
+                "initial_goal_usd": p.goal_usd,
                 "ladder_rung": levels.rung,
                 "sl": levels.sl,
                 "tp": levels.tp,
@@ -146,7 +155,7 @@ class Account:
                             p.side,
                             p.lots,
                             p.entry,
-                            self.p.target_usd,
+                            p.goal_usd,
                             old,
                             mark,
                             self.cash,
@@ -287,6 +296,9 @@ FIELDS = [
     "entry",
     "initial_sl",
     "initial_tp",
+    "configured_target_usd",
+    "entry_spread_usd",
+    "initial_goal_usd",
     "ladder_rung",
     "sl",
     "tp",
@@ -378,7 +390,8 @@ def study(minutes, cfg, h, p, frames, lo, hi, unit, contract, conversion, rates,
         "configured_scanner_entry_timing": h.entry_timing,
         "entry_quote_policy": QUOTE_POLICY,
         "new_ticket_exit_policy": h.exit_policy,
-        "per_ticket_target": p.target_usd,
+        "new_ticket_target_policy": TARGET_POLICY,
+        "configured_target_usd": p.target_usd,
         "profile": p.model_dump(),
         "indicator": h.indicator.model_dump(),
         "limits": h.limits.model_dump(),

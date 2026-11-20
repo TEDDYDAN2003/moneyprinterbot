@@ -77,12 +77,18 @@ def propose(grid, side, lots, entry, base, old, mark, cash):
     """Next pair from this executable quote, or None; existing hard exits win ties/gaps."""
     if not inside(side, mark, old):
         return None
-    rung = reached(valid_cash(cash, side, lots, entry, mark), base)
+    profit = valid_cash(cash, side, lots, entry, mark)
+    rung = reached(profit, base)
     if rung <= old.rung:
         return None
     _, lock_pct, tp_pct = percentages(rung)
-    sl, _ = target(grid, side, lots, entry, base * (lock_pct / 100), cash)
-    tp, _ = target(grid, side, lots, entry, base * (tp_pct / 100), cash)
+    slope = profit / abs(mark - entry) if mark != entry else None
+    sl, _ = target(
+        grid, side, lots, entry, base * (lock_pct / 100), cash, cash_per_price=slope
+    )
+    tp, _ = target(
+        grid, side, lots, entry, base * (tp_pct / 100), cash, cash_per_price=slope
+    )
     # Even if conversion changes, never give back a stronger confirmed price.
     better = max if side == 1 else min
     new = Protection(rung, better(sl, old.sl), better(tp, old.tp))

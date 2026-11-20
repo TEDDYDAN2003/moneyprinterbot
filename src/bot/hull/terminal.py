@@ -21,13 +21,14 @@ from .config import (
     LADDER,
     LIVE_CONTINUATION,
     RETIRED_LIMITS,
+    TARGET_POLICY,
 )
 from .desk import Desk, identity_check, resolve
 from .entry_clock import LIVE_QUOTE_POLICY, QUOTE_POLICY, WAITING, poll_delay
 from .ladder import cash_levels
 from .live import LiveSampler
-from .orders import Grid, choose, select_labels
-from .signal import Hull
+from .orders import Block, Grid, choose, select_labels, spread_goal
+from .signal import Hull, LiveTick
 from .structure import ENTRY_POLICY
 
 
@@ -265,6 +266,41 @@ def dispatch(d, name, labels, *, data_ok, history_ok, rewarmed):
         )
 
 
+def target_preview(mt, name, p, q, grid, h, now):
+    """Read-only, indicative. BUY and SELL can have different cash conversions."""
+
+    def cash(side, lots, entry, mark):
+        typ = mt.ORDER_TYPE_BUY if side == 1 else mt.ORDER_TYPE_SELL
+        return mt.order_calc_profit(typ, name, lots, entry, mark)
+
+    result = {}
+    for label, side in (("BUY", 1), ("SELL", -1)):
+        try:
+            if q is None or not 0 <= now - q.ms / 1000 <= h.limits.max_quote_age_s:
+                raise Block("quote_unavailable_or_stale")
+            if (
+                p.max_spread is not None
+                and q.ask - q.bid > p.max_spread + grid.tick * 1e-7
+            ):
+                raise Block("spread_cap")
+            spread, goal = spread_goal(side, p.lots, q.bid, q.ask, p.target_usd, cash)
+            result[label] = {
+                "status": "indicative",
+                "entry_spread_usd": spread,
+                "initial_goal_usd": goal,
+                "ladder_preview_per_ticket": [cash_levels(goal, n) for n in range(1, 5)]
+                if h.exit_policy == LADDER
+                else [],
+                "batch_target_range_usd": [
+                    min(COUNTS[p.rate]) * goal,
+                    max(COUNTS[p.rate]) * goal,
+                ],
+            }
+        except Block as exc:
+            result[label] = {"status": str(exc)}
+    return result
+
+
 def run(
     cfg,
     h,
@@ -312,7 +348,7 @@ def run(
         for name, (code, p) in syms.items():
             i = mt.symbol_info(name)
             g = Grid.from_info(i)
-            q = mt.symbol_info_tick(name)
+            q = LiveTick.read(mt.symbol_info_tick(name))
             specs[name] = {
                 "key": code,
                 "bid_chart_verified": getattr(i, "chart_mode", None)
@@ -322,20 +358,14 @@ def run(
                 "contract_size": i.trade_contract_size,
                 "profit_currency": i.currency_profit,
                 "broker_trade_mode": i.trade_mode,
-                "initial_target_usd": p.target_usd,
-                "ladder_preview_per_ticket": [
-                    cash_levels(p.target_usd, i) for i in range(1, 5)
-                ]
-                if h.exit_policy == LADDER
-                else [],
+                "target_preview_by_side": target_preview(
+                    mt, name, p, q, g, h, time.time()
+                ),
+                "preview_quote": asdict(q) if q else None,
                 "legs_when_room": COUNTS[p.rate],
                 "batch_lots_range": [
                     round(p.lots * min(COUNTS[p.rate]), 8),
                     round(p.lots * max(COUNTS[p.rate]), 8),
-                ],
-                "batch_target_range_usd": [
-                    min(COUNTS[p.rate]) * p.target_usd,
-                    max(COUNTS[p.rate]) * p.target_usd,
                 ],
                 "latest_spread": None if q is None else q.ask - q.bid,
             }
@@ -346,6 +376,7 @@ def run(
             "account_expert_allowed": bool(a.trade_expert and a.trade_allowed),
             "timeframes": list(frames),
             "new_ticket_exit_policy": h.exit_policy,
+            "new_ticket_target_policy": TARGET_POLICY,
             "entry_policy": ENTRY_POLICY,
             "signal_policy": h.indicator.signal_policy,
             "batch_entry_policy": BATCH_ENTRY_POLICY,
@@ -393,6 +424,11 @@ def run(
                 )
             for name, (_, p) in syms.items():
                 checks = {}
+                for side, preview in specs[name]["target_preview_by_side"].items():
+                    if preview["status"] != "indicative":
+                        issues.append(
+                            f"{name} {side}: target preview unavailable: {preview['status']}"
+                        )
                 if live and not specs[name]["bid_chart_verified"]:
                     issues.append(
                         f"{name}: live continuation disabled; cannot verify native BID chart"

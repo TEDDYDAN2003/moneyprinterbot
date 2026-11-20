@@ -12,7 +12,7 @@ from bot.execution.demo_runner import DemoSafetyError, _filling_mode, _side_is_a
 from bot.zones.hours import Hours
 from bot.zones.monitor import account_check, fresh, save, snapshot
 
-from .config import COUNTS, FIXED, LADDER
+from .config import COUNTS, FIXED, LADDER, TARGET_POLICY
 from .entry_clock import FAST_POLL_S, WAITING, TimingBlock, check_quote, utc
 from .ladder import Protection, executable, inside
 from .ladder_desk import TicketLadders
@@ -429,7 +429,7 @@ class Desk:
                 else "missing_protection"
                 if not (p.sl > 0 and p.tp > 0)
                 else "cash_target"
-                if goal and p.profit >= goal
+                if goal and p.profit + 1e-9 >= goal  # same USD tolerance as TP pricing
                 else ""
             )
             if why:
@@ -445,7 +445,6 @@ class Desk:
 
     def finalize(self, name, plan, res, expected):
         mt = self.mt
-        prof = self.syms[name][1]
         self.account()
         if (
             res is None
@@ -478,9 +477,7 @@ class Desk:
         ):
             return None, "fill_not_reconciled"
         if self.h.exit_policy == FIXED:
-            self.state.setdefault("target_by_ticket", {})[str(p.ticket)] = (
-                prof.target_usd
-            )
+            self.state.setdefault("target_by_ticket", {})[str(p.ticket)] = plan.goal_usd
             self.persist()
         if abs(p.sl - plan.sl) > tol or not (p.sl > 0 and p.tp > 0):
             self.close_owned(p, "unverified_protection")
@@ -493,11 +490,17 @@ class Desk:
             self.close_owned(p, "aggregate_fill_risk")
             return None, "fill_risk_exceeded"
         tp, _ = target(
-            grid, plan.side, plan.lots, p.price_open, prof.target_usd, self.cash(name)
+            grid,
+            plan.side,
+            plan.lots,
+            p.price_open,
+            plan.goal_usd,
+            self.cash(name),
+            cash_per_price=plan.reward_usd / abs(plan.tp - plan.entry),
         )
         if abs(tp - p.tp) > tol:
-            # A different deal price must not silently turn $10 into a different goal.
-            if self.h.exit_policy == FIXED and p.profit >= prof.target_usd:
+            # Anchor to the actual fill. Do not re-sample or double the frozen spread cushion.
+            if self.h.exit_policy == FIXED and p.profit + 1e-9 >= plan.goal_usd:
                 self.close_owned(p, "cash_target_after_fill")
                 return None, "closed_during_batch"
             if self.h.exit_policy == LADDER:
@@ -541,7 +544,7 @@ class Desk:
                 return None, "target_alignment_unverified"
         if self.h.exit_policy == LADDER:
             # Do not enroll a pre-existing, partial, unknown or unverified ticket.
-            self.ladders.enroll(p, plan.side, prof.target_usd, plan.sl, tp)
+            self.ladders.enroll(p, plan, tp)
         return p.ticket, "ok"
 
     def cancel_wait(self, name, reason):
@@ -631,7 +634,8 @@ class Desk:
                         rate=self.syms[name][1].rate,
                         legs=n,
                         exit_policy=self.h.exit_policy,
-                        goal_per_leg=self.syms[name][1].target_usd,
+                        target_policy=TARGET_POLICY,
+                        goal_per_leg=plan.goal_usd,  # indicative first leg, not a promise for siblings
                         risk_batch=n * plan.risk_usd,
                         **d.clock_fields(),
                         **asdict(plan),
@@ -674,22 +678,42 @@ class Desk:
                 ):
                     raise Block(why)
                 # Do not send the inspected plan after a change in exposures/quote, a kill, or a stale signal.
-                _, again, q2, _ = self.prepare(
+                _, again, q2, i2 = self.prepare(
                     name, d, window, "pre_send", expected, n - sent
                 )
                 # Remote one-tick tolerance, anchored to the ORIGINAL quote for this
                 # leg. Both sides must fit, AND the broker-checked plan must still match.
                 checked_prices = (q2.bid, q2.ask)
                 if (
-                    again != plan
-                    or max(abs(q2.bid - base_bid), abs(q2.ask - base_ask)) > tolerance
+                    max(abs(q2.bid - base_bid), abs(q2.ask - base_ask)) > tolerance
+                    or Grid.from_info(i2) != base_grid
                 ):
+                    raise Block("quote_or_plan_changed")
+                if recheck is not None and checked_prices != recheck:
+                    raise Block("final_quote_or_safety_changed")
+                if again != plan:
+                    # A move on just the non-entry side can now change the goal.
+                    # One unsent reprice inside the original one-tick band, sharing
+                    # the final-quote budget. Never patch a broker-checked request.
+                    if (
+                        recheck is None
+                        and checked_prices != (q.bid, q.ask)
+                        and again.entry == plan.entry
+                        and again.sl == plan.sl
+                        and again.risk_usd == plan.risk_usd
+                        and again.entry_spread_usd != plan.entry_spread_usd
+                    ):
+                        recheck = checked_prices
+                        continue
                     raise Block("quote_or_plan_changed")
                 self.state["manual_hold"] = {
                     "symbol": name,
                     "signal": d.signal_s,
                     **d.clock_fields(),
                     "leg": sent + 1,
+                    "target_policy": TARGET_POLICY,
+                    "initial_goal_usd": plan.goal_usd,
+                    "entry_spread_usd": plan.entry_spread_usd,
                 }
                 self.persist()
                 self.account()
@@ -727,6 +751,13 @@ class Desk:
                     **d.clock_fields(),
                     send_check_utc=utc(checked),
                     send_tick_time_msc=int(q3.time_msc),
+                    send_bid=q3.bid,
+                    send_ask=q3.ask,
+                    target_policy=TARGET_POLICY,
+                    configured_target_usd=plan.configured_target_usd,
+                    entry_spread_usd=plan.entry_spread_usd,
+                    initial_goal_usd=plan.goal_usd,
+                    planned_tp_profit_usd=plan.reward_usd,
                     retcode=getattr(res, "retcode", None),
                     price=getattr(res, "price", None),
                     deal=getattr(res, "deal", None),

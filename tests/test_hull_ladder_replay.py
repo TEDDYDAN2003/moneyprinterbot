@@ -54,18 +54,18 @@ def tape(side, pnls, policy=LADDER):
 @pytest.mark.parametrize(
     "path,rung,why,usd",
     [
-        ([-1, 6.99, 7, 10, 13, 16, 15], 4, "ladder_stop", 15),
-        ([-1, 7, 6], 1, "ladder_stop", 6),
-        ([-1, 7, 10, 9.5, 9], 2, "ladder_stop", 9),
-        ([-1, 7, 10, 9.8, 13, 12], 3, "ladder_stop", 12),
+        ([-1, 7.69, 7.7, 11, 14.3, 17.6, 16.5], 4, "ladder_stop", 16.5),
+        ([-1, 7.7, 6.6], 1, "ladder_stop", 6.6),
+        ([-1, 7.7, 11, 10.45, 9.9], 2, "ladder_stop", 9.9),
+        ([-1, 7.7, 11, 10.8, 14.3, 13.2], 3, "ladder_stop", 13.2),
         (
-            [-1, 7, 3],
+            [-1, 7.7, 3],
             1,
             "ladder_stop",
             3,
-        ),  # gaps fill at crossing quote, not hypothetical $6
-        ([-1, 6.99, 13], 0, "target", 10),  # old hard TP hit before we could move it
-        ([-1, 7, 14], 1, "target", 12),  # gap through the first extended TP
+        ),  # gaps fill at quote, not hypothetical $6.60
+        ([-1, 7.69, 14.3], 0, "target", 11),  # hard TP won before first amendment
+        ([-1, 7.7, 14], 1, "target", 13.2),  # gap through first extended TP
     ],
 )
 def test_ordered_ticks_cannot_backdate_higher_stops_or_rescue_old_tp(
@@ -75,7 +75,12 @@ def test_ordered_ticks_cannot_backdate_higher_stops_or_rescue_old_tp(
     assert not a.pos and len(a.rows) == 1
     (row,) = a.rows
     assert (row["ladder_rung"], row["exit_reason"], row["legs"]) == (rung, why, 4)
-    assert row["net_usd_per_leg"] == pytest.approx(usd)
+    assert (
+        row["configured_target_usd"],
+        row["entry_spread_usd"],
+        row["initial_goal_usd"],
+    ) == pytest.approx((10, 1, 11))
+    assert row["net_usd_per_leg"] == pytest.approx(usd)  # spread isn't deducted twice
     metrics = a.finish(m)
     assert metrics["ladder_ticket_amendments"] == 4 * rung and metrics["batches"] == 1
     assert metrics["net_profit"] == pytest.approx(4 * usd)
@@ -83,8 +88,8 @@ def test_ordered_ticks_cannot_backdate_higher_stops_or_rescue_old_tp(
 
 @pytest.mark.parametrize("side", [1, -1])
 def test_replay_all_tickets_can_advance_past_old_shared_send_cap(side):
-    # Four entries + 44 amendments in 12 ms; return from +$37 to the +$36 stop.
-    a, m = tape(side, [-1, *range(7, 38, 3), 36])
+    # Four entries + 44 amendments in 12 ms; return from +$40.70 to the +$39.60 stop.
+    a, m = tape(side, [-1, *(x * 1.1 for x in range(7, 38, 3)), 39.6])
     assert not a.pos
     (row,) = a.rows
     assert (row["legs"], row["ladder_rung"], row["exit_reason"]) == (
@@ -94,7 +99,7 @@ def test_replay_all_tickets_can_advance_past_old_shared_send_cap(side):
     )
     metrics = a.finish(m)
     assert metrics["batches"] == 1 and metrics["ladder_ticket_amendments"] == 44
-    assert metrics["net_profit"] == pytest.approx(4 * 36)
+    assert metrics["net_profit"] == pytest.approx(4 * 39.6)
 
 
 @pytest.mark.parametrize("invalid", [False, True])
@@ -121,4 +126,5 @@ def test_replay_can_reenter_after_100_dollar_loss_but_not_with_invalid_equity(in
 def test_explicit_fixed_policy_keeps_original_replay_behavior():
     a, m = tape(1, [-1, 7, 10, 13, 12], policy=FIXED)
     assert a.rows[0]["ladder_rung"] == 0 and a.rows[0]["exit_reason"] == "target"
+    assert a.rows[0]["net_usd_per_leg"] == pytest.approx(11)
     assert a.finish(m)["ladder_ticket_amendments"] == 0

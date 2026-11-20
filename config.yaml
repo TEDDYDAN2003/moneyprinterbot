@@ -303,7 +303,7 @@ zones:
 # ACTIVE demo entry path. Indicator source = the user's Hull BUY/SELL labels.
 hull:
   entry_timing: live_continuation_v1  # trend + pullback closed; first observed live cross, reversals still close-only
-  exit_policy: profit_ladder_70_30_v1  # new tickets only; all rungs use the original per-ticket USD goal
+  exit_policy: profit_ladder_70_30_v1  # new tickets only; every rung uses that leg’s frozen base + entry spread
   enabled: [XAUUSD]  # opt in other keys via --symbols or repeated --profile
   magic: 26111825
   indicator:
@@ -327,7 +327,7 @@ hull:
     min_free_margin_pct: 0  # no extra equity reserve; full batch must still fit estimated free margin
     max_quote_age_s: 4
     max_entry_age_s: 8
-  symbols:                # suggested sizes only; invalid broker lots are refused
+  symbols:                # target_usd = base per ticket before adding its entry spread in USD; invalid lots are refused
     XAUUSD:   {aliases: [XAUUSDm, XAUUSD, GOLD], lots: 0.10, target_usd: 10, rate: slow, pip_size: 0.01, max_spread: 0.300}
     EURUSD:   {aliases: [EURUSDm, EURUSD], lots: 1.0, target_usd: 10, rate: slow, pip_size: 0.0001, max_spread: 0.00020}
     AUDUSD:   {aliases: [AUDUSDm], lots: 1.0, target_usd: 10, rate: slow, pip_size: 0.0001, max_spread: 0.00020}
