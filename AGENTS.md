@@ -1,109 +1,119 @@
-# Moneyprinterbot - Hull account and demo commands
+# Hull: start the demo or sync the journal
 
-Run these commands from the repository root in PowerShell.
+Open **PowerShell in the bot folder** on your Windows MT5 PC (usually `$HOME\Downloads\xauusdm-directional-research`). You should see `config.yaml` and `HullJournal`. No environment activation is needed.
+
+| What do you want to do? | Start here |
+|---|---|
+| Send demo orders | [A. Start the demo manually](#a-start-the-demo-manually) — only step 4 sends orders |
+| View or export trades | [B. Sync the journal](#b-sync-the-journal) — read-only; no scanner required |
+| First use or new code | [Setup](#setup) — do this first, then return here |
+
+## A. Start the demo manually
+
+**1. Check MT5.** Sign in to your **USD hedging DEMO** account. Check the Trade tab for positions and pending orders and [check for another scanner](#check-for-another-scanner). If an armed or unknown scanner is running, or exposure is unresolved, **stop here**. Do not interrupt ticket management or launch a duplicate.
+
+**2. Choose your symbols.** In this PowerShell window, paste the block below, keeping **only the profiles you intend to run**. These are the eight previously configured profiles. Each line is `SYMBOL:lots per ticket:initial target USD per ticket:rate`.
 
 ```powershell
-Set-Location -LiteralPath 'C:\Users\hp\Downloads\xauusdm-directional-research'
-.\.venv\Scripts\Activate.ps1
-
-$python = Join-Path $PWD '.venv\Scripts\python.exe'
+$py  = '.\.venv\Scripts\python.exe'
+$cfg = '.\config.demo.local.yaml'
 $profiles = @(
-  '--profile','XAUUSD:0.10:10:slow',
-  '--profile','EURUSD:1:10:slow',
-  '--profile','AUDUSD:1:10:slow',
-  '--profile','GBPUSD:1:10:slow',
-  '--profile','GBPJPY:1:10:slow',
-  '--profile','USDJPY:1.3:10:slow',
-  '--profile','NAS100USD:1:10:slow',
-  '--profile','US30:1:10:slow'
-)
+  'XAUUSD:0.10:10:slow'
+  'EURUSD:1:10:slow'
+  'AUDUSD:1:10:slow'
+  'GBPUSD:1:10:slow'
+  'GBPJPY:1:10:slow'
+  'USDJPY:1.3:10:slow'
+  'NAS100USD:1:10:slow'
+  'US30:1:10:slow'
+) | ForEach-Object { '--profile'; $_ }
+if (-not $profiles) { throw 'Choose at least one profile.' }
 ```
 
-The broker aliases are `USTEC_x100m` for `NAS100USD` and `US30m` for `US30`. Slow profiles request 10 tickets per symbol with $10 target per ticket.
+For US30 only, leave only `'US30:1:10:slow'`. **Slow requests ten tickets:** if all fill, that row means **10 lots total**, with a $10 initial gross target **per ticket**, not a guaranteed $100 profit. Verify `US30m` for US30 and `USTEC_x100m` for NAS100USD. Re-run step 2 whenever you open a new scanner window.
 
-## Verify the checkout and environment
+**3. Check before sending — read-only.** Use the **same** config and profiles you will arm:
 
 ```powershell
-git status --short --branch
-if ((git branch --show-current) -ne 'main') { throw 'Stop: use a clean main checkout.' }
-if (git status --porcelain) { throw 'Stop: preserve local changes and make the checkout clean before updating.' }
-Get-CimInstance Win32_Process -Filter "name='python.exe' OR name='pythonw.exe'" |
+& $py -m bot.cli validate-config --config $cfg
+if ($LASTEXITCODE -ne 0) { throw 'Invalid config. Do not arm.' }
+& $py -m bot.cli hull-preflight --config $cfg @profiles
+if ($LASTEXITCODE -ne 0) { throw 'Preflight failed. Do not arm.' }
+```
+
+Verify the demo account, trading permissions, symbols, batch sizes, M1/M2/M5 history, positions/orders and `review_before_demo`. For live continuations look for `entry_timing: live_continuation_v1` and `bid_chart_verified: true`. Do **not** arm with an unexplained warning.
+
+Want to watch first? Run `& $py -m bot.cli trade-all --config $cfg @profiles` **without** the arm flag. It must say `READ ONLY`. Stop **that observer** with Ctrl+C before step 4. If the account or profiles change, repeat preflight.
+
+**4. Arm the demo.** Run this command **by itself**, only after reviewing step 3 and deciding to send demo orders:
+
+```powershell
+& $py -m bot.cli trade-all --config $cfg --arm-demo @profiles
+```
+
+Confirm `DEMO ARMED` and the intended profiles. Leave this window and MT5 open. Ctrl+C stops the scanner; attached SL/TP stay at the broker, but software exits and ladder updates stop. **Do not stop it with tickets still needing management.**
+
+## B. Sync the journal
+
+**1. Open a second PowerShell in the bot folder.** Keep MT5 on the same hedging demo account. No Algo Trading or `--arm-demo` is needed. Set these variables in **this** window:
+
+```powershell
+$py  = '.\.venv\Scripts\python.exe'
+$out = '.\HullJournal\data'
+```
+
+**Already have a journal?** Set `$out` to the existing folder containing `journal.sqlite3` instead. Keep the checkpoint; run only one writer per folder.
+
+**2. Choose one mode:**
+
+- **Keep syncing + open dashboard:**
+  ```powershell
+  & $py .\HullJournal\journal.py --repo . --out $out --open-browser
+  ```
+  Visit **http://127.0.0.1:8765/** on that PC. Wait for **MT5 · live** and a last-sync time. Leave this window open. Opening the HTML file directly shows sample/import mode, not live sync.
+- **Sync once + exit** (stop the continuous reporter first):
+  ```powershell
+  & $py .\HullJournal\journal.py --repo . --out $out --once
+  ```
+
+**3. Find your results in `$out`.** `tickets.csv` = fully closed positions; `setups.csv` = completed batches. The first sync defaults to 30 days. Ctrl+C **in the journal window** stops only the reporter, not the bot. For a non-default magic, multiple MT5 installations or older history, see the [journal guide](HullJournal/START-HERE.md).
+
+## Setup
+
+### Check for another scanner
+
+```powershell
+Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" |
   Where-Object { $_.CommandLine -match 'bot\.cli\s+(trade-all|trade|demo)\b' } |
   Select-Object ProcessId,CommandLine
 ```
 
-Inspect the process list and open exposure **before** the next block. Do not update over an armed or unknown scanner, interrupt ticket management, or start duplicates. For a safe, clean checkout:
+**First use / after an update:** with no affected running scanner or unresolved exposure, run `git status --short --branch`. Only on clean `main`, run `git pull --ff-only origin main`. If the pull fails or the checkout is dirty, stop; never force or discard local work.
 
-```powershell
-git pull --ff-only origin main
-if ($LASTEXITCODE -ne 0) { throw 'Stop: fast-forward pull failed.' }
-& $python -m pip install -e ".[test]" MetaTrader5 tzdata
-if ($LASTEXITCODE -ne 0) { throw 'Stop: dependency installation failed.' }
-& $python -m pytest -q
-if ($LASTEXITCODE -ne 0) { throw 'Stop: tests failed.' }
-& $python -m bot.cli validate-config
-if ($LASTEXITCODE -ne 0) { throw 'Stop: configuration validation failed.' }
-```
+1. **Prepare Python.** Use supported 64-bit Windows Python 3.11+. Reuse `.venv` if present:
+   ```powershell
+   if (-not (Test-Path .\.venv\Scripts\python.exe)) { py -3 -m venv .venv }
+   & .\.venv\Scripts\python.exe -m pip install -e ".[test]" MetaTrader5 tzdata
+   if ($LASTEXITCODE -ne 0) { throw 'Dependency install failed.' }
+   & .\.venv\Scripts\python.exe -m pytest -q
+   if ($LASTEXITCODE -ne 0) { throw 'Tests failed. Do not arm.' }
+   ```
+   **Journal only?** You can go to [B](#b-sync-the-journal) now.
+2. **Prepare the demo config.** Create it only if missing; never overwrite a private config:
+   ```powershell
+   if (-not (Test-Path .\config.demo.local.yaml)) { Copy-Item .\config.yaml .\config.demo.local.yaml }
+   notepad .\config.demo.local.yaml
+   ```
+   In its **existing `run:` section**, set `mode: demo`, then save. Leave the tracked `config.yaml` in `paper` mode. Go to [A](#a-start-the-demo-manually).
 
-Stop if the pull fails, the checkout is dirty, tests fail or the configuration is invalid. Do not reset, force, checkout over local work or discard uncommitted changes.
+## When does the signal appear?
 
-Before reusing or launching a running scanner, compare its startup checkout and policy IDs with the current `git rev-parse HEAD`. Never update over an armed process or open duplicate scanners.
+The Hull cross **is the raw signal**. There is no wait of several candles. With a trend and pullback already confirmed, a continuation can trigger on the first live cross the scanner observes (BUY at current ask; SELL at current bid). A reversal still needs a **close through the protected swing with a fresh matching cross**. A rejected cross is not saved for later.
 
-For the current Hull release, check preflight and the running `started.summary` for `entry_timing: live_continuation_v1`, `entry_quote_policy: current_live_tick_or_confirmed_close_v1`, verified BID charts, `entry_policy: protected_swing_v2`, `signal_policy: fc_hull_either_v2`, `indicator.source: either`, `indicator.hull_len: 16`, and `batch_entry_policy: first_eligible_while_flat_v1`. Do not auto-edit a private profile: to adopt v2 on an older full local YAML, the operator changes just `hull.indicator.source` and `hull.indicator.hull_len`. A second BUY is ignored while any BUY ticket remains; a later fresh BUY after flat may qualify in the same zone (SELL mirrors BUY). Keep initial protection, the existing opposite-label exit and the 70/30 ladder. [Detailed behavior](docs/HULL_DEMO.md#what-triggers-an-entry).
+Example: on M1 a live cross at **10:03:15** can trigger then. The normal chart suggestion is drawn on the **10:03 candle** only if it still qualifies when that candle closes at **10:04**. If the cross vanishes, there may be no confirmed arrow. A chart-simulated fill or blue broker deal marker is not the cross.
 
-## Read-only demo preflight
+## Desktop agent rules
 
-```powershell
-& $python -m bot.cli hull-preflight --config config.yaml @profiles
-```
+A question about this guide is not authorization to trade. A normal start request means **observer only**. Follow the [standing startup rules](README.md#standing-instructions-for-the-desktop-agent). An agent must receive separate, explicit **`ARM DEMO`** for the verified profiles before using step A4. No live-money mode.
 
-Preflight must report a USD hedging DEMO account, enabled terminal/expert trading permissions, valid symbol resolutions and no unowned pending exposure unless manually reconciled.
-
-Do not treat preflight success as authorization to send orders.
-
-Read the full report before starting. Confirm the account, resolved symbols, M1/M2/M5 history, permissions, open exposure, limits and `review_before_demo`. The eight slow profiles can request up to 10 tickets each; the 1.0-lot FX profiles mean 10 lots per symbol, not one lot total.
-
-## Read-only demo observer
-
-```powershell
-& $python -m bot.cli trade-all --config config.yaml @profiles
-```
-
-This observes M1, M2 and M5 and sends no orders. It logs `live_hull_cross` for already-confirmed trend/pullback continuations and `closed_label` for closed decisions. It never migrates existing tickets.
-
-## Armed demo account
-
-The ordinary start command above is a read-only observer. It does not send orders. Only after the operator gives the separate explicit instruction `ARM DEMO` for the exact verified profiles, run the preflight below using a local `config.demo.local.yaml` with `run.mode: demo`:
-
-```powershell
-& $python -m bot.cli hull-preflight --config config.demo.local.yaml @profiles
-```
-
-A pull does not rewrite an existing `config.demo.local.yaml`. Under **`hull.limits` only**, the defaults are `max_positions: null`, `max_total_lots: null`, `max_open_risk_usd: null` and `min_free_margin_pct: 0`. Preflight lists any enabled overrides in `review_before_demo`. To adopt the new defaults in an existing file, change or remove just those four keys; keep your other settings. See [how funding and vetoes work](docs/HULL_DEMO.md#hull-portfolio-limits-and-broker-funding).
-
-Check `retired_limits`: it must list `drawdown_usd` and `max_orders_minute`. The Hull scanner ignores those two keys in older YAML and ignores any old drawdown halt/send history in the journal. No journal edit or local YAML edit is needed for **these two removals**. The bot can keep opening funded batches after losses; broker rejections and ticket reconciliation still apply.
-
-Review that report again, including the account, all symbol specs, effective limits and `review_before_demo`. Only if those checks pass, start the armed scanner in a separate command:
-
-```powershell
-& $python -m bot.cli trade-all --config config.demo.local.yaml --arm-demo @profiles
-```
-
-The local demo config must set `run.mode: demo` and define every key in `$profiles` under `hull.symbols`; this ignored file can lag `config.yaml`, causing `Unknown or repeated symbol key`. Copy only the missing Hull symbol entries from `config.yaml` while preserving terminal, account and other local settings. Validate and preflight with the exact profiles before arming. The scanner refuses live, contest and netting accounts. Never reuse stale arming approval for changed profiles, resize lots or start a second scanner for the same account.
-
-For ladder-enabled profiles, report preflight's per-ticket ladder preview rather than replacing it with an assumed total.
-
-## Future real-account starts
-
-There is currently no supported live-account or real-order command in this repository. Do not use `--arm-demo`, `--arm-orders`, config edits or alternate flags to attempt live trading.
-
-A real-account start requires a separate authorization and live-specific margin, loss, reconciliation and kill-switch implementation.
-
-## Stop and runtime logs
-
-Press `Ctrl+C` in the scanner terminal. Broker-attached SL/TP remains on existing positions after software exit.
-
-```text
-Demo: reports/hull_runtime/<account-hash>/demo.jsonl
-Observer: reports/hull_runtime/<account-hash>/shadow.jsonl
-```
+A pull does not update a running process. Match its `started.summary.checkout_head_at_start` to `git rev-parse HEAD`; verify the source, `protected_swing_v2`, intended Hull settings (default Either/16), quote policy and per-ticket ladder preview. Never change lots, limits or stops to force a trade, or delete safety state. Logs: `reports/hull_runtime/<account-hash>/shadow.jsonl` (observer) and `demo.jsonl` (armed). [Exposure, funding and retired limits](docs/HULL_DEMO.md).
