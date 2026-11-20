@@ -32,6 +32,4 @@ reports/candle_replay*/
 reports/hull_runtime/
 reports/hull_replay*/
 
-# Private MT5 historical market data; export code and reports remain trackable.
-research/hull_early_warning/mt5_export/bulk/
 config.demo.local.yaml

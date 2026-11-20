@@ -35,7 +35,7 @@ To rerun or resume the export, open PowerShell in the repository root with MT5 r
 ### M1 Bars (Native `copy_rates_range`)
 - **Coverage**: `2024-03-31 22:00:00 UTC` through `2025-12-31 23:59:00 UTC`.
 - **Row Count**: **630,907 native M1 bars** across 22 monthly Parquet partitions.
-- **Location**: `research/hull_early_warning/mt5_export/bulk/bars/` (Git-ignored).
+- **Location**: `research/hull_early_warning/mt5_export/bulk/bars/` (tracked in Git for research access).
 - **Total Bulk Size**: **13,478,297 bytes (~13.48 MB)**, compressed with Zstandard.
 - **Missing Range**: `2023-12-01` to `2024-03-31 22:00:00 UTC` returned zero rows from the broker server (`ExnessKE-MT5Trial10`).
 
