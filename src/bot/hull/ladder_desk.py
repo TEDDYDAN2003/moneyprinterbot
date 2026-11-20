@@ -8,7 +8,7 @@ from dataclasses import asdict
 
 from bot.zones.monitor import fresh
 
-from .config import LADDER
+from .config import LADDER, TARGET_POLICY
 from .ladder import Protection, executable, inside, percentages, propose, still_valid
 from .orders import Block, Grid
 
@@ -40,7 +40,7 @@ class TicketLadders:
     def needs_review(self):
         return any(r.get("pending") or r.get("hold") for r in self.book.values())
 
-    def enroll(self, p, side, base, sl, tp):
+    def enroll(self, p, plan, tp):
         # Called only after a *new* fill and its protection have been reconciled.
         key = str(p.ticket)
         self.d.state.setdefault("ladder_by_ticket", {})[key] = {
@@ -48,12 +48,15 @@ class TicketLadders:
             "symbol": p.symbol,
             "identifier": int(getattr(p, "identifier", p.ticket)),
             "opened_msc": opened_ms(p),
-            "side": side,
+            "side": plan.side,
             "entry": float(p.price_open),
             "lots": float(p.volume),
-            "base_usd": base,
+            "target_policy": TARGET_POLICY,
+            "configured_target_usd": plan.configured_target_usd,
+            "entry_spread_usd": plan.entry_spread_usd,
+            "base_usd": plan.goal_usd,
             "rung": 0,
-            "sl": sl,
+            "sl": plan.sl,
             "tp": tp,
             "confirmed_tick_msc": 0,
         }

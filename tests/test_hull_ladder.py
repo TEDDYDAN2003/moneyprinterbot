@@ -56,7 +56,10 @@ def test_each_rung_from_actual_fill_and_original_per_ticket_cash(
     fill = 2000.12 if side == 1 else 1999.98
     mt, d, log, p = filled(hull_desk, side, base=base, lots=lots, slip=fill)
     r = d.ladders.book[str(p.ticket)]
-    assert r["base_usd"] == base and r["entry"] == fill
+    assert r["configured_target_usd"] == base
+    assert r["entry_spread_usd"] == pytest.approx(0.1 * lots * 100)
+    base += 0.1 * lots * 100  # expected frozen goal, not (slipped fill - later mark)
+    assert r["base_usd"] == pytest.approx(base) and r["entry"] == fill
     assert d.h.exit_policy == r["policy"] == LADDER and not d.state.get(
         "target_by_ticket"
     )
@@ -103,15 +106,15 @@ def test_each_rung_from_actual_fill_and_original_per_ticket_cash(
 
 @pytest.mark.parametrize("side", [1, -1])
 def test_executable_side_and_already_crossed_tp_or_stop_wins(hull_desk, side):
-    for usd in (10.0, 16.0, -20.0):
+    for usd in (11.0, 17.6, -20.0):
         mt, d, _, p = filled(hull_desk, side)
-        quote(mt, p, 6.5, spread=0.2)
+        quote(mt, p, 7.2, spread=0.2)
         d.supervise()
         assert not mt.requests  # wrong quote side exceeds 70%
         quote(mt, p, usd)
         d.supervise()
         assert not mt.requests and d.ladders.book[str(p.ticket)]["rung"] == 0
-        quote(mt, p, 7.4)
+        quote(mt, p, 8.14)
         d.supervise()  # a delayed positions snapshot cannot rescue an already-crossed barrier
         assert not mt.requests and d.ladders.book[str(p.ticket)]["broker_exit_seen"]
 
@@ -167,7 +170,7 @@ def test_fail_closed_without_loosening_or_adopting_positions(hull_desk, changed)
     mt, d, log, p = filled(hull_desk)
     r = d.ladders.book[str(p.ticket)]
     before = p.sl, p.tp
-    quote(mt, p, 7)
+    quote(mt, p, 7.7)
     if changed == "no_tick":
         mt.q = None
     elif changed == "stale":
@@ -215,14 +218,14 @@ def test_fail_closed_without_loosening_or_adopting_positions(hull_desk, changed)
 )
 def test_recheck_before_modification_never_sends_the_old_quote_plan(hull_desk, case):
     mt, d, _, p = filled(hull_desk)
-    quote(mt, p, 7.12)
+    quote(mt, p, 7.82)
     old = p.sl, p.tp
 
     def checked(req):
         if case == "price_retreat":
             quote(mt, p, 6.7)
         elif case == "old_tp":
-            quote(mt, p, 10.6)
+            quote(mt, p, 11.6)
         elif case == "stale":
             mt.q.time_msc -= 5000
         elif case == "ticket_closed":
@@ -243,7 +246,7 @@ def test_recheck_before_modification_never_sends_the_old_quote_plan(hull_desk, c
 
 def test_persist_and_reconcile_uncertain_amendment_never_resend(hull_desk):
     mt, d, _, p = filled(hull_desk)
-    quote(mt, p, 7)
+    quote(mt, p, 7.7)
     key = str(p.ticket)
 
     def lose_ack(req):
@@ -286,7 +289,7 @@ def test_fixed_legacy_and_new_tickets_can_coexist(hull_desk):
     manual = NS(**{**vars(p), "ticket": 992, "magic": 77, "profit": 100.0})
     mt.positions.extend([legacy, manual])
     d.state["target_by_ticket"] = {str(legacy.ticket): 10.0}
-    quote(mt, p, 7.4)
+    quote(mt, p, 8.14)
     d.supervise()
     assert [a["action"] for a in mt.requests] == [
         mt.TRADE_ACTION_SLTP,
@@ -296,8 +299,8 @@ def test_fixed_legacy_and_new_tickets_can_coexist(hull_desk):
         p.ticket,
         legacy.ticket,
     ] and manual in mt.positions
-    quote(mt, p, 10.0)
-    p.profit = 10.0
+    quote(mt, p, 11.0)
+    p.profit = 11.0
     d.supervise()
     assert p in mt.positions and d.ladders.book[str(p.ticket)]["rung"] == 2
     assert d.close_opposite(NAME, sig(side=-1)) == 1 and mt.positions == [manual]
@@ -311,7 +314,7 @@ def test_all_ladders_advance_beyond_40_amendments_on_fresh_ticks_in_one_second(
     mt, d, log, p = filled(hull_desk, single=False)
     d.state["sends"] = [T] * 40  # left by an earlier build; never read or extended
     for rung in range(1, 12):
-        quote(mt, p, 7.05 + 3 * (rung - 1))
+        quote(mt, p, 7.75 + 3.3 * (rung - 1))
         d.supervise()
         assert all(r["rung"] == rung for r in d.ladders.book.values())
     assert len(mt.requests) == len(log_for(log, "profit_ladder_step")) == 44
@@ -339,19 +342,19 @@ def test_definite_broker_refusal_never_changes_local_protection_and_can_recheck(
     mono = [50.0]
     monkeypatch.setattr("bot.hull.desk.time.monotonic", lambda: mono[0])
     mt.order_send = lambda req: mt.requests.append(dict(req)) or NS(retcode=code)
-    quote(mt, p, 7.1)
+    quote(mt, p, 7.8)
     d.supervise()
     assert len(mt.requests) == 1 and (p.sl, p.tp) == old
     assert d.ladders.book[key]["rung"] == 0 and not d.ladders.needs_review()
     assert (
         log_for(log, "profit_ladder_deferred")[-1]["reason"] == "ladder_broker_refused"
     )
-    quote(mt, p, 7.2)
+    quote(mt, p, 7.9)
     d.supervise()
     assert len(mt.requests) == 1
     mt.order_send = original
     mono[0] += 1.1
-    quote(mt, p, 7.3)
+    quote(mt, p, 8.0)
     d.supervise()
     assert d.ladders.book[key]["rung"] == 1 and len(mt.requests) == 2
 
@@ -369,7 +372,7 @@ def test_new_default_for_old_yaml_and_default_does_not_adopt_any_open_ticket(hul
     old = p.sl, p.tp
     # No record in the journal means this older ticket is NOT enrolled by the upgrade.
     del d.state["ladder_by_ticket"]
-    quote(mt, p, 7.1)
+    quote(mt, p, 7.8)
     d.supervise()
     assert (p.sl, p.tp) == old and not mt.requests
 
@@ -409,7 +412,7 @@ def test_tick_supervisor_runs_between_native_bar_closes_on_resumed_tickets(
     ][-n:]
     clock = [T + 30.0]
     mono = [450.0]
-    samples = [7.0, 10.0, 13.0]
+    samples = [7.7, 11.0, 14.3]
     sleeps = []
     quote(mt, p, samples[0], stamp=int(clock[0] * 1000) - 1)
 
@@ -448,9 +451,13 @@ def test_tick_supervisor_runs_between_native_bar_closes_on_resumed_tickets(
     ]
     assert all(req["action"] == mt.TRADE_ACTION_SLTP for req in mt.requests)
     summary = events[0]["summary"]
-    assert summary["new_ticket_exit_policy"] == LADDER and summary["specs"][NAME][
-        "ladder_preview_per_ticket"
-    ][2] == {"rung": 3, "trigger_usd": 13.0, "lock_usd": 12.0, "target_usd": 18.0}
+    assert summary["new_ticket_exit_policy"] == LADDER
+    assert summary["new_ticket_target_policy"] == "base_plus_entry_spread_v1"
+    for view in summary["specs"][NAME]["target_preview_by_side"].values():
+        assert view["initial_goal_usd"] == pytest.approx(11)
+        assert view["ladder_preview_per_ticket"][2] == pytest.approx(
+            {"rung": 3, "trigger_usd": 14.3, "lock_usd": 13.2, "target_usd": 19.8}
+        )
 
 
 def test_dont_enroll_a_different_ticket_from_same_snapshot(hull_desk):

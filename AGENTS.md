@@ -12,7 +12,7 @@ Open **PowerShell in the bot folder** on your Windows MT5 PC (usually `$HOME\Dow
 
 **1. Check MT5.** Sign in to your **USD hedging DEMO** account. Check the Trade tab for positions and pending orders and [check for another scanner](#check-for-another-scanner). If an armed or unknown scanner is running, or exposure is unresolved, **stop here**. Do not interrupt ticket management or launch a duplicate.
 
-**2. Choose your symbols.** In this PowerShell window, paste the block below, keeping **only the profiles you intend to run**. These are the eight previously configured profiles. Each line is `SYMBOL:lots per ticket:initial target USD per ticket:rate`.
+**2. Choose your symbols.** In this PowerShell window, paste the block below, keeping **only the profiles you intend to run**. These are the eight previously configured profiles. Each line is `SYMBOL:lots per ticket:base USD per ticket:rate`.
 
 ```powershell
 $py  = '.\.venv\Scripts\python.exe'
@@ -30,7 +30,7 @@ $profiles = @(
 if (-not $profiles) { throw 'Choose at least one profile.' }
 ```
 
-For US30 only, leave only `'US30:1:10:slow'`. **Slow requests ten tickets:** if all fill, that row means **10 lots total**, with a $10 initial gross target **per ticket**, not a guaranteed $100 profit. Verify `US30m` for US30 and `USTEC_x100m` for NAS100USD. Re-run step 2 whenever you open a new scanner window.
+For US30 only, leave only `'US30:1:10:slow'`. **Slow requests ten tickets:** if all fill, that row means **10 lots total**, with a **$10 base per ticket**. MT5 values each leg’s entry spread in USD at its own volume. If that value is $13, that leg targets **+$23 gross** before fees, not a guaranteed $23 net. Its ladder uses the same frozen $23. Spread points are not dollars. Verify `US30m` for US30 and `USTEC_x100m` for NAS100USD. Re-run step 2 whenever you open a new scanner window.
 
 **3. Check before sending — read-only.** Use the **same** config and profiles you will arm:
 
@@ -41,7 +41,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Invalid config. Do not arm.' }
 if ($LASTEXITCODE -ne 0) { throw 'Preflight failed. Do not arm.' }
 ```
 
-Verify the demo account, trading permissions, symbols, batch sizes, M1/M2/M5 history, positions/orders and `review_before_demo`. For live continuations look for `entry_timing: live_continuation_v1` and `bid_chart_verified: true`. Do **not** arm with an unexplained warning.
+Verify the demo account, trading permissions, symbols, batch sizes, M1/M2/M5 history, positions/orders and `review_before_demo`. Look for `new_ticket_target_policy: base_plus_entry_spread_v1`; each symbol’s `target_preview_by_side` shows the indicative BUY and SELL goals on the current quote. For live continuations look for `entry_timing: live_continuation_v1` and `bid_chart_verified: true`. Do **not** arm with an unexplained warning.
 
 Want to watch first? Run `& $py -m bot.cli trade-all --config $cfg @profiles` **without** the arm flag. It must say `READ ONLY`. Stop **that observer** with Ctrl+C before step 4. If the account or profiles change, repeat preflight.
 

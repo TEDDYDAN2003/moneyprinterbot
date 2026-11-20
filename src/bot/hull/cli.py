@@ -24,12 +24,16 @@ def register(sub):
             "--symbols", nargs="+", help="configured keys; default hull.enabled"
         )
         p.add_argument("--lots", type=float, help="per position")
-        p.add_argument("--target-usd", type=float, help="per position")
+        p.add_argument(
+            "--target-usd",
+            type=float,
+            help="USD base per new ticket; one entry spread in USD is added",
+        )
         p.add_argument("--rate", choices=("slow", "medium", "fast"))
         p.add_argument(
             "--profile",
             action="append",
-            help="repeat SYMBOL:LOT:TARGET_USD:RATE instead of global overrides",
+            help="repeat SYMBOL:LOT:BASE_USD:RATE instead of global overrides",
         )
         p.add_argument(
             "--timeframe",
