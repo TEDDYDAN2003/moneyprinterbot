@@ -1,4 +1,4 @@
-"""Compare the production Python lane to Pine's closed-bar oracle on identical OHLC.
+"""Compare the unchanged production Python lane to the archived v2 Pine oracle on identical OHLC.
 
 Run from a full checkout with bot dependencies installed; the MQ5 shim is checked by check_port.py.
 A chart's one-position fills are deliberately NOT used as broker executions.
@@ -18,6 +18,8 @@ from bot.zones.engine import Bar
 
 def main(path):
     tape = json.loads(Path(path).read_text())
+    if tape.get("policy") == "momentum_retest_v3":
+        raise SystemExit("The scanner remains v2. Generate its oracle from qa/reference.pine, not the v3 chart.")
     total = 0
     for case in tape["cases"]:
         opts = case["opts"]

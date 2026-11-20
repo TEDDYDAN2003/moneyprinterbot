@@ -1,49 +1,45 @@
-# FC Hull Either 16 · Protected Swing v2 for MT5
+# Install FC Hull Range Retest v3 on MT5
 
-**Install `FC-Hull-Either-16-Structure.mq5` as a custom indicator, not an Expert Advisor.** It reads native chart candles; does not inspect your account or broker tickets; and cannot submit, modify or close an order. The Windows journal in the other folder reads actual closed deals independently.
+This is a **custom chart indicator, not an Expert Advisor**. Its limits, fills and P/L are simulated from chart candles. It cannot read your account, submit an order or change the Python demo scanner.
 
-## Put it on your chart
+1. In MT5 Desktop, choose **File → Open Data Folder**. Copy `FC-Hull-Either-16-Structure.mq5` to `MQL5\Indicators` (not `Experts` or `Scripts`). If upgrading, remove the old chart attachment before adding the new one. The source has no custom include dependencies.
+2. Open **that `.mq5` file** in MetaEditor and press **F7 / Compile**. Check the Errors pane; MetaEditor creates the `.ex5` locally. No precompiled binary is supplied. Do not paste the TradingView `.pine` file into MetaEditor.
+3. Back in MT5: **Navigator → Indicators → Refresh**. Attach **FC-Hull-Either-16-Structure**. Verify that the short name is **FC Hull Range Retest v3**, not Protected v2. M1, M2 and M5 each compute their own native range. Neither Algo Trading nor a scanner restart is needed.
+4. Under **Inputs**, leave the view on **Valid suggestions only**. Enable **Draw allowed BUY and SELL bands** if you want to see the active half-range. Group **8 | Reversal stages** controls the gold watch dots, blue staged-limit marker / waiting line, and the optional *limit ready (not a fill)* popup. All popups are off by default. Selected-view BUY/SELL popups are separate.
 
-1. In your **MT5 desktop terminal** choose **File → Open Data Folder**. Open `MQL5\Indicators` and copy `FC-Hull-Either-16-Structure.mq5` there. The single source file has no custom include dependencies. Do not put it in `Experts`.
-2. Open that file in **MetaEditor** (F4 from MT5), then press **F7 / Compile**. MetaEditor creates the `.ex5` next to the source. Check the **Errors** pane in your own build; no precompiled binary is supplied.
-3. Return to MT5 → **Navigator → Indicators → Refresh**. Drag **FC-Hull-Either-16-Structure** onto the desired symbol/timeframe. The short name must say **FC Hull Protected v2**; remove an old duplicate indicator before comparing. The original Hull workflow uses **M1, M2 and M5**; each chart maintains its own structure. Algo Trading, DLL imports and a logged-in trading account are not required for the indicator to calculate from loaded bars.
-4. Under **Inputs → 1 | Suggestions and alerts**, leave **Valid suggestions only** selected. Turn on **Draw allowed BUY and SELL bands** to inspect the price areas. To hear/see fresh selected chart signals, enable the BUY and/or SELL popup inputs. They are off by default; hiding marks does not disable an enabled alert. No historical popup storm on attachment.
+## Read the marks
 
-## What is preserved
+- In a bullish BOS range, only a fresh BUY from **above the protected HL through the midpoint** qualifies. In a bearish BOS range, only a fresh SELL from **the midpoint to strictly below the protected LH** qualifies. No extra minor pivot is needed. A continuation suggestion still needs an adjacent in-band open to simulate a fill.
+- An opposite cross in the former post-extreme entry zone can **arm a watch only**. An opposing signal cancels that watch. For a BUY, require a strict close above the protected LH; for a SELL, strictly below the protected HL. A wick or equality fails. A surviving watch or a matching fresh cross on that close can stage a chart limit at the **broken** guard.
+- **Staged is not filled.** The new limit is first eligible on a later candle. No retest means no reversal entry. In the default view a reversal BUY/SELL label is drawn only on a simulated fill. `Structure only (bands / retests)` can show an unexecutable touch; `All Hull crosses (debug)` deliberately shows raw, unqualified crosses. The **Simulated fills only** view excludes close-only continuation suggestions.
+- For cancellation, session gaps, price improvement, ambiguous OHLC exits, position occupancy and examples, see [the full chart rules](../docs/HULL_CHART_V3.md). The [scanner's v2 rules](../docs/HULL_STRUCTURE.md) are intentionally different. Its real deals and this chart's panel should **not** be expected to match.
 
-- **Independent low/high Hull A curves**; one close-based Hull B; default length 16, Either source, strict crosses (equality is not a cross). Aligned events count once; opposed raw candidates cancel. Directional, Low only, High only and optional alternation are also available.
-- **Protected structure, closed bars only.** A true CHoCH is a strict close through the protected HL/LH. A matching fresh Hull cross can qualify on that close. Afterwards a later counter-direction close from the leg tip is enough pullback evidence: BUY strictly above the protected HL / SELL strictly below the protected LH. No 50% test, no three-right-bar wait on the retest, no retroactive suggestion. Minor swings never move the guard by themselves.
-- **Continuation BOS** requires a close beyond the previous confirmed structural HH/LL with a prior pullback. Only then can the deepest intervening retracement wick become the new protected HL/LH; the new HH/LL must exceed the old one. A wick-only sweep cannot loosen the guard. Confirmed pivots (default 3/3) still determine structural extremes; newest equal wick wins. The established countertrend exception remains `(old broken HH, new HH]` for SELL / `[new LL, old broken LL)` for BUY. The first known break seeds context only.
-- **First eligible while a chart slot is available.** Same-side repeats while still open are rejected. A new cross after flat can qualify in the same region. Raw opposites with executable stop/EMA may queue an exit independent of structure. A replacement must qualify. The close-at-candle-extreme ambiguity guard and stop-first assumption on double-touch candles follow the supplied Pine.
-- **Stop and open check unchanged.** Default stop uses up to 7 prior local wicks, bounded by the preceding selected opposite, with 0.1 × Wilder ATR14. Signal candle excluded. Outward rounding uses `SYMBOL_TRADE_TICK_SIZE` (point fallback). The close freezes its band, stop and R target. At the next adjacent chart open the simulated price, frozen band and bracket are rechecked; missing bars or out-of-band opens veto, never erase the close suggestion.
-- All four label/alert views: valid close, structure-only, simulated fill, raw debug. A chart use-case, not the bot's multi-ticket 70/30 ladder. Optional EMA, permitted sides, pullback/pivot stop, costs, slippage, position sizing, target R and executable opposite exits retain the supplied defaults. The panel is **chart-simulated** P/L, not MT5 account P/L.
+The forming candle can update its Hull/EMA lines and display the prior committed range/watch/limit. Decision **events** stay zero until a candle closes. MT5 observes the close on the first tick of the next candle. A retest can trade through intrabar but the chart reports the simulated fill once the **touch candle closes**. No historical popups on attachment/backfill. The most recent 100 selected marks have text captions by default; native arrows remain on older history. The price of an arrow/caption is not the fill price.
 
-## MT5 display and timing
+## Data Window / CopyBuffer
 
-- With `live_continuation_v1` the separate Python scanner can open a continuation **before this chart draws a BUY/SELL**. A live cross that disappears can leave a broker deal with no matching confirmed arrow. The vertical location of a label is not an executable quote. Compare the scanner’s `live_hull_cross` timestamp and bid/ask to the actual deal.
-- The live bar can update its Hull/EMA lines. All decision buffers stay zero until it closes. MT5 confirms a bar on the **first tick of the next bar**; a simulated fill at the prior open is marked only once the **fill candle** is confirmed, just like the selected Pine view. Popups only fire for a just-observed adjacent close, not history catch-up across a gap. An unformed new tick can delay notification.
-- Permanent native arrow buffers show marks throughout loaded history. For legibility, only the most recent 100 selected marks have text captions by default (set to 0 for arrows only). Fills use native chart shading with background-blended colours. Plans are bounded by the requested retention; future endpoints are provisional until the requested number of actual bars exists. Change the stats panel corner or turn it off.
-- Match **OHLC feed, timeframe, warm-up history, tick size and settings** when comparing to TradingView. MT5 commonly charts broker bid candles. Pine's `time_close` is approximated by the expected end of the MT5 time bar (calendar month for MN1); irregular, session-shortened and custom bars can differ. Time labels are broker chart time. History corrections/reloads recompute from available bars.
-
-### Data Window / CopyBuffer reference
+Use **shift 1** for the most recent closed candle. Sides are `+1` BUY, `−1` SELL, `0` none. Price buffers use `EMPTY_VALUE` when absent. The old public indices 10–32 are retained; the meaning of *structure*, *valid* and *fill* now follows v3.
 
 | Buffer | Meaning |
 |---:|---|
-| 10 | Hull B (close); 11 is its colour index |
-| 12 / 13 / 14 | High Hull A / low Hull A / optional EMA |
-| 15–18 | Visible BUY low/high and SELL low/high band edges |
-| 19 / 20 | BUY / SELL marker prices for the selected view (`EMPTY_VALUE` when absent) |
-| 21 | Conflict marker in debug view |
-| **22 / 23 / 24 / 25 / 26** | **Raw / structure-qualified / valid suggestion / sim fill / conflict flag** (unchanged indices) |
-| 27 / 28 / 29 | Protected HL/LH, confirmed structural extreme, candidate pullback wick (not protected). `EMPTY_VALUE` if absent. |
-| 30 / 31 / 32 | Bias (`±1`, `0`); break on *this* close (`±2` CHoCH, `±3` BOS, else `0`); pullback seen (`1/0`). |
+| 10–14 | Hull B, its colour index, high/low Hull A, optional EMA |
+| 15–18 | Visible BUY low/high, SELL low/high band edges |
+| 19 / 20 / 21 | Selected-view BUY / SELL marker prices, raw conflict mark in debug view |
+| **22 / 23 / 24 / 25 / 26** | Raw cross / structure pass (trend cross or first retest touch) / valid chart suggestion / any simulated fill / source conflict flag |
+| 27 / 28 / 29 | Protected HL/LH, confirmed structural extreme, candidate pullback wick (not protected) |
+| 30 / 31 / 32 | Bias; break **on this close** (`±2` CHoCH, `±3` BOS); pullback seen (`1/0`) |
+| 33 / 34 | Visible watch guard / resting executable limit price; empty if stages are hidden |
+| 35 / 36 | BOS range midpoint / current watch side (state, not events) |
+| **37 / 38 / 39** | Watch newly armed / eligible CHoCH confirmed / executable limit staged **on this close** |
+| **40 / 41 / 42** | First later structural retest touch / actual simulated retest fill / cancelled watch or unfilled retest (signed side) |
+| 43 / 44 | Visible staging marker price (not a fill) / simulated fill price (any fill, independent of mark visibility) |
 
-Trend/CHoCH permissions have just **one finite boundary**: a line, not a filled two-sided range. Only bounded countertrend zones get a fill. None of these diagnostics is an instruction to place a trade.
+For example, `22 = +1`, `37 = +1`, `24 = 0` means **watch BUY**, not enter. Later, `38 = +1`, `39 = +1`, `41 = 0` means **BUY limit staged**, not filled. On a subsequent `41 = +1`, `44` gives the simulated buy price. A confirmation can have `22 = 0`. A risk veto can leave `38 ≠ 0` and `39 = 0`; that path never produces an executable retest from that confirmation.
 
-Use **shift 1** for the last closed candle. Directional decision buffers use `+1` BUY, `−1` SELL, `0` none. Buffer 26 is `1` for a raw conflict, else `0`. Hiding chart marks never removes the diagnostic decision codes. For example, 22 = +1 with 23 = 0 is a raw BUY that failed the market-structure test. Buffer 24 = +1 is a valid **chart suggestion**, not proof of a broker fill.
+## Verification and platform limits
 
-### Verification
+Offline checks executed the delivered Pine source in **PineTS** and the delivered MQL5 calculations and `OnCalculate` scheduler through a **C++ host shim**. The v3 comparison covers 29 synthetic scenarios, 28,936 closed-bar decisions and 62 fields per bar, plus 62 hand-specified BUY/SELL paths. It includes stored-watch confirmations without another cross, real mirrored retests, forming-candle suppression, incremental vs full history, and separate limit/entry alerts. See [QA instructions](qa/README.md).
 
-The actual calculation source and `OnCalculate` scheduler were run offline through a C++ compatibility shim. On 27 synthetic PineTS scenarios (28,094 closed-bar comparisons; 44 fields per bar), signal modes, pivots/bands, valid suggestions, frozen open checks, position and accounting states matched the supplied Pine within the test tolerance. The Python scanner was also compared against the Pine run on 16 exact raw/structure fields, including the mirrored minor-swing incidents. Additional lifecycle checks covered repeated updates to the forming bar, alert gating and full vs incremental replay. **This is not a native MetaEditor compile or a performance backtest.**
+This is not a TradingView or MetaEditor native compilation and not a P/L backtest. MT5 commonly charts broker bid OHLC. Match feeds, settings, tick size and loaded history when comparing platforms; session-shortened and custom bars can differ. MT5 uses the expected time-bar end (calendar month for MN1) to detect gaps.
 
-Optional: after compiling the indicator, copy `optional/Check-FC-Hull-Structure.mq5` to `MQL5\Scripts`, compile it, and run it once on a chart. Its Experts-tab output checks that the compiled indicator loads, forming-bar decisions are zero and the diagnostic buffers agree. Use an ordinary liquid chart with enough closed history. The script does not place orders.
+**Optional local check:** after compiling, copy `optional/Check-FC-Hull-Structure.mq5` to `MQL5\Scripts`, compile it, then run it once on a liquid chart with enough history. It loads the v3 indicator with defaults, reads closed-bar buffers, checks that forming-bar events are zero, and prints a summary in the Experts tab. It cannot trade.

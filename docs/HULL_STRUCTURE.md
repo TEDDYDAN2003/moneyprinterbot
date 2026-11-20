@@ -1,10 +1,10 @@
-# Hull entry rule: protected swing v2
+# Demo scanner entry rule: protected swing v2
 
-**Protect the swing that produced the break, not each small swing inside its retest.** The Python scanner, observer and ordered-quote replay identify this policy as `protected_swing_v2`. The [Pine study](../indicators/FC-Hull-Either-16-Structure.pine) and [MT5 indicator](../MT5/INSTALL-MT5.md) use the same structure on their own native candles. A closed chart suggestion is not a broker ticket. Compare **the same OHLC, initial history, settings and candle-open UTC timestamp**; ICE and Exness can legitimately differ.
+**Protect the swing that produced the break, not each small swing inside its retest.** The Python scanner, observer and ordered-quote replay identify this policy as `protected_swing_v2`. **This page describes the scanner, not the current chart entry policy.** The [v3 TradingView and MT5 chart rules](HULL_CHART_V3.md) retain the protected-swing detector but require trend-side half-ranges and a CHoCH-then-retest for reversals. A closed chart suggestion is not a broker ticket. Compare **the same OHLC, initial history, settings and candle-open UTC timestamp**; ICE and Exness can legitimately differ.
 
-**Scanner timing is not chart timing.** With the default `live_continuation_v1`, if the trend and pullback were already established on closed candles, the Python scanner can act on the first observed matching Hull cross **during** the next forming candle at the broker quote. The candle does not get to certify its own structure. CHoCH, the post-BOS countertrend exception, and opposite-label exits are still closed decisions. Pine/MT5 arrows and `hull-replay` remain **closed-label benchmarks**, not a record of live crosses or fills.
+**Scanner timing is not chart timing.** With the default `live_continuation_v1`, if the trend and pullback were already established on closed candles, the Python scanner can act on the first observed matching Hull cross **during** the next forming candle at the broker quote. The candle does not get to certify its own structure. CHoCH, the post-BOS countertrend exception, and opposite-label exits are still closed decisions. The [archived v2 Pine reference](../MT5/qa/reference.pine) and `hull-replay` are **closed-label benchmarks** for this policy, not a record of live crosses or fills. V3 chart arrows are not a v2 benchmark.
 
-## Three distinct moments
+## Three distinct moments in the scanner
 
 | Event | Bearish case | Bullish mirror |
 |---|---|---|
@@ -28,7 +28,7 @@ There is **no 50% gate on trend entries**, no wait for three right bars on the *
 
 In the deterministic `protected-sell` fixture, **3,682.840** is the LH whose downswing broke the previous low. The first small pullback peaks at **3,675.945**. The next rally closes above that minor high but below 3,682.840. Bar 92 closes at **3,677.159** with a fresh Hull SELL. On these same synthetic candles v1 flips bullish and vetoes it; v2 keeps the bearish guard, reports `bear_protected_pullback_sell` and passes the close. Only a later close below the structural LL **3,670.260** promotes the intervening high **3,679.830**. The earlier SELL passes even when the input stops at bar 92. Tests cover the BUY mirror, a fresh signal on the true CHoCH close, and a next-open touch that vetoes a fill without erasing its suggestion. The reported incident prices are anchors, **not a reconstruction of the broker's full history**.
 
-To inspect a broker candidate, find `live_hull_cross` or `closed_label` for **symbol + timeframe + UTC trigger**. Distinguish the protected level from the tentative wick and `label` (raw) from `entry_side` (qualified). On charts use the Data Window fields for **protected HL/LH, confirmed extreme, candidate wick, bias, signed break on this close and pullback seen**. A one-sided trend rule has one displayed boundary / one null price bound; a two-sided countertrend band has both edges.
+To inspect a broker candidate, find `live_hull_cross` or `closed_label` for **symbol + timeframe + UTC trigger**. Distinguish the protected level from the tentative wick and `label` (raw) from `entry_side` (qualified). On charts use the Data Window fields for **protected HL/LH, confirmed extreme, candidate wick, bias, signed break on this close and pullback seen**. In the v2 scanner logs a one-sided trend rule has one null price bound; a two-sided countertrend band has both edges. The v3 chart instead displays two-sided trend bands.
 
 ## Orders, exits and audit
 

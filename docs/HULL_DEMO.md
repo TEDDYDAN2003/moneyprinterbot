@@ -2,6 +2,8 @@
 
 This is a **Python companion for MT5 Desktop on Windows**, not an `.ex5` file. It does not need a chart website, browser automation, API key or database. `trade`, `demo` and `trade-all` now route **only** to this scanner. One process monitors native **M1, M2, M5** for the selected instruments. No M15 orders or legacy zone/momentum fallback. [Standing startup instructions](../README.md#standing-instructions-for-the-desktop-agent) · [Copy just your profiles](Hull-demo-start.html) · [test evidence](../research/hull_labels/README.md).
 
+**Chart-only update:** [TradingView and MT5 chart v3](HULL_CHART_V3.md) use BOS half-ranges and CHoCH-then-retest limits. This page describes the unchanged Python scanner; do not expect the chart arrows to match its trades.
+
 ## What triggers an entry?
 
 **Version 2 defaults: `hull_len: 16`, `source: either`.** Each native timeframe keeps two independent A curves: `A(s) = WMA(2 × WMA(s,8) − WMA(s,16),4)` for `s = low` and `s = high`. One shared `B = WMA(3 × WMA(close,2) − WMA(close,4) − WMA(close,8),8)`. A strict upward B cross of **either** A is BUY; a strict downward cross of either A is SELL. Each previous value is compared to its **own** history. Equality on either side of the comparison is not a cross. Two sources crossing the same way on one close = **one** label; sources crossing opposite ways on the same lane/close = **no** label, exit or entry from that lane. There is **no BUY/SELL alternation latch**. The older single-source mode is still explicit: `hull_len: 24`, `source: hl2`.
