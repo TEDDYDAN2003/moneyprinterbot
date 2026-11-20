@@ -1,7 +1,7 @@
 // FC Hull Either 16 | Market Structure Suggestions | MT5 custom indicator (not an EA).
 // No order, account, network or file APIs. All P/L and occupancy below are chart simulations.
-#property version "3.00"
-#property description "BOS-proven half-range trend entries; strict CHoCH then chart-only retest limits. Not the demo scanner."
+#property version "4.00"
+#property description "BOS-proven half-range trend entries at candle close. CHoCH is context only, never a reversal order."
 #property indicator_chart_window
 #property indicator_buffers 48
 #property indicator_plots 39
@@ -79,38 +79,34 @@
 #property indicator_label27 "Pullback seen (1/0)"
 #property indicator_type27 DRAW_NONE
 
-#property indicator_label28 "Watch guard - no order"
-#property indicator_type28 DRAW_ARROW
-#property indicator_color28 clrDarkGoldenrod
-#property indicator_label29 "Resting simulated retest limit"
-#property indicator_type29 DRAW_LINE
-#property indicator_color29 clrSlateBlue
+#property indicator_label28 "Reserved (inactive)"
+#property indicator_type28 DRAW_NONE
+#property indicator_label29 "Reserved (inactive)"
+#property indicator_type29 DRAW_NONE
 #property indicator_label30 "BOS range midpoint"
 #property indicator_type30 DRAW_NONE
-#property indicator_label31 "Watch side - not an entry"
+#property indicator_label31 "Reserved (inactive)"
 #property indicator_type31 DRAW_NONE
-#property indicator_label32 "Watch armed on this close"
+#property indicator_label32 "Reserved (inactive)"
 #property indicator_type32 DRAW_NONE
-#property indicator_label33 "CHoCH watch or fresh cross confirmed"
+#property indicator_label33 "Reserved (inactive)"
 #property indicator_type33 DRAW_NONE
-#property indicator_label34 "Retest limit staged on this close"
+#property indicator_label34 "Reserved (inactive)"
 #property indicator_type34 DRAW_NONE
-#property indicator_label35 "Later structural retest touch"
+#property indicator_label35 "Reserved (inactive)"
 #property indicator_type35 DRAW_NONE
-#property indicator_label36 "Later simulated retest fill"
+#property indicator_label36 "Reserved (inactive)"
 #property indicator_type36 DRAW_NONE
-#property indicator_label37 "Watch or unfilled retest cancelled"
+#property indicator_label37 "Reserved (inactive)"
 #property indicator_type37 DRAW_NONE
-
-#property indicator_label38 "Limit staged - NOT a fill"
-#property indicator_type38 DRAW_ARROW
-#property indicator_color38 clrSlateBlue
+#property indicator_label38 "Reserved (inactive)"
+#property indicator_type38 DRAW_NONE
 #property indicator_label39 "Simulated fill price"
 #property indicator_type39 DRAW_NONE
 
 enum FC_VIEW {
    FC_VALID=0,      // Valid suggestions only
-   FC_STRUCTURE=1,  // Structure only (bands / retests)
+   FC_STRUCTURE=1,  // Structure-qualified crosses
    FC_FILLS=2,      // Simulated fills only
    FC_RAW=3         // All Hull crosses (debug)
 };
@@ -151,7 +147,7 @@ input int InATRLen=14;                      // Wilder ATR length
 input double InATRBuffer=0.1;               // Stop buffer x ATR
 input double InPipSize=0.01;                // Pip size in price units
 input double InExtraPips=0.0;               // Extra stop buffer in pips
-input double InTargetR=1.5;                 // Chart TP R multiple (trend close / reversal limit)
+input double InTargetR=1.5;                 // Chart TP R multiple (from the trend signal close)
 input bool InOpposite=true;                 // Exit on executable opposite (replacement must qualify)
 input group "6 | Chart account (NOT the MT5 account)"
 input double InCapital=10000.0;             // Initial simulated capital
@@ -168,10 +164,6 @@ input bool InTable=true;                    // Show simulation panel
 input ENUM_BASE_CORNER InCorner=CORNER_RIGHT_UPPER; // Panel corner
 input int InTextCount=100;                  // Recent BUY/SELL text captions (0 = arrows only)
 
-input group "8 | Reversal stages"
-input bool InStages=true;                   // Watch dots / limit marker and resting line
-input bool InLimitAlerts=false;              // Separate popup: confirmed limit staged, NOT filled
-
 // BEGIN PORTABLE CALCULATION
 // Chronological indices: oldest = 0. StepClosed is called ONCE per confirmed candle.
 struct FCState {
@@ -180,7 +172,6 @@ struct FCState {
    double knownH,knownL,broken,origin,extreme,reaction,tip;
    double legOuter,retraceWick;
    int bias,kind,tipBar; bool seenPullback,breakNow;
-   int watch,ret,retBar; double watchGuard,retPx,retSL,retTP; bool retOK; datetime prevEnd;
    int pending,side; datetime due;
    double qSL,qTP,qLo,qHi; bool qOpenLo,qOpenHi,exitNext;
    double entry,stop,target,units,entryFee,cash,peak,maxDD,totalNet,gWin,gLoss;
@@ -189,9 +180,8 @@ struct FCState {
 struct FCBar {
    double b,hi,lo,ema,atr,buyLo,buyHi,sellLo,sellHi,rawSL,fillPx,fillSL,fillTP;
    bool strictBuyLo,strictBuyHi,strictSellLo,strictSellHi,insideBuy,insideSell;
-   int direction,raw,structure,valid,filled,display,tie,conflict;
-   double mid,touchPx,touchSL,touchTP; bool touchOK;
-   int armed,confirmed,placed,touch,retFill,cancel,trend;
+   int raw,structure,valid,filled,display,tie,conflict,riskSide;
+   double mid;
 };
 void ResetState(FCState &s) {
    ZeroMemory(s);
@@ -199,14 +189,13 @@ void ResetState(FCState &s) {
    s.ema=EMPTY_VALUE; s.atr=EMPTY_VALUE; s.knownH=EMPTY_VALUE; s.knownL=EMPTY_VALUE;
    s.broken=EMPTY_VALUE; s.origin=EMPTY_VALUE; s.extreme=EMPTY_VALUE;
    s.reaction=EMPTY_VALUE; s.tip=EMPTY_VALUE; s.legOuter=EMPTY_VALUE; s.retraceWick=EMPTY_VALUE; s.tipBar=-1;
-   s.watchGuard=EMPTY_VALUE;s.retPx=EMPTY_VALUE;s.retSL=EMPTY_VALUE;s.retTP=EMPTY_VALUE;s.retBar=-1;
    s.lastBuy=-1; s.lastSell=-1; s.cash=InCapital; s.peak=InCapital;
 }
 void ResetBar(FCBar &r) {
    ZeroMemory(r); r.b=EMPTY_VALUE; r.hi=EMPTY_VALUE; r.lo=EMPTY_VALUE;
    r.ema=EMPTY_VALUE; r.atr=EMPTY_VALUE; r.buyLo=EMPTY_VALUE; r.buyHi=EMPTY_VALUE;
    r.sellLo=EMPTY_VALUE; r.sellHi=EMPTY_VALUE; r.rawSL=EMPTY_VALUE;
-   r.mid=EMPTY_VALUE;r.touchPx=EMPTY_VALUE;r.touchSL=EMPTY_VALUE;r.touchTP=EMPTY_VALUE;
+   r.mid=EMPTY_VALUE;
    r.fillPx=EMPTY_VALUE; r.fillSL=EMPTY_VALUE; r.fillTP=EMPTY_VALUE;
 }
 double WmaAt(const double &a[],const int i,const int n) {
@@ -235,7 +224,6 @@ void SelectCross(FCState &s,FCBar &r,bool &repeat) {
    bool buy=(InSource==FC_HIGH ? hi==1 : InSource==FC_EITHER ? (lo==1||hi==1) : lo==1);
    bool sell=(InSource==FC_LOW ? lo==-1 : InSource==FC_EITHER ? (lo==-1||hi==-1) : hi==-1);
    r.conflict=(buy&&sell?1:0); int candidate=(r.conflict!=0 ? 0 : buy ? 1 : sell ? -1 : 0);
-   r.direction=candidate;
    repeat=(InAlternate && candidate!=0 && candidate==s.lastSig); r.raw=(repeat?0:candidate);
    if(r.raw!=0){s.lastSig=r.raw; if(r.raw==1)s.rawBuys++;else s.rawSells++;}
    else if(r.conflict!=0)s.conflicts++;else if(repeat)s.repeats++;
@@ -248,35 +236,11 @@ bool Inside(const double px,const double lo,const double hi,const bool openLo,co
    return (openLo?p>a:p>=a) && (openHi?p<b:p<=b);
 }
 void Bands(const FCState &s,FCBar &r) {
-   bool range=s.kind==3 && s.origin!=EMPTY_VALUE && s.extreme!=EMPTY_VALUE && s.bias*(s.extreme-s.origin)>0;
+   bool range=s.kind==3 && !s.breakNow && s.broken!=EMPTY_VALUE && s.origin!=EMPTY_VALUE && s.extreme!=EMPTY_VALUE && s.bias*(s.extreme-s.origin)>0 && s.bias*(s.extreme-s.broken)>0;
    r.mid=range?MathRound((s.origin+s.extreme)*0.5*1e9)/1e9:EMPTY_VALUE;
    r.buyLo=range&&s.bias==1?s.origin:EMPTY_VALUE; r.buyHi=range&&s.bias==1?r.mid:EMPTY_VALUE;
    r.sellLo=range&&s.bias==-1?r.mid:EMPTY_VALUE; r.sellHi=range&&s.bias==-1?s.origin:EMPTY_VALUE;
    r.strictBuyLo=true;r.strictBuyHi=false;r.strictSellLo=false;r.strictSellHi=true;
-}
-void ClearWatch(FCState &s){s.watch=0;s.watchGuard=EMPTY_VALUE;}
-void ClearRetest(FCState &s){s.ret=0;s.retBar=-1;s.retPx=EMPTY_VALUE;s.retSL=EMPTY_VALUE;s.retTP=EMPTY_VALUE;s.retOK=false;}
-// Structural watch -> confirmed plan -> first LATER retest. No broker pending orders.
-void Reversal(FCState &s,FCBar &r,const int i,const double hi,const double lo,const double px,const bool gap){
-   if(s.ret!=0){
-      if(!gap && i>s.retBar && (s.ret==1?lo<=s.retPx:hi>=s.retPx)){
-         r.touch=s.ret;r.touchPx=s.retPx;r.touchSL=s.retSL;r.touchTP=s.retTP;r.touchOK=s.retOK;ClearRetest(s);
-      }else if(gap||r.direction==-s.ret||r.conflict||s.breakNow||s.bias!=s.ret){r.cancel=s.ret;ClearRetest(s);}
-   }
-   if(s.watch!=0 && (gap||r.direction==-s.watch||r.conflict)){r.cancel=s.watch;ClearWatch(s);}
-   if(s.breakNow && s.kind==2){
-      bool stored=s.watch==s.bias && s.watchGuard!=EMPTY_VALUE && s.watchGuard==s.broken;
-      if(!r.conflict&&r.direction!=-s.bias&&(stored||r.raw==s.bias))r.confirmed=s.bias;
-      if(s.watch!=0&&!stored)r.cancel=s.watch;
-      ClearWatch(s);
-   }else{
-      if(s.watch!=0&&(s.breakNow||r.mid==EMPTY_VALUE||s.bias!=-s.watch||s.origin!=s.watchGuard)){
-         r.cancel=s.watch;ClearWatch(s);
-      }
-      bool bz=r.mid!=EMPTY_VALUE&&s.bias==-1&&r.raw==1&&px>=s.extreme&&px<s.broken;
-      bool sz=r.mid!=EMPTY_VALUE&&s.bias==1&&r.raw==-1&&px>s.broken&&px<=s.extreme;
-      if(!s.watch&&((bz&&InLong)||(sz&&InShort))){s.watch=r.raw;s.watchGuard=s.origin;r.armed=r.raw;}
-   }
 }
 void UpdateStructure(FCState &s,const int i,const double &h[],const double &l[],const double &c[]) {
    int p=i-InSwing; bool ph=(i>=2*InSwing),pl=ph;
@@ -341,72 +305,59 @@ void StepClosed(FCState &s,FCBar &r,const int i,const datetime at,const datetime
    else s.atr=(s.atr*(InATRLen-1)+tr)/InATRLen;
    r.atr=s.atr; UpdateStructure(s,i,h,l,c); Bands(s,r);
    r.insideBuy=Inside(px,r.buyLo,r.buyHi,r.strictBuyLo,r.strictBuyHi); r.insideSell=Inside(px,r.sellLo,r.sellHi,r.strictSellLo,r.strictSellHi);
-   int d=r.raw; r.trend=(d==1&&r.insideBuy?1:d==-1&&r.insideSell?-1:0);
-   Reversal(s,r,i,h[i],l[i],px,s.prevEnd!=0 && s.prevEnd!=at);s.prevEnd=expectedNext;
-   r.structure=r.touch!=0?r.touch:r.trend;
-   int calc=d!=0?d:r.confirmed;
+   int d=r.raw; r.structure=(d==1&&r.insideBuy?1:d==-1&&r.insideSell?-1:0);
    double anchor=EMPTY_VALUE;
-   if(calc!=0){
-      if(InStop==FC_PIVOT)anchor=calc==1?s.knownL:s.knownH;
+   if(d!=0){
+      if(InStop==FC_PIVOT)anchor=d==1?s.knownL:s.knownH;
       else{
-         int since=calc==1?s.lastSell:s.lastBuy;
+         int since=d==1?s.lastSell:s.lastBuy;
          for(int k=1;k<=InPullback && i-k>=0 && i-k>=since;k++){
-            double w=calc==1?l[i-k]:h[i-k];anchor=anchor==EMPTY_VALUE?w:(calc==1?MathMin(anchor,w):MathMax(anchor,w));
+            double w=d==1?l[i-k]:h[i-k];anchor=anchor==EMPTY_VALUE?w:(d==1?MathMin(anchor,w):MathMax(anchor,w));
          }
       }
-      if(d==1)s.lastBuy=i;else if(d==-1)s.lastSell=i;
-      if(anchor!=EMPTY_VALUE&&s.atr!=EMPTY_VALUE)r.rawSL=anchor-calc*(InATRBuffer*s.atr+InExtraPips*InPipSize);
+      if(d==1)s.lastBuy=i;else s.lastSell=i;
+      if(anchor!=EMPTY_VALUE&&s.atr!=EMPTY_VALUE)r.rawSL=anchor-d*(InATRBuffer*s.atr+InExtraPips*InPipSize);
    }
-   bool stopOK=(calc!=0 && r.rawSL!=EMPTY_VALUE && r.rawSL>0 && calc*(px-r.rawSL)>0);
-   bool emaOK=!InUseEMA || calc*(px-s.ema)>0; double planned=r.rawSL;
-   if(stopOK && InStop==FC_LOCAL)planned=(calc==1?MathFloor(planned/priceTick+1e-9):MathCeil(planned/priceTick-1e-9))*priceTick;
+   bool stopOK=(d!=0 && r.rawSL!=EMPTY_VALUE && r.rawSL>0 && d*(px-r.rawSL)>0);
+   bool emaOK=!InUseEMA || d*(px-s.ema)>0; double planned=r.rawSL;
+   if(stopOK && InStop==FC_LOCAL)planned=(d==1?MathFloor(planned/priceTick+1e-9):MathCeil(planned/priceTick-1e-9))*priceTick;
+   r.riskSide=r.structure && (d==1?InLong:InShort) && stopOK && planned>0 && emaOK?r.structure:0;
    double slip=InSlipTicks*InSlipTickSize,fee=InCommission/100.0;
    // Ordered simulation: old gap/queued exit -> frozen plan at open -> protective barriers -> new close.
    if(s.side!=0){bool gs=s.side*(o-s.stop)<=0,gt=s.side*(o-s.target)>=0;
       if(gs||gt||s.exitNext)BookExit(s,o,gs||!gt,slip,fee);}
-   bool limitInside=false;
-   if(s.pending!=0 || (r.touch!=0 && r.touchOK)){
-      bool isLimit=r.touch!=0 && r.touchOK && !s.pending;
-      int pd=isLimit?r.touch:s.pending;bool atOpen=isLimit&&pd*(o-r.touchPx)<=0;
-      double ep=!isLimit?o+pd*slip:!atOpen?r.touchPx:pd==1?MathMin(r.touchPx,o+slip):MathMax(r.touchPx,o-slip);
-      double sl=isLimit?r.touchSL:s.qSL,tp=isLimit?r.touchTP:s.qTP;
-      bool adjacent=isLimit||(s.due>0&&at==s.due),zone=isLimit||Inside(ep,s.qLo,s.qHi,s.qOpenLo,s.qOpenHi);
-      bool bracket=pd*(o-sl)>0 && pd*(ep-sl)>0 && pd*(tp-ep)>0;
+   if(s.pending!=0){
+      int pd=s.pending; double ep=o+pd*slip;
+      bool adjacent=s.due>0 && at==s.due,zone=Inside(ep,s.qLo,s.qHi,s.qOpenLo,s.qOpenHi);
+      bool bracket=pd*(o-s.qSL)>0 && pd*(ep-s.qSL)>0 && pd*(s.qTP-ep)>0;
       double qty=ep>0?MathMax(0.0,s.cash*InPct/100.0)/(ep*InPointValue):0.0;
       if(s.side==0 && adjacent && zone && bracket && qty>0){
-         s.side=pd;s.entry=ep;s.stop=sl;s.target=tp;s.units=qty;s.entryFee=MathAbs(ep*qty*InPointValue)*fee;
+         s.side=pd;s.entry=ep;s.stop=s.qSL;s.target=s.qTP;s.units=qty;s.entryFee=MathAbs(ep*qty*InPointValue)*fee;
          s.cash-=s.entryFee;s.fillN++;r.filled=pd;r.fillPx=ep;r.fillSL=s.stop;r.fillTP=s.target;
-         if(isLimit){r.retFill=pd;r.valid=pd;s.suggestN++;limitInside=!atOpen;s.decision=pd==1?19:20;}
       }else{s.vetoN++;s.decision=!adjacent?1:!zone?2:3;}
       s.pending=0;s.due=0;
    }
    if(s.side!=0){
-      bool buy=s.side==1; bool hs=buy?l[i]<=s.stop:h[i]>=s.stop,ht=limitInside?s.side*(px-s.target)>=0:(buy?h[i]>=s.target:l[i]<=s.target);
+      bool buy=s.side==1; bool hs=buy?l[i]<=s.stop:h[i]>=s.stop,ht=buy?h[i]>=s.target:l[i]<=s.target;
       if(hs||ht){bool tie=hs?(buy?px==l[i]:px==h[i]):(buy?px==h[i]:px==l[i]);
          if(tie)r.tie=s.side; BookExit(s,hs?s.stop:s.target,hs,slip,fee);}
    }
    s.exitNext=InOpposite && s.side!=0 && d==-s.side && stopOK && emaOK;
-   bool slot=(s.side==0 || s.exitNext) && calc!=r.tie;
+   bool slot=(s.side==0 || s.exitNext) && d!=r.tie;
    if(r.structure!=0)s.structN++;
-   if(r.confirmed!=0){
-      s.ret=r.confirmed;s.retPx=s.broken;s.retBar=i;
-      s.retOK=(calc==1?InLong:InShort)&&emaOK&&stopOK&&planned>0&&calc*(s.broken-planned)>0&&slot&&!s.pending&&s.cash>0;
-      s.retSL=s.retOK?planned:EMPTY_VALUE;s.retTP=s.retOK?s.broken+(s.broken-planned)*InTargetR:EMPTY_VALUE;
-      r.placed=s.retOK?r.confirmed:0;s.decision=s.retOK?(calc==1?15:16):21;
-   }else if(r.trend!=0 && r.retFill==0){
-      if(!(d==1?InLong:InShort)||!emaOK)s.decision=5;
+   if(d!=0){
+      if(r.structure==0)s.decision=s.kind==2?15:4;
+      else if(!(d==1?InLong:InShort)||!emaOK)s.decision=5;
       else if(!stopOK || planned<=0)s.decision=6;
-      else if(!slot || s.pending!=0 || s.retOK)s.decision=7;
+      else if(!slot || s.pending!=0)s.decision=7;
       else if(s.cash<=0)s.decision=8;
       else{
          r.valid=d;s.suggestN++;s.pending=d;s.qSL=planned;s.qTP=px+(px-planned)*InTargetR;
          s.qLo=d==1?r.buyLo:r.sellLo;s.qHi=d==1?r.buyHi:r.sellHi;
-         s.qOpenLo=d==1;s.qOpenHi=d==-1;s.due=expectedNext;s.decision=d==1?9:11;
+         s.qOpenLo=d==1?r.strictBuyLo:r.strictSellLo;s.qOpenHi=d==1?r.strictBuyHi:r.strictSellHi;s.due=expectedNext;
+         s.decision=d==1?9:11;
       }
-   }else if(!r.retFill){
-      if(r.armed)s.decision=r.armed==1?17:18;else if(r.cancel)s.decision=22;
-      else if(r.conflict)s.decision=13;else if(repeat)s.decision=14;else if(d)s.decision=4;
-   }
+   }else if(r.conflict!=0)s.decision=13;else if(repeat)s.decision=14;
    double marked=s.cash+(s.side==0?0.0:(px-s.entry)*s.side*s.units*InPointValue);
    s.peak=MathMax(s.peak,marked);s.maxDD=MathMax(s.maxDD,s.peak-marked);
    r.display=InView==FC_STRUCTURE?r.structure:InView==FC_FILLS?r.filled:InView==FC_RAW?d:r.valid;
@@ -419,7 +370,7 @@ double F0a[],F0b[],F1a[],F1b[],F2a[],F2b[],FBa[],FBb[],FSa[],FSb[];
 double HullB[],HullInk[],LineH[],LineL[],LineEMA[],BandBL[],BandBH[],BandSL[],BandSH[];
 double BuyArrow[],SellArrow[],ConflictMark[],RawCode[],StructureCode[],ValidCode[],FillCode[],ConflictCode[];
 double GuardCode[],TipCode[],BackCode[],BiasCode[],EventCode[],PullCode[];
-double WatchLevel[],LimitLevel[],MidCode[],WatchCode[],ArmCode[],ConfirmCode[],PlaceCode[],TouchCode[],RetFillCode[],CancelCode[],PlacedMark[],FillPrice[];
+double Off33[],Off34[],MidCode[],Off36[],Off37[],Off38[],Off39[],Off40[],Off41[],Off42[],Off43[],FillPrice[];
 double WorkH[],WorkL[],WorkB[];
 FCState engine;
 struct PlanStamp {int bar;double ep,sl,tp;};
@@ -462,16 +413,15 @@ int OnInit(){
         Bind(15,BandBL)&&Bind(16,BandBH)&&Bind(17,BandSL)&&Bind(18,BandSH)&&Bind(19,BuyArrow)&&Bind(20,SellArrow)&&Bind(21,ConflictMark)&&
         Bind(22,RawCode)&&Bind(23,StructureCode)&&Bind(24,ValidCode)&&Bind(25,FillCode)&&Bind(26,ConflictCode)&&
         Bind(27,GuardCode)&&Bind(28,TipCode)&&Bind(29,BackCode)&&Bind(30,BiasCode)&&Bind(31,EventCode)&&Bind(32,PullCode)&&
-        Bind(33,WatchLevel)&&Bind(34,LimitLevel)&&Bind(35,MidCode)&&Bind(36,WatchCode)&&Bind(37,ArmCode)&&Bind(38,ConfirmCode)&&Bind(39,PlaceCode)&&Bind(40,TouchCode)&&Bind(41,RetFillCode)&&Bind(42,CancelCode)&&
-        Bind(43,PlacedMark)&&Bind(44,FillPrice)&&Bind(45,WorkH,INDICATOR_CALCULATIONS)&&Bind(46,WorkL,INDICATOR_CALCULATIONS)&&Bind(47,WorkB,INDICATOR_CALCULATIONS)))return INIT_FAILED;
-   for(int j=0;j<39;j++){PlotIndexSetDouble(j,PLOT_EMPTY_VALUE,j<5?0.0:EMPTY_VALUE);PlotIndexSetInteger(j,PLOT_SHOW_DATA,j>=5);}
-   PlotIndexSetInteger(27,PLOT_ARROW,159);PlotIndexSetInteger(37,PLOT_ARROW,117);
+        Bind(33,Off33)&&Bind(34,Off34)&&Bind(35,MidCode)&&Bind(36,Off36)&&Bind(37,Off37)&&Bind(38,Off38)&&Bind(39,Off39)&&Bind(40,Off40)&&Bind(41,Off41)&&Bind(42,Off42)&&Bind(43,Off43)&&Bind(44,FillPrice)&&
+        Bind(45,WorkH,INDICATOR_CALCULATIONS)&&Bind(46,WorkL,INDICATOR_CALCULATIONS)&&Bind(47,WorkB,INDICATOR_CALCULATIONS)))return INIT_FAILED;
+   for(int j=0;j<39;j++){PlotIndexSetDouble(j,PLOT_EMPTY_VALUE,j<5?0.0:EMPTY_VALUE);PlotIndexSetInteger(j,PLOT_SHOW_DATA,(j>=5 && j<=26)||j==29||j==38);}
    PlotIndexSetInteger(13,PLOT_ARROW,233);PlotIndexSetInteger(13,PLOT_ARROW_SHIFT,8);
    PlotIndexSetInteger(14,PLOT_ARROW,234);PlotIndexSetInteger(14,PLOT_ARROW_SHIFT,-8);
    PlotIndexSetInteger(15,PLOT_ARROW,251);PlotIndexSetInteger(15,PLOT_ARROW_SHIFT,-12);
    gridTick=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE);if(gridTick<=0)gridTick=_Point;
    if(gridTick<=0 || PeriodSeconds(_Period)<=0)return INIT_FAILED;
-   IndicatorSetInteger(INDICATOR_DIGITS,_Digits);IndicatorSetString(INDICATOR_SHORTNAME,"FC Hull Range Retest v3 ("+IntegerToString(InHull)+")");
+   IndicatorSetInteger(INDICATOR_DIGITS,_Digits);IndicatorSetString(INDICATOR_SHORTNAME,"FC Hull BOS Half-Range v4 ("+IntegerToString(InHull)+")");
    ArrayResize(planRing,InKeepPlans);ArrayResize(textRing,InTextCount);
    string key="FCH_"+IntegerToString((long)GetTickCount64())+"_";int serial=0;
    do{prefix=key+IntegerToString(serial)+"_";serial++;}while(ObjectFind(0,prefix+"owner")>=0);
@@ -499,10 +449,9 @@ void PaintBar(const int i,const double h,const double l,const FCBar &r,const boo
    BuyArrow[i]=InMarks&&r.display==1?l:EMPTY_VALUE;SellArrow[i]=InMarks&&r.display==-1?h:EMPTY_VALUE;
    ConflictMark[i]=InMarks&&InView==FC_RAW&&r.conflict!=0?h:EMPTY_VALUE;
    RawCode[i]=r.raw;StructureCode[i]=r.structure;ValidCode[i]=r.valid;FillCode[i]=r.filled;ConflictCode[i]=r.conflict;
-   WatchLevel[i]=InStages&&engine.watch!=0?engine.watchGuard:EMPTY_VALUE;LimitLevel[i]=InStages&&engine.retOK?engine.retPx:EMPTY_VALUE;
-   PlacedMark[i]=InStages&&r.placed!=0?engine.retPx:EMPTY_VALUE;FillPrice[i]=r.fillPx;
-   MidCode[i]=r.mid;WatchCode[i]=engine.watch;ArmCode[i]=r.armed;ConfirmCode[i]=r.confirmed;PlaceCode[i]=r.placed;
-   TouchCode[i]=r.touch;RetFillCode[i]=r.retFill;CancelCode[i]=r.cancel;
+   // Public v3 indices stay inert. There is no watch, staging state, order or retest fill.
+   Off33[i]=EMPTY_VALUE;Off34[i]=EMPTY_VALUE;MidCode[i]=r.mid;
+   Off36[i]=0;Off37[i]=0;Off38[i]=0;Off39[i]=0;Off40[i]=0;Off41[i]=0;Off42[i]=0;Off43[i]=EMPTY_VALUE;FillPrice[i]=r.fillPx;
    GuardCode[i]=engine.origin;TipCode[i]=engine.extreme;BackCode[i]=engine.reaction;BiasCode[i]=engine.bias;
    EventCode[i]=closed&&engine.breakNow?engine.bias*engine.kind:0;PullCode[i]=engine.seenPullback?1:0;
 }
@@ -527,7 +476,7 @@ void PlanLine(const string n,const string tag,const datetime a,const datetime b,
 }
 void DrawRecent(const datetime &tm[],const int size){
    for(int j=0;j<textCount;j++)TextAt(prefix+"m"+IntegerToString(j),textRing[j].at,textRing[j].px,
-      textRing[j].dir>0?"BUY":"SELL",textRing[j].dir>0?clrMediumSeaGreen:clrTomato,textRing[j].dir>0?ANCHOR_UPPER:ANCHOR_LOWER);
+      InView==FC_RAW?(textRing[j].dir>0?"RAW+":"RAW-"):(textRing[j].dir>0?"BUY":"SELL"),textRing[j].dir>0?clrMediumSeaGreen:clrTomato,textRing[j].dir>0?ANCHOR_UPPER:ANCHOR_LOWER);
    for(int j=0;j<planCount;j++){
       int k=planRing[j].bar,idx=k+InPlanBars;datetime a=tm[k],b=tm[(int)MathMin(idx,size-1)];
       // Future projection only; replace projected endpoints with actual bar times as they arrive.
@@ -543,9 +492,7 @@ string DecText(const int n){
       case 4:return "Rejected: structure / price";case 5:return "Rejected: direction / EMA";case 6:return "Rejected: no legal stop";
       case 7:return "Rejected: position busy";case 8:return "Rejected: no chart capital";case 9:return "BUY: bullish discount";
       case 11:return "SELL: bearish premium";
-      case 13:return "Rejected: source conflict";case 14:return "Rejected: alternation";case 15:return "BUY limit ready; wait retest";case 16:return "SELL limit ready; wait retest";
-      case 17:return "Watch BUY; no order";case 18:return "Watch SELL; no order";case 19:return "BUY: retest filled";
-      case 20:return "SELL: retest filled";case 21:return "CHoCH: chart plan vetoed";case 22:return "Watch / retest cancelled";}return "Waiting for a cross";
+      case 13:return "Rejected: source conflict";case 14:return "Rejected: alternation";case 15:return "CHoCH: context only";}return "Waiting for a cross";
 }
 string ViewText(){return InView==FC_RAW?"Raw crosses":InView==FC_FILLS?"Simulated fills":InView==FC_STRUCTURE?"Structure only":"Valid suggestions";}
 string SourceText(){return InSource==FC_EITHER?"Either":InSource==FC_DIRECTIONAL?"Directional":InSource==FC_HIGH?"High":"Low";}
@@ -560,8 +507,8 @@ void PanelLabel(const string n,const int x,const int y,const string text,const c
 }
 void DrawPanel(){
    if(!InTable||StringLen(prefix)==0)return;
-   string left[20]={"FC RANGE 3 / CHART SIM","Trades : W / L / BE","Win rate","Net / average","PF / max drawdown","Avg win / loss","Position","SL / TP","EMA / target R","Pip size","Source / length","Raw BUY / SELL","Conflict / repeat skips","Structure","Qualified / valid closes","Fills / open vetoes","Last decision","View","Protected HL / LH","Reversal stage"};
-   string v[20];int done=engine.wins+engine.losses+engine.flats;
+   string left[19]={"FC RANGE 4 / CHART SIM","Trades : W / L / BE","Win rate","Net / average","PF / max drawdown","Avg win / loss","Position","SL / TP","EMA / target R","Pip size","Source / length","Raw BUY / SELL","Conflict / repeat skips","Structure","Qualified / valid closes","Fills / open vetoes","Last decision","View","Protected HL / LH"};
+   string v[19];int done=engine.wins+engine.losses+engine.flats;
    v[0]=_Symbol+"  "+EnumToString(_Period);v[1]=StringFormat("%d : %d / %d / %d",done,engine.wins,engine.losses,engine.flats);
    v[2]=done>0?DoubleToString(100.0*engine.wins/done,1)+"%":"-";
    v[3]=DoubleToString(engine.totalNet,2)+" / "+(done>0?DoubleToString(engine.totalNet/done,2):"-");
@@ -573,13 +520,12 @@ void DrawPanel(){
    v[9]=DoubleToString(InPipSize,8);v[10]=SourceText()+" / "+IntegerToString(InHull);
    v[11]=StringFormat("%d / %d",engine.rawBuys,engine.rawSells);v[12]=StringFormat("%d / %d",engine.conflicts,engine.repeats);
    v[13]=PhaseText();v[14]=StringFormat("%d / %d",engine.structN,engine.suggestN);v[15]=StringFormat("%d / %d",engine.fillN,engine.vetoN);v[16]=DecText(engine.decision);v[17]=ViewText();v[18]=engine.origin==EMPTY_VALUE?"-":DoubleToString(engine.origin,_Digits);
-   v[19]=engine.retOK?(engine.ret==1?"BUY limit ":"SELL limit ")+DoubleToString(engine.retPx,_Digits):engine.watch?(engine.watch==1?"Watch BUY > ":"Watch SELL < ")+DoubleToString(engine.watchGuard,_Digits):"-";
-   int w=356,h=20*16+14,ww=(int)ChartGetInteger(0,CHART_WIDTH_IN_PIXELS,0),hh=(int)ChartGetInteger(0,CHART_HEIGHT_IN_PIXELS,0);
+   int w=356,h=19*16+14,ww=(int)ChartGetInteger(0,CHART_WIDTH_IN_PIXELS,0),hh=(int)ChartGetInteger(0,CHART_HEIGHT_IN_PIXELS,0);
    int x=(InCorner==CORNER_RIGHT_LOWER||InCorner==CORNER_RIGHT_UPPER)?(int)MathMax(2,ww-w-8):8;
    int y=(InCorner==CORNER_RIGHT_LOWER||InCorner==CORNER_LEFT_LOWER)?(int)MathMax(2,hh-h-8):18;
    string box=prefix+"panel";if(ObjectFind(0,box)<0){ObjectCreate(0,box,OBJ_RECTANGLE_LABEL,0,0,0);QuietObject(box);ObjectSetInteger(0,box,OBJPROP_CORNER,CORNER_LEFT_UPPER);ObjectSetInteger(0,box,OBJPROP_BGCOLOR,C'22,40,43');ObjectSetInteger(0,box,OBJPROP_BORDER_TYPE,BORDER_FLAT);ObjectSetInteger(0,box,OBJPROP_COLOR,clrSlateGray);}
    ObjectSetInteger(0,box,OBJPROP_XDISTANCE,x);ObjectSetInteger(0,box,OBJPROP_YDISTANCE,y);ObjectSetInteger(0,box,OBJPROP_XSIZE,w);ObjectSetInteger(0,box,OBJPROP_YSIZE,h);
-   for(int j=0;j<20;j++){int yy=y+5+j*16;string id=IntegerToString(j);PanelLabel(prefix+"k"+id,x+8,yy,left[j],j==0?clrPaleGreen:clrSilver,8);PanelLabel(prefix+"v"+id,x+152,yy,v[j],clrWhite,8);}
+   for(int j=0;j<19;j++){int yy=y+5+j*16;string id=IntegerToString(j);PanelLabel(prefix+"k"+id,x+8,yy,left[j],j==0?clrPaleGreen:clrSilver,8);PanelLabel(prefix+"v"+id,x+152,yy,v[j],clrWhite,8);}
 }
 void OnChartEvent(const int id,const long &lparam,const double &dparam,const string &sparam){
    if(id==CHARTEVENT_CHART_CHANGE&&StringLen(prefix)>0){FillColours();DrawPanel();}
@@ -603,9 +549,8 @@ int OnCalculate(const int rates_total,const int prev_calculated,const datetime &
       PaintBar(i,high[i],low[i],r);Remember(i,time[i],high[i],low[i],r);
       // Never replay past alerts on attach, reload, backfill, or a missing adjacent bar.
       if((!reset||sliding) && i==forming-1 && time[i]==previousForm && end==time[forming] && time[i]>lastAlert &&
-         ((r.display==1&&InBuyAlerts)||(r.display==-1&&InSellAlerts)||(InLimitAlerts&&r.placed!=0))){
-         if(InLimitAlerts&&r.placed!=0)Alert("FC Hull ",(r.placed==1?"BUY":"SELL")," retest limit ready (not a fill) | ",_Symbol," | ",DoubleToString(engine.retPx,_Digits));
-         if((r.display==1&&InBuyAlerts)||(r.display==-1&&InSellAlerts))Alert("FC Hull ",(r.display==1?"BUY":"SELL")," | ",_Symbol," | ",EnumToString(_Period)," | ",ViewText()," | close ",DoubleToString(close[i],_Digits)," | ",TimeToString(end,TIME_DATE|TIME_SECONDS));lastAlert=time[i];}
+         ((r.display==1&&InBuyAlerts)||(r.display==-1&&InSellAlerts))){
+         Alert(InView==FC_RAW?"FC Hull RAW (not an entry) ":"FC Hull ",(r.display==1?"BUY":"SELL")," | ",_Symbol," | ",EnumToString(_Period)," | ",ViewText()," | close ",DoubleToString(close[i],_Digits)," | ",TimeToString(end,TIME_DATE|TIME_SECONDS));lastAlert=time[i];}
       committed=i+1;lastClosed=time[i];
    }
    // Only preview moving lines on the live bar. No mutation of signal/structure/account state.

@@ -401,7 +401,7 @@ def study(minutes, cfg, h, p, frames, lo, hi, unit, contract, conversion, rates,
         "conversion": conversion,
         "start_utc": iso_ms(lo * 1000),
         "end_exclusive_utc": iso_ms(hi * 1000),
-        "note": "Closed-label benchmark only. Does not simulate intrabar continuation triggers. USD, spread only. Actual crossing quote for SL; TP at limit. No peak-equity halt or per-minute send cap. Ladder checks prior barriers first on each ordered quote. Identical initial fills; no amendment latency, dealer rejection, commission, broker margin/volume checks or guarantee of atomic fills.",
+        "note": "Closed Hull crosses in confirmed BOS half-ranges only; no CHoCH entry, retest order or intrabar signal. USD, spread only. Actual crossing quote for SL; TP at limit. No peak-equity halt or per-minute send cap. Ladder checks prior barriers first on each ordered quote. Identical initial fills; no amendment latency, dealer rejection, commission, broker margin/volume checks or guarantee of atomic fills.",
     }
     with (out / "labels.csv").open("w", newline="") as f:
         w = csv.DictWriter(

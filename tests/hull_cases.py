@@ -6,19 +6,21 @@ from bot.hull.structure import Pivot, Structure
 from bot.zones.engine import Bar
 
 
-def known_range(side, price, stamp):
+def known_range(side, price, stamp, *, scale=1):
     """A confirmed range around `price` for desk tests not about pivot discovery."""
 
     def pivot(offset, age):
-        return Pivot(price + side * offset, stamp - (age + 2) * 60, stamp - age * 60)
+        return Pivot(
+            price + side * scale * offset, stamp - (age + 2) * 60, stamp - age * 60
+        )
 
     return Structure(
         side,
-        "choch",
-        pivot(-0.5, 12),
+        "bos",
+        pivot(1, 12),
         stamp - 9 * 60,
         pivot(-3, 11),
-        pivot(3, 5),
+        pivot(6, 5),
         pivot(-1, 2),
         pullback_seen_s=stamp - 2 * 60,
     )

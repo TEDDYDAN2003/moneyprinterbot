@@ -7,7 +7,7 @@ import json
 import subprocess
 import time
 from contextlib import ExitStack
-from dataclasses import asdict, replace
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -19,14 +19,14 @@ from .config import (
     COUNTS,
     FRAMES,
     LADDER,
-    LIVE_CONTINUATION,
+    CLOSE_ONLY,
+    RETIRED_LIVE_TIMING,
     RETIRED_LIMITS,
     TARGET_POLICY,
 )
 from .desk import Desk, identity_check, resolve
-from .entry_clock import LIVE_QUOTE_POLICY, QUOTE_POLICY, WAITING, poll_delay
+from .entry_clock import QUOTE_POLICY, WAITING, poll_delay
 from .ladder import cash_levels
-from .live import LiveSampler
 from .orders import Block, Grid, choose, select_labels, spread_goal
 from .signal import Hull, LiveTick
 from .structure import ENTRY_POLICY
@@ -45,8 +45,7 @@ def describe(r):
 
 
 class Stream:
-    def __init__(self, tf, cfg, pip, *, live=False):
-        self.live = live
+    def __init__(self, tf, cfg, pip):
         self.tf, self.cfg, self.pip = tf, cfg, pip
         self.h = Hull(tf, cfg, pip)
         self.last_label = None
@@ -59,7 +58,7 @@ class Stream:
         )
 
     def refresh(self, mt, name, now):
-        # Closed (authoritative) clock. Index zero is read separately and NEVER committed.
+        # Only closed candles. This scanner never requests a forming Hull candle.
         period = getattr(mt, f"TIMEFRAME_M{self.tf}")
         cold = self.h.prev is None
         reload = cold or now - self.h.prev.t > self.tf * 60 * 4
@@ -83,14 +82,9 @@ class Stream:
                 continue
             gap |= self.h.prev is not None and t != self.h.prev.t + self.tf * 60
             updates += 1
-            prior_side = self.h.structure.view.continuation_side
             decision = self.h.update(
                 Bar(t, *[float(r[k]) for k in ("open", "high", "low", "close")])
             )
-            if self.live and prior_side and decision.label == prior_side:
-                # It belonged to the live path, even if polling missed it, it was
-                # vetoed, or the scanner joined mid-bar. Still a real CLOSED exit label.
-                decision = replace(decision, confirmation_only=True)
             if decision.label:
                 self.last_label = decision
         # Reconnect/initial history may contain old labels. Never enter from warm-up.
@@ -171,6 +165,8 @@ def source_build():
 
 def dispatch(d, name, labels, *, data_ok, history_ok, rewarmed):
     """Handle fresh labels once; a pending tick-read never replays an opposite exit."""
+    # A projection is neither an entry nor an exit vote and cannot supersede a close.
+    labels = [r for r in labels if r.trigger is None]
     window = d.waiting.get(name)
     unavailable = not (data_ok and history_ok)
     if window is not None:
@@ -198,7 +194,7 @@ def dispatch(d, name, labels, *, data_ok, history_ok, rewarmed):
             window = None
     if not labels and window is None:
         return
-    original, _ = choose(r for r in labels if not r.trigger)
+    original, _ = choose(labels)
     _, entry, why = select_labels(labels)
     raw_tf = original.tf if original else None
     if unavailable:
@@ -227,9 +223,7 @@ def dispatch(d, name, labels, *, data_ok, history_ok, rewarmed):
                     d.cancel_wait(name, why)  # conflicting qualified directions
                     return
                 window.observed_lanes.update(r.tf for r in same)
-                # Do not convert a reserved closed-label wait into a live entry.
-                if not pick.trigger:
-                    window.reading = pick
+                window.reading = pick
             why = d.resume_first_quote(name)
             if why != WAITING:
                 d.emit(
@@ -251,7 +245,6 @@ def dispatch(d, name, labels, *, data_ok, history_ok, rewarmed):
                 observed_lanes=(
                     r.tf for r in labels if r.signal_msc == entry.signal_msc
                 ),
-                live_peers=(r for r in labels if r.trigger and r.entry_side),
             )
     if why != WAITING:
         context = entry or max(labels, key=lambda r: r.signal_msc)
@@ -319,6 +312,8 @@ def run(
         or (iterations is not None and iterations < 1)
     ):
         raise ValueError("Invalid timeframes/poll/iterations")
+    if h.entry_timing != CLOSE_ONLY:
+        raise DemoSafetyError("BOS half-range entries require confirmed_close_only")
     mode = cfg["run"]["mode"]
     if armed and (mode != "demo" or preflight):
         raise DemoSafetyError(
@@ -343,7 +338,7 @@ def run(
         key = hashlib.sha256(repr(identity).encode()).hexdigest()[:16]
         syms = resolve(mt, profiles)
         limits = h.limits
-        live = h.entry_timing == LIVE_CONTINUATION
+        requested = cfg["hull"].get("entry_timing", CLOSE_ONLY)
         specs = {}
         for name, (code, p) in syms.items():
             i = mt.symbol_info(name)
@@ -381,7 +376,10 @@ def run(
             "signal_policy": h.indicator.signal_policy,
             "batch_entry_policy": BATCH_ENTRY_POLICY,
             "entry_timing": h.entry_timing,
-            "entry_quote_policy": LIVE_QUOTE_POLICY if live else QUOTE_POLICY,
+            "entry_quote_policy": QUOTE_POLICY,
+            "requested_entry_timing": requested,
+            "retired_clock_migrated": requested == RETIRED_LIVE_TIMING,
+            "choch_entry": "none",
             **source_build(),
             "specs": specs,
             "limits": limits.model_dump(),
@@ -396,9 +394,9 @@ def run(
             summary["pending_orders"] = len(os)
             summary["history_check"] = {}
             issues = []
-            if not live:
+            if summary["retired_clock_migrated"]:
                 issues.append(
-                    "Confirmed-close-only timing selected: no intrabar continuation entries"
+                    "Legacy live_continuation_v1 was migrated to confirmed_close_only; update the local timing key at the next safe maintenance window."
                 )
             legacy = [k for k in RETIRED_LIMITS if k in cfg["hull"].get("limits", {})]
             if legacy:
@@ -429,12 +427,8 @@ def run(
                         issues.append(
                             f"{name} {side}: target preview unavailable: {preview['status']}"
                         )
-                if live and not specs[name]["bid_chart_verified"]:
-                    issues.append(
-                        f"{name}: live continuation disabled; cannot verify native BID chart"
-                    )
                 for tf in frames:
-                    lane = Stream(tf, h.indicator, p.pip_size, live=live)
+                    lane = Stream(tf, h.indicator, p.pip_size)
                     _, status = lane.refresh(mt, name, time.time())
                     v = lane.last_label
                     checks[f"M{tf}"] = {
@@ -488,18 +482,10 @@ def run(
             d = Desk(mt, cfg, h, syms, identity, state, path, emit, armed)
             locks.callback(d.cancel_all_waits)
             streams = {
-                (name, tf): Stream(tf, h.indicator, p.pip_size, live=live)
+                (name, tf): Stream(tf, h.indicator, p.pip_size)
                 for name, (_, p) in syms.items()
                 for tf in frames
             }
-            samplers = {
-                name: LiveSampler({tf: streams[name, tf] for tf in frames}, emit)
-                for name in syms
-                if live and specs[name]["bid_chart_verified"]
-            }
-            d.live_check = lambda name, r, q: samplers[name].still_crossed(
-                mt, name, r, q
-            )
             num = 0
             sync = 0.0
             history_ok = not armed
@@ -523,6 +509,19 @@ def run(
                         if why == "history_unavailable":
                             data_ok = False
                             emit("data_unavailable", symbol=name, tf=tf)
+                        if reading and reading.structure.break_now:
+                            v = reading.structure
+                            emit(
+                                "structure_break",
+                                symbol=name,
+                                tf=tf,
+                                close_s=reading.close_s,
+                                kind=v.event,
+                                bias=v.bias,
+                                broken_level=v.broken.price,
+                                protected_level=v.origin.price,
+                                entry_side=reading.entry_side,
+                            )
                         if reading and reading.source_conflict:
                             emit(
                                 "source_cross_conflict",
@@ -539,26 +538,6 @@ def run(
                                 ),
                                 **describe(reading),
                             )
-                    if name in samplers:
-                        sampler = samplers[name]
-                        if not data_ok or not history_ok:
-                            sampler.disconnected = True
-                        elif rewarmed:
-                            sampler.reset(time.time())
-                        else:
-                            for r in sampler.sample(
-                                mt, name, time.time, limits.max_quote_age_s
-                            ):
-                                emit(
-                                    "live_hull_cross",
-                                    symbol=name,
-                                    detected_lag_ms=round(
-                                        (time.time() - r.signal_s) * 1000, 3
-                                    ),
-                                    **describe(r),
-                                )
-                                if r.entry_side:
-                                    ds.append(r)
                     dispatch(
                         d,
                         name,
@@ -574,11 +553,7 @@ def run(
                             frames,
                             poll,
                             limits.max_entry_age_s,
-                            bool(
-                                d.waiting
-                                or (armed and d.ladders.book)
-                                or any(s.watching() for s in samplers.values())
-                            ),
+                            bool(d.waiting or (armed and d.ladders.book)),
                         )
                     )
     finally:

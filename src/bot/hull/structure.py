@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from math import isfinite
+from math import floor, isfinite
 from typing import Literal
 
 from bot.zones.engine import Bar
 
-ENTRY_POLICY = "protected_swing_v2"
+ENTRY_POLICY = "bos_half_range_close_v4"
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,17 +27,17 @@ class Band:
     high_open: bool = False
 
     def contains(self, px: float) -> bool:
-        # One finite edge = one-sided permission. Two missing edges are NEVER permission.
+        # Fail closed on a missing, nonfinite or inverted edge: v4 has no one-sided band.
+        lo, hi = self.low, self.high
         return (
-            isfinite(px)
-            and (self.low is not None or self.high is not None)
-            and (
-                self.low is None or (px > self.low if self.low_open else px >= self.low)
-            )
-            and (
-                self.high is None
-                or (px < self.high if self.high_open else px <= self.high)
-            )
+            lo is not None
+            and hi is not None
+            and isfinite(lo)
+            and isfinite(hi)
+            and lo < hi
+            and isfinite(px)
+            and (px > lo if self.low_open else px >= lo)
+            and (px < hi if self.high_open else px <= hi)
         )
 
 
@@ -58,70 +58,54 @@ class Structure:
     impulse_tip: Pivot | None = None  # observed wick; not a claim of pivot confirmation
 
     @property
-    def continuation_side(self):
-        """Permission already known BEFORE a forming bar (no break-close exception)."""
-        return (
-            self.bias
-            if (
-                self.event in ("choch", "bos")
-                and self.origin is not None
-                and self.pullback_seen_s is not None
-            )
-            else 0
-        )
+    def midpoint(self) -> float | None:
+        """Only a prior continuation BOS and its subsequently confirmed HH/LL grant a range."""
+        if (
+            self.event != "bos"
+            or self.break_now
+            or self.bias not in (-1, 1)
+            or self.broken is None
+            or self.origin is None
+            or self.extreme is None
+        ):
+            return None
+        guard, tip = self.origin.price, self.extreme.price
+        if (
+            not all(isfinite(x) for x in (guard, tip, self.broken.price))
+            or self.bias * (tip - guard) <= 0
+            or self.bias * (tip - self.broken.price) <= 0
+        ):
+            return None
+        # Same 9-place price precision as the two chart studies. No rounding to a whole tick.
+        return floor((guard + tip) * 0.5 * 1e9 + 0.5) / 1e9
 
     @property
     def phase(self) -> str:
         if self.event in ("none", "seed"):
             return "unconfirmed_context"
-        if self.break_now:
-            return self.event + "_close"
-        if self.pullback_seen_s is not None:
-            return "bull_pullback" if self.bias == 1 else "bear_pullback"
-        return "wait_pullback"
+        if self.event == "choch":
+            return "choch_context_only" if self.break_now else "wait_continuation_bos"
+        if self.midpoint is None:
+            return "wait_confirmed_bos_range"
+        return "bull_discount" if self.bias == 1 else "bear_premium"
 
     def band(self, side: int) -> Band | None:
-        if side not in (-1, 1) or self.event not in ("choch", "bos") or not self.origin:
+        mid = self.midpoint
+        if mid is None or side != self.bias or self.origin is None:
             return None
-        if side == self.bias:
-            if self.break_now and self.event == "choch":
-                if self.broken is None:
-                    return None
-                # The breakout must still hold at the executable quote.
-                edge = self.broken.price
-                return (
-                    Band("bull_choch_buy", edge, None, low_open=True)
-                    if side == 1
-                    else Band("bear_choch_sell", None, edge, high_open=True)
-                )
-            if self.pullback_seen_s is None and not (
-                self.break_now and self.event == "bos"
-            ):
-                return None
-            edge = self.origin.price
-            return (
-                Band("bull_protected_pullback_buy", edge, None, low_open=True)
-                if side == 1
-                else Band("bear_protected_pullback_sell", None, edge, high_open=True)
-            )
-        # Separate, unchanged countertrend exception; never a blanket reversal permission.
-        if self.event != "bos" or self.extreme is None or self.broken is None:
-            return None
-        level, tip = self.broken.price, self.extreme.price
+        guard = self.origin.price
         return (
-            Band("sell_above_bull_bos", level, tip, low_open=True)
-            if side == -1
-            else Band("buy_below_bear_bos", tip, level, high_open=True)
+            Band("bull_bos_discount_buy", guard, mid, low_open=True)
+            if side == 1
+            else Band("bear_bos_premium_sell", mid, guard, high_open=True)
         )
 
     def veto(self, side: int, px: float) -> str:
         band = self.band(side)
         if band is not None:
             return "" if band.contains(px) else "outside_" + band.name
-        if self.event == "choch" and side == -self.bias:
-            return "structure_needs_continuation_bos"
         if self.event == "bos" and side == -self.bias:
-            return "structure_wait_confirmed_extreme"
+            return "countertrend_not_an_entry"
         return "structure_" + self.phase
 
 

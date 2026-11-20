@@ -48,7 +48,7 @@ def register(sub):
                 "--poll-seconds",
                 type=float,
                 default=1.0,
-                help="normal poll interval (0.25–10 s); poll faster for armed pullback watches and around native closes",
+                help="normal poll interval (0.25–10 s); poll faster around native closes, first quotes and active ladders",
             )
             p.add_argument("--max-iterations", type=int)
         if name == "hull-replay":

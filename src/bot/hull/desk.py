@@ -22,12 +22,11 @@ from .orders import (
     Grid,
     count_for,
     make_plan,
-    protected_prices,
     room,
     target,
     valid_cash,
 )
-from .signal import LiveTick, Reading
+from .signal import Reading
 
 
 def _finite_or_none(value):
@@ -102,9 +101,6 @@ class Desk:
         self.hours = Hours(cfg)
         self.ladders = TicketLadders(self)
         self.last_service = time.monotonic()
-        self.live_check = (
-            None  # installed by the native scanner; no live quote chasing without it
-        )
         self.waiting: dict[str, FirstQuoteWindow] = {}  # never restored after restart
 
     def persist(self):
@@ -151,32 +147,9 @@ class Desk:
             getattr(q, "bid", None),
             getattr(q, "ask", None),
             monotonic_expired=time.monotonic() > window.end_mono,
-            live_bar_end=d.close_s if d.trigger else None,
         )
         if check.reason != "ready":
             raise TimingBlock(check, stage)
-        if d.trigger and LiveTick.read(q) != d.trigger:
-            # A newer executable quote can only price a leg while the live Hull
-            # cross is STILL present. Never park or replay a vanished signal.
-            if self.live_check is None:
-                raise Block("live_trigger_quote_changed")
-            if not self.live_check(name, d, q):
-                raise Block("live_cross_no_longer_verified")
-            # Native snapshot verification takes time too; don't carry an expired
-            # tick past the live bar end, entry deadline, or quote-age check.
-            now = time.time()
-            check = check_quote(
-                d.signal_s,
-                now,
-                self.lim,
-                q.time_msc,
-                q.bid,
-                q.ask,
-                live_bar_end=d.close_s,
-                monotonic_expired=time.monotonic() > window.end_mono,
-            )
-            if check.reason != "ready":
-                raise TimingBlock(check, stage)
         if stage == "first_plan":
             self.emit(
                 "entry_quote_check",
@@ -230,7 +203,7 @@ class Desk:
 
         Snapshot checks cover any surviving leg. Check the bounded interval for a
         SELL exit of a long (or BUY exit of a short), including manual/SL/TP deals
-        whose magic may differ. A closed reversal may follow an opposite exit; a live continuation must have been flat.
+        whose magic may differ. An eligible closed trend cross may follow the independent exit of an opposite position.
         """
         if not 0 <= now - reading.signal_s <= self.lim.max_entry_age_s:
             return  # the normal quote-clock check rejects expired/future signals
@@ -247,22 +220,18 @@ class Desk:
                 deal.symbol != name
                 or deal.entry
                 not in (mt.DEAL_ENTRY_OUT, mt.DEAL_ENTRY_OUT_BY, mt.DEAL_ENTRY_INOUT)
-                or (deal.type != closing_type and not reading.trigger)
+                or deal.type != closing_type
             ):
                 continue
             ms = getattr(deal, "time_msc", None)
             if not isinstance(ms, int) or ms <= 0:
                 raise Block("entry_deal_history_unavailable")
             if ms >= reading.signal_msc:
-                if reading.trigger:
-                    raise Block(
-                        "same_side_batch_at_live_trigger"
-                        if deal.type == closing_type
-                        else "symbol_busy_at_live_trigger"
-                    )
                 raise Block("same_side_batch_at_signal_close")
 
     def prepare(self, name, d, window, stage, expected=None, remaining=None):
+        if not d.entry_side:
+            raise Block(d.entry_reason)
         mt = self.mt
         p = self.syms[name][1]
         a = self.account()
@@ -289,9 +258,6 @@ class Desk:
         grid = Grid.from_info(i)
         if not _side_is_allowed(mt, i, "BUY" if d.side == 1 else "SELL"):
             raise Block("broker_side_disabled")
-        if stage == "first_plan" and d.trigger:
-            # A later, narrower spread or recovered stop cannot rescue the first cross.
-            protected_prices(d, p, grid, d.trigger.bid, d.trigger.ask)
         q, _ = self._entry_quote(name, window, stage)
         plan = make_plan(d, p, grid, q.bid, q.ask, self.cash(name))
         margin = _finite_or_none(
@@ -567,10 +533,13 @@ class Desk:
             self.cancel_wait(name, "first_quote_wait_stopped")
 
     def _live_reserved(self, name, d):
+        # Honor pre-upgrade live reservations for duplicate prevention. Never write a new one.
         last = self.state.get("live_bars", {}).get(name, {}).get(str(d.tf))
         return last == [d.close_s, d.side]
 
-    def batch(self, name, d, *, raw_tf=None, observed_lanes=(), live_peers=()):
+    def batch(self, name, d, *, raw_tf=None, observed_lanes=()):
+        if d.trigger is not None:
+            return "closed_cross_required"
         seen = self.state.setdefault("consumed", {})
         if seen.get(name, 0) >= d.signal_s or self._live_reserved(name, d):
             return "already_consumed"
@@ -578,10 +547,6 @@ class Desk:
         # Reserve ONCE before touching broker order APIs. Only the original,
         # in-memory first-quote window may resume this reservation. A restart cannot.
         seen[name] = d.signal_s  # seconds, backwards-compatible with closed-only state
-        for peer in (d, *live_peers):
-            if peer.trigger and peer.signal_msc == d.signal_msc:
-                record = self.state.setdefault("live_bars", {}).setdefault(name, {})
-                record[str(peer.tf)] = [peer.close_s, peer.side]
         self.persist()
         if not d.entry_side:
             return d.entry_reason
@@ -654,11 +619,7 @@ class Desk:
                     "magic": self.h.magic,
                     "type_time": self.mt.ORDER_TIME_GTC,
                     "type_filling": _filling_mode(self.mt, i),
-                    "comment": (
-                        f"i{d.tf}_{d.trigger.ms}_{sent + 1}"
-                        if d.trigger
-                        else f"h{d.tf}_{d.close_s}_{sent + 1}"
-                    ),
+                    "comment": f"h{d.tf}_{d.close_s}_{sent + 1}",
                 }
                 chk = self.mt.order_check(req)
                 a = self.account()

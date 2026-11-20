@@ -1,4 +1,6 @@
-# FC Hull v3 · chart entry rules
+# Archived chart v3 · superseded
+
+**Historical behavior only; do not install v3 for the current rules.** [V4 scanner and charts](HULL_STRUCTURE.md) remove the watch, reversal limit, and retest entry entirely. The remainder describes the former chart-only release.
 
 **A watch is not an entry. A CHoCH close is not a fill.** The TradingView and MT5 custom indicators use the same closed-candle rules on the chart timeframe. Neither sends orders. The Python demo scanner and its replay **still use `protected_swing_v2`**, not these chart rules.
 

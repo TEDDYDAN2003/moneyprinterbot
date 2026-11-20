@@ -1,0 +1,72 @@
+FC HULL V4 | OFFLINE RELEASE CHECKS
+Policy: bos_half_range_close_v4 / confirmed_close_only
+
+All tapes in these checks are synthetic. Repeated scenarios overlap; bar counts
+are test comparisons, NOT the number of trades or a performance backtest.
+There was no broker connection or deployment. Not a native TradingView or
+MetaEditor compile. The optional MT5 buffer checker is for local compilation.
+
+Source digests (SHA-256; bot sources live in the full checkout):
+b8107242046efb2e60a882780c4d471b4900cf601ae477ffa4e64b81aac75334  indicators/FC-Hull-Either-16-Structure.pine
+ab4da82e38ee36163634bef7da9d24790aa9e07edd825474d1d5da74edb16b40  MT5/FC-Hull-Either-16-Structure.mq5
+f2444d05d3c1e65ac670e168895cf23926481b44ab00fd4778ebc49191b6506a  src/bot/hull/structure.py
+2e37165a2d677bcfa2c626e55340c9e8386beca6f8c688f3e86630120aedd7b7  src/bot/hull/terminal.py
+e4aa76e5dae339fff5b105e08ad38873f5bce24bd2470b11422bc2a47d562136  src/bot/hull/desk.py
+3f9974c152522ea9a9a8c35fe0cbe9462d3ad661a5714e1f2eef91cb19191556  src/bot/hull/signal.py
+
+=== PineTS 0.13.1, actual MQ5 calculation in C++17 host, independent rules and Python ===
+bos_half_range_close_v4 29 PineTS scenarios 28936 bar decisions 49 fields
+PASS 36 mirrored BOS half-range / CHoCH context-only / later retest rejection / exit paths
+PASS defaults 2494 closed bars
+PASS busy 2494 closed bars
+PASS ema 2494 closed bars
+PASS pivot 2494 closed bars
+PASS edge1-118.1 27 closed bars
+PASS edge1-118.25 27 closed bars
+PASS edge1-118.26 27 closed bars
+PASS next1-equal-open 27 closed bars
+PASS next1-gap 27 closed bars
+PASS next1-flip-range 27 closed bars
+PASS edge-1-118.1 27 closed bars
+PASS edge-1-118.25 27 closed bars
+PASS edge-1-118.26 27 closed bars
+PASS next-1-equal-open 27 closed bars
+PASS next-1-gap 27 closed bars
+PASS next-1-flip-range 27 closed bars
+PASS protected-sell 120 closed bars
+PASS protected-sell-choch-open-touch 48 closed bars
+PASS protected-buy 120 closed bars
+PASS protected-buy-choch-open-touch 48 closed bars
+PASS alt-0 2494 closed bars
+PASS alt-1 2494 closed bars
+PASS alt-2 2494 closed bars
+PASS alt-3 2494 closed bars
+PASS Structure-qualified crosses 2494 closed bars
+PASS Simulated fills only 2494 closed bars
+PASS All Hull crosses (debug) 2494 closed bars
+PASS no-reversal-buy 421 closed bars
+PASS no-reversal-sell 421 closed bars
+PASS: actual calculation source, incremental/full replay, no forming-bar marks, no stage popups, no attach/backfill alert. C++ compatibility shim; not a native MT5 compile.
+PASS v4 semantic invariants {'bars': 28936, 'trend-1': 95, 'choch_context_only': 537, 'trend1': 130}
+PASS: Python / Pine raw and structure decisions, 17 exact fields on 28,936 closed bars; 18,960 comparable stop/EMA/entry decisions.
+
+=== Scanner, execution and repository regressions (mock terminal) ===
+........................................................................ [ 15%]
+........................................................................ [ 30%]
+........................................................................ [ 45%]
+........................................................................ [ 61%]
+........................................................................ [ 76%]
+........................................................................ [ 91%]
+........................................                                 [100%]
+472 passed in 19.47s
+
+=== Journal regressions (local synthetic examples only) ===
+----------------------------------------------------------------------
+Ran 34 tests in 0.663s
+
+OK
+
+Tracked config validated: run.mode=paper and entry_timing=confirmed_close_only.
+
+Read v4-cases.csv for two mirrored veto sequences and two positive trend examples.
+Test procedures: README.md in this folder.

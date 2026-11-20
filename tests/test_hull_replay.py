@@ -132,7 +132,9 @@ def test_replay_original_opposite_exit_separate_from_structure_entry(
     )
     a.step(minute(T), [first])
     assert a.pos is not None and a.pos[1].side == bias
-    next_r = r if valid else replace(r, close=r.structure.broken.price)
+    # A different lane may already have a BOS-proven range in the new side.
+    # The original countertrend lane is never allowed to replace an exit.
+    next_r = replace(r, structure=known_range(-bias, x, T + 60)) if valid else r
     a.step(minute(T + 60), [next_r])
     assert sum(a.labels.values()) == 2 and sum(a.qualified.values()) == 1 + int(valid)
     if exit_opposite:
@@ -147,7 +149,7 @@ def test_replay_original_opposite_exit_separate_from_structure_entry(
 def test_replay_uses_first_actual_tick_and_same_inclusive_deadline(lag_ms, allowed):
     cfg = load_yaml(Path(__file__).resolve().parents[1] / "config.yaml")
     h = HullConfig.model_validate(cfg["hull"])
-    r = sequence(1, closes=PATH[:21], end_s=T)[-1]
+    r = sequence(1, closes=PATH[:18] + [118.35], end_s=T)[-1]
     x = r.close
     ms = T * 1000 + lag_ms
     a = Account(

@@ -1,4 +1,4 @@
-"""Remote one-tick drift + local live-continuation safety. No broker or real sends."""
+"""Post-close one-tick drift safety. No broker or real sends."""
 
 from dataclasses import replace
 from types import SimpleNamespace as NS
@@ -24,13 +24,7 @@ def test_final_price_can_move_one_tick_but_exact_sent_request_was_checked(
     moved = NS(time_msc=first.time_msc + 20, bid=2000.001, ask=2000.101)
     q = iter([first, first])  # move between pre_send and final_send of leg 1
     mt.symbol_info_tick = lambda _: next(q, moved)
-    verified = []
 
-    def still_crossed(name, reading, tick):
-        verified.append(tick.time_msc)
-        return name == NAME and reading == r and tick == moved
-
-    desk.live_check = still_crossed
     checks = []
     precheck = mt.order_check
 
@@ -39,6 +33,13 @@ def test_final_price_can_move_one_tick_but_exact_sent_request_was_checked(
         return precheck(req)
 
     mt.order_check = check
+    if live:
+        assert (
+            desk.batch(NAME, r) == "closed_cross_required"
+            and not checks
+            and not mt.requests
+        )
+        return
     assert desk.batch(NAME, r) == "demo_batch_sent"
     assert len(mt.requests) == len(mt.positions) == 4
     assert len(checks) == 5 and checks[1:] == mt.requests
@@ -49,7 +50,7 @@ def test_final_price_can_move_one_tick_but_exact_sent_request_was_checked(
     assert all(
         req["price"] == (moved.ask if side == 1 else moved.bid) for req in mt.requests
     )
-    assert bool(verified) == live and not desk.state.get("manual_hold")
+    assert not desk.state.get("manual_hold")
     assert desk.batch(NAME, r) == "already_consumed"
 
 
@@ -62,7 +63,7 @@ def test_final_price_can_move_one_tick_but_exact_sent_request_was_checked(
         ("orders", "pending_orders_present"),
         ("funding", "insufficient_free_margin"),
         ("broker", "broker_precheck_rejected"),
-        ("vanished", "live_cross_no_longer_verified"),
+        ("projection", "closed_cross_required"),
         ("two_ticks", "final_quote_or_safety_changed"),
         ("moved_again", "final_quote_or_safety_changed"),
     ],
@@ -70,17 +71,14 @@ def test_final_price_can_move_one_tick_but_exact_sent_request_was_checked(
 def test_one_tick_is_not_a_safety_bypass_or_a_reprice_loop(hull_desk, case, outcome):
     mt, desk, _ = hull_desk("medium")
     first = mt.q
-    r = replace(
-        sig(1999.999 if case == "stop" else 1999.95),
-        close_s=T + 60,
-        trigger=LiveTick.read(first),
-    )
+    r = sig(1999.999 if case == "stop" else 1999.95)
+    if case == "projection":
+        r = replace(r, close_s=T + 60, trigger=LiveTick.read(first))
     if case == "spread":
         key, p = desk.syms[NAME]
         desk.syms[NAME] = key, p.model_copy(update={"max_spread": 0.1})
     if case == "risk":
         desk.lim = desk.lim.model_copy(update={"max_open_risk_usd": 6.01})
-    desk.live_check = lambda *_: case != "vanished"
     moved = NS(
         time_msc=first.time_msc + 20,
         bid=1999.999 if case == "stop" else first.bid,
@@ -119,7 +117,9 @@ def test_one_tick_is_not_a_safety_bypass_or_a_reprice_loop(hull_desk, case, outc
         and not desk.waiting
         and not desk.state.get("manual_hold")
     )
-    assert desk.batch(NAME, r) == "already_consumed"
+    assert desk.batch(NAME, r) == (
+        "closed_cross_required" if case == "projection" else "already_consumed"
+    )
 
 
 @pytest.mark.parametrize("side", [1, -1])

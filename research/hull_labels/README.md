@@ -2,7 +2,9 @@
 
 **Goal:** preserve the user's printed Hull labels (not the chart simulator's EMA-gated queue) and filter new entries by confirmed internal structure before using the initial local-wick SL and a per-ticket USD target. New tickets now use the [70/30 profit ladder](../../docs/HULL_DEMO.md#profit-ladder-for-new-tickets); the historical result files below predate it. Never infer a fill or winning probability from a screenshot. Implementation: `src/bot/hull`. [Exact conventions and Windows setup](../../docs/HULL_DEMO.md).
 
-## Either-source v2
+**Current entry policy:** `bos_half_range_close_v4` is trend-only at a confirmed close. See [the shared chart/scanner checks](../../MT5/qa/README.md) for v4 behavioral verification. None of the performance tables below tests this policy.
+
+## Either-source v2 (raw label formula)
 
 The current default is the union of the two independent native length-16 High and Low cross histories, not the archived 24/hl2 stream. `tests/test_hull_either_v2.py` uses an independent rolling-window oracle, tests same-close coalescing/opposition, and checks broker/replay re-entry before, at and after the last ticket closes. For the [shipped Pine file](../../indicators/FC-Hull-Either-16-v2.pine), `check_either_pine.cjs` runs the same type of checks offline on 500 closed synthetic candles and forming-bar exclusions for both sides. Optional: point `NODE_PATH` at an isolated `node_modules` containing `pinets@0.13.1`, then run `node research/hull_labels/check_either_pine.cjs`. No Node dependency for the scanner or Python tests. Counts/P&L from the older artifact directories below are not results for v2.
 

@@ -12,8 +12,8 @@ import pytest
 from hull_mt import MT, ROOT, T, scanner_clock, sig
 
 from bot.config.loader import load_yaml
-from bot.hull.config import HullConfig, Limits, selection
-from bot.hull.entry_clock import LIVE_QUOTE_POLICY, WAITING, check_quote, poll_delay
+from bot.hull.config import HullConfig, Indicator, Limits, selection
+from bot.hull.entry_clock import QUOTE_POLICY, WAITING, check_quote, poll_delay
 from bot.hull.signal import Hull
 from bot.hull.structure import Structure
 from bot.hull.terminal import dispatch, run
@@ -254,7 +254,7 @@ def eurusd_bars(end):
         ("fresh", True, "demo_batch_sent"),
         ("fresh", False, "shadow_plan_only"),
         ("late", True, "entry_window_expired"),
-        ("outside", True, "quote_outside_buy_below_bear_bos"),
+        ("outside", True, "quote_outside_bull_bos_discount_buy"),
     ],
 )
 def test_eurusd_1952_bar_1953_close_waits_for_quote_not_replayed(
@@ -262,11 +262,18 @@ def test_eurusd_1952_bar_1953_close_waits_for_quote_not_replayed(
 ):
     symbol = "EURUSDm"
     end = int(datetime(2026, 11, 18, 19, 53, tzinfo=UTC).timestamp())
-    bars = eurusd_bars(end)
+    # Positive v4 timing fixture: use the known bar-92 BOS BUY on a synthetic FX grid.
+    raw = json.loads((ROOT / "MT5/qa/protected_cases.json").read_text())["fixtures"][
+        "protected-buy"
+    ][:93]
+    bars = [
+        Bar(
+            end - (len(raw) - i) * 60,
+            *(round(1.1 + (x - 3680) * 0.001, 6) for x in row[1:]),
+        )
+        for i, row in enumerate(raw)
+    ]
     cfg = load_yaml(ROOT / "config.yaml")
-    cfg["hull"]["indicator"].update(
-        hull_len=24, source="hl2"
-    )  # pinned incident fixture
     cfg["run"]["mode"] = "demo" if armed else "paper"
     h = HullConfig.model_validate(cfg["hull"])
     eng = Hull(1, h.indicator, 0.0001)
@@ -274,7 +281,7 @@ def test_eurusd_1952_bar_1953_close_waits_for_quote_not_replayed(
     assert (
         r.close_s == end
         and r.entry_side == 1
-        and r.entry_audit()["entry_setup"] == "buy_below_bear_bos"
+        and r.entry_audit()["entry_setup"] == "bull_bos_discount_buy"
     )
     mt = MT()
     mt.i.name = symbol
@@ -298,7 +305,7 @@ def test_eurusd_1952_bar_1953_close_waits_for_quote_not_replayed(
         else:
             ms = int((wall[0] - 0.05) * 1000)
         ask = (
-            r.structure.broken.price
+            r.structure.origin.price
             if case == "outside" and end + 0.70 <= wall[0] < end + 1.0
             else round(r.close + 0.00005, 5)
         )
@@ -306,18 +313,6 @@ def test_eurusd_1952_bar_1953_close_waits_for_quote_not_replayed(
 
     def rates(n, tf, shift, count):
         assert n == symbol and tf == 1
-        if shift == 0:
-            assert count == 1 and wall[0] >= end
-            px = quote(n).bid
-            return [
-                dict(
-                    time=end,
-                    open=r.close,
-                    high=max(px, r.close),
-                    low=min(px, r.close),
-                    close=px,
-                )
-            ]
         assert shift == 1
         return [
             {"time": b.t, "open": b.o, "high": b.h, "low": b.l, "close": b.c}
@@ -355,8 +350,8 @@ def test_eurusd_1952_bar_1953_close_waits_for_quote_not_replayed(
     ]
     summary = records[0]["summary"]
     assert (
-        summary["entry_policy"] == "protected_swing_v2"
-        and summary["entry_quote_policy"] == LIVE_QUOTE_POLICY
+        summary["entry_policy"] == "bos_half_range_close_v4"
+        and summary["entry_quote_policy"] == QUOTE_POLICY
     )
     (label,) = [v for v in records if v["event"] == "closed_label"]
     assert (
@@ -487,4 +482,15 @@ def test_waiting_symbol_does_not_hold_up_another_symbol(hull_desk):
     assert list(d.waiting) == [a] and d.state["consumed"] == {a: T, b: T}
     mt.symbol_info_tick = lambda n: mt.q
     dispatch(d, a, [], **ok)
+    assert not d.waiting and not mt.requests
+
+
+def test_old_fx_countertrend_cross_cannot_reserve_even_a_first_quote(hull_desk):
+    h = Hull(1, Indicator(hull_len=24, source="hl2"), 0.0001)
+    for b in eurusd_bars(T):
+        r = h.update(b)
+    assert r.label == r.side == 1 and r.structure.bias == -1 and r.entry_side == 0
+    mt, d, _ = hull_desk(armed=False)
+    mt.q = None
+    dispatch(d, "XAUUSDm", [r], data_ok=True, history_ok=True, rewarmed=False)
     assert not d.waiting and not mt.requests

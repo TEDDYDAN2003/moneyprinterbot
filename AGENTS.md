@@ -41,7 +41,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Invalid config. Do not arm.' }
 if ($LASTEXITCODE -ne 0) { throw 'Preflight failed. Do not arm.' }
 ```
 
-Verify the demo account, trading permissions, symbols, batch sizes, M1/M2/M5 history, positions/orders and `review_before_demo`. Look for `new_ticket_target_policy: base_plus_entry_spread_v1`; each symbol’s `target_preview_by_side` shows the indicative BUY and SELL goals on the current quote. For live continuations look for `entry_timing: live_continuation_v1` and `bid_chart_verified: true`. Do **not** arm with an unexplained warning.
+Verify the demo account, trading permissions, symbols, batch sizes, M1/M2/M5 history, positions/orders and `review_before_demo`. Look for `new_ticket_target_policy: base_plus_entry_spread_v1`; each symbol’s `target_preview_by_side` shows the indicative BUY and SELL goals on the current quote. Verify `entry_policy: bos_half_range_close_v4`, `entry_timing: confirmed_close_only`, and `choch_entry: none`. Do **not** arm with an unexplained warning.
 
 Want to watch first? Run `& $py -m bot.cli trade-all --config $cfg @profiles` **without** the arm flag. It must say `READ ONLY`. Stop **that observer** with Ctrl+C before step 4. If the account or profiles change, repeat preflight.
 
@@ -108,12 +108,10 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" 
 
 ## When does the signal appear?
 
-The Hull cross **is the raw signal**. There is no wait of several candles. With a trend and pullback already confirmed, a continuation can trigger on the first live cross the scanner observes (BUY at current ask; SELL at current bid). A reversal still needs a **close through the protected swing with a fresh matching cross**. A rejected cross is not saved for later.
-
-Example: on M1 a live cross at **10:03:15** can trigger then. The normal chart suggestion is drawn on the **10:03 candle** only if it still qualifies when that candle closes at **10:04**. If the cross vanishes, there may be no confirmed arrow. A chart-simulated fill or blue broker deal marker is not the cross.
+A native M1 bar opened at **10:03** can produce a valid entry only when it closes at **10:04**. The cross must be on the trend side and in the confirmed BOS half-range. The bot rechecks its current BUY ask / SELL bid before each leg. A CHoCH or retest is **not** a new trade. A raw marker, a chart-simulated fill and an actual broker deal are different events. [Exact shared rules](docs/HULL_STRUCTURE.md).
 
 ## Desktop agent rules
 
 A question about this guide is not authorization to trade. A normal start request means **observer only**. Follow the [standing startup rules](README.md#standing-instructions-for-the-desktop-agent). An agent must receive separate, explicit **`ARM DEMO`** for the verified profiles before using step A4. No live-money mode.
 
-A pull does not update a running process. Match its `started.summary.checkout_head_at_start` to `git rev-parse HEAD`; verify the source, `protected_swing_v2`, intended Hull settings (default Either/16), quote policy and per-ticket ladder preview. Never change lots, limits or stops to force a trade, or delete safety state. Logs: `reports/hull_runtime/<account-hash>/shadow.jsonl` (observer) and `demo.jsonl` (armed). [Exposure, funding and retired limits](docs/HULL_DEMO.md).
+A pull does not update a running process. Match its `started.summary.checkout_head_at_start` to `git rev-parse HEAD`; verify the source, `bos_half_range_close_v4`, intended Hull settings (default Either/16), quote policy and per-ticket ladder preview. Never change lots, limits or stops to force a trade, or delete safety state. Logs: `reports/hull_runtime/<account-hash>/shadow.jsonl` (observer) and `demo.jsonl` (armed). [Exposure, funding and retired limits](docs/HULL_DEMO.md).

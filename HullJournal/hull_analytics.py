@@ -12,6 +12,8 @@ SESSIONS = (
     ("New York", "America/New_York", 8, 17),
 )
 REASON_LABELS = {
+    "bull_bos_discount_buy": "BUY · BOS discount (closed cross)",
+    "bear_bos_premium_sell": "SELL · BOS premium (closed cross)",
     "bull_choch_buy": "BUY · bullish CHoCH close",
     "bear_choch_sell": "SELL · bearish CHoCH close",
     "bull_protected_pullback_buy": "BUY · pullback above protected HL",
@@ -22,6 +24,8 @@ REASON_LABELS = {
     "sell_above_bull_bos": "SELL · above bullish BOS",
 }
 REASON_NOTES = {
+    "bull_bos_discount_buy": "A fresh Hull BUY closed above the BOS-protected higher low and at or below the range midpoint. CHoCH and its retest are not entries.",
+    "bear_bos_premium_sell": "A fresh Hull SELL closed at or above the BOS range midpoint and below the protected lower high. CHoCH and its retest are not entries.",
     "bull_choch_buy": "A fresh Hull BUY closed strictly above the protected bearish LH on the bullish CHoCH candle.",
     "bear_choch_sell": "A fresh Hull SELL closed strictly below the protected bullish HL on the bearish CHoCH candle.",
     "bull_protected_pullback_buy": "After a completed pullback, the fresh BUY triggered above the protected higher low. An internal swing alone does not move that boundary.",

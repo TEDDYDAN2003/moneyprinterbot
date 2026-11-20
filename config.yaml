@@ -302,7 +302,7 @@ zones:
 
 # ACTIVE demo entry path. Indicator source = the user's Hull BUY/SELL labels.
 hull:
-  entry_timing: live_continuation_v1  # trend + pullback closed; first observed live cross, reversals still close-only
+  entry_timing: confirmed_close_only  # closed cross in the BOS-proven half-range; no CHoCH entry or retest
   exit_policy: profit_ladder_70_30_v1  # new tickets only; every rung uses that leg’s frozen base + entry spread
   enabled: [XAUUSD]  # opt in other keys via --symbols or repeated --profile
   magic: 26111825

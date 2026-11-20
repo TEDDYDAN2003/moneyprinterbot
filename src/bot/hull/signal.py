@@ -15,6 +15,7 @@ from .structure import ENTRY_POLICY, InternalStructure, Pivot, Structure
 
 ENTRY_AUDIT_FIELDS = (
     "entry_policy",
+    "range_midpoint",
     "protected_level",
     "pullback_candidate",
     "pullback_seen_close_s",
@@ -134,9 +135,6 @@ class Reading:
     source_conflict: bool = False
 
     trigger: LiveTick | None = None
-    confirmation_only: bool = (
-        False  # chart cross whose continuation belonged to the live path
-    )
 
     @property
     def signal_msc(self):
@@ -158,25 +156,17 @@ class Reading:
 
     @property
     def entry_reason(self) -> str:
+        if self.trigger is not None:
+            return "closed_cross_required"
+        if self.source_conflict:
+            return "source_conflict"
         if not self.label:
-            return "source_conflict" if self.source_conflict else "no_cross"
+            return "no_cross"
         if not self.side:
             return self.reason if self.reason != "ready" else "no_executable_label"
         if self.side != self.label:
             return "no_matching_hull_label"
-        if self.trigger:
-            if self.side != self.structure.bias:
-                return "opposite_label_requires_close"
-            seen = self.structure.pullback_seen_s
-            if (
-                not self.structure.continuation_side
-                or seen is None
-                or seen > self.close_s - self.tf * 60
-            ):
-                return "live_requires_completed_pullback"
-        return self.structure.veto(self.side, self.close) or (
-            "continuation_live_only" if self.confirmation_only else "ready"
-        )
+        return self.structure.veto(self.side, self.close) or "ready"
 
     @property
     def entry_side(self) -> int:
@@ -187,6 +177,7 @@ class Reading:
         band = self.structure.band(self.label)
         return {
             "entry_policy": ENTRY_POLICY,
+            "range_midpoint": self.structure.midpoint,
             "protected_level": self.structure.origin.price
             if self.structure.origin
             else None,

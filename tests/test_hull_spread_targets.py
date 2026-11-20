@@ -40,7 +40,7 @@ def us30(hull_desk, side, *, cap=15, base=10, rate="slow", policy=LADDER, armed=
     r = replace(
         sig(sl=48_980 if side == 1 else 49_033, side=side),
         close=mt.q.bid,
-        structure=known_range(side, mt.q.bid, T),
+        structure=known_range(side, mt.q.bid, T, scale=20),
     )
     return mt, desk, log, r
 

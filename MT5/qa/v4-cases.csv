@@ -1,0 +1,19 @@
+synthetic_case,bar_index,note,bar_open_utc_epoch,open,high,low,close,selected,bias,eventKind,guardEvent,origin,broken,extreme,midRange,structureSide,riskQualified,suggestion,pendingSide,filledSide,simFillPx
+protected-sell,45,Matching raw cross on CHoCH; no entry,1707093900,3683.667,3683.877,3680.93,3681.12,-1,-1,2,-2,3697.21,3682.76,,,0,0,0,0,0,
+protected-sell,64,Later continuation BOS; new range not confirmed yet,1707095040,3673.612,3673.792,3671.885,3672.1,0,-1,3,-3,3682.84,3672.985,,,0,0,0,0,0,
+protected-sell,71,Confirmed tip and midpoint; no fresh trend cross here,1707095460,3672.242,3673.241,3672.002,3672.971,0,-1,3,0,3682.84,3672.985,3670.26,3676.55,0,0,0,0,0,
+protected-sell,92,New aligned close in the allowed half; valid suggestion,1707096720,3677.95,3678.13,3676.919,3677.159,-1,-1,3,0,3682.84,3672.985,3670.26,3676.55,-1,-1,-1,-1,0,
+protected-sell,93,Chart proxy only: next-open simulated fill,1707096780,3677.159,3677.369,3676.31,3676.5,0,-1,3,0,3682.84,3672.985,3670.26,3676.55,0,0,0,0,-1,3677.159
+protected-buy,45,Matching raw cross on CHoCH; no entry,1707093900,3676.333,3679.07,3676.123,3678.88,1,1,2,2,3662.79,3677.24,,,0,0,0,0,0,
+protected-buy,64,Later continuation BOS; new range not confirmed yet,1707095040,3686.388,3688.115,3686.208,3687.9,0,1,3,3,3677.16,3687.015,,,0,0,0,0,0,
+protected-buy,71,Confirmed tip and midpoint; no fresh trend cross here,1707095460,3687.758,3687.998,3686.759,3687.029,0,1,3,0,3677.16,3687.015,3689.74,3683.45,0,0,0,0,0,
+protected-buy,92,New aligned close in the allowed half; valid suggestion,1707096720,3682.05,3683.081,3681.87,3682.841,1,1,3,0,3677.16,3687.015,3689.74,3683.45,1,1,1,1,0,
+protected-buy,93,Chart proxy only: next-open simulated fill,1707096780,3682.841,3683.69,3682.631,3683.5,0,1,3,0,3677.16,3687.015,3689.74,3683.45,0,0,0,0,1,3682.841
+no-reversal-buy,410,Former watch; countertrend raw cross is discarded,1707123000,91.107,91.531,91.059,91.388,1,-1,3,0,92.281,91.769,90.932,91.6065,0,0,0,0,0,
+no-reversal-buy,418,Strict CHoCH; no entry and no order staged,1707123480,92.823,92.948,92.198,92.691,0,1,2,2,90.929,92.281,,,0,0,0,0,0,
+no-reversal-buy,419,No cross or range; no entry,1707123540,92.691,92.827,92.655,92.71,0,1,2,0,90.929,92.281,,,0,0,0,0,0,
+no-reversal-buy,420,"Exact return to the broken guard; no order, no simulated fill",1707123600,92.736,92.824,92.281,92.781,0,1,2,0,90.929,92.281,,,0,0,0,0,0,
+no-reversal-sell,410,Former watch; countertrend raw cross is discarded,1707123000,108.893,108.941,108.469,108.612,-1,1,3,0,107.719,108.231,109.068,108.3935,0,0,0,0,0,
+no-reversal-sell,418,Strict CHoCH; no entry and no order staged,1707123480,107.177,107.802,107.052,107.309,0,-1,2,-2,109.071,107.719,,,0,0,0,0,0,
+no-reversal-sell,419,No cross or range; no entry,1707123540,107.309,107.345,107.173,107.29,0,-1,2,0,109.071,107.719,,,0,0,0,0,0,
+no-reversal-sell,420,"Exact return to the broken guard; no order, no simulated fill",1707123600,107.264,107.719,107.176,107.219,0,-1,2,0,109.071,107.719,,,0,0,0,0,0,

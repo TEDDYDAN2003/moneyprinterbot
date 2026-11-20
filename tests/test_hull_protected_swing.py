@@ -1,4 +1,4 @@
-"""Protected-swing v2 acceptance. Synthetic OHLC, never broker history or real orders."""
+"""Protected swing detection and trend-only v4 acceptance. Synthetic OHLC, never broker history or real orders."""
 
 import json
 from dataclasses import replace
@@ -61,20 +61,25 @@ def test_minor_swing_at_3675945_is_not_a_reversal_on_the_fresh_cross(d, tf):
 
 
 @pytest.mark.parametrize("d", [-1, 1])
-def test_true_choch_agreeing_cross_only_on_break_close_and_on_correct_side_of_quote(d):
+def test_true_choch_with_matching_cross_has_no_entry_band_on_or_after_the_break(d):
     ds = tape(d)
     r = ds[45]
     s = r.structure
     edge = prices(d, 3682.76)
     assert s.event == "choch" and s.break_now and s.pullback_seen_s is None
     assert s.broken == ds[44].structure.origin and s.broken.price == edge
-    assert r.label == r.entry_side == d and s.band(d).contains(r.close)
-    assert not s.band(d).contains(edge) and not s.band(d).contains(edge - d * 0.001)
-    assert s.band(d).contains(edge + d * 0.001)
-    assert ds[46].structure.band(d) is None  # not a permanent breakout bypass
     assert (
-        s.band(-d) is None and r.entry_audit()["entry_policy"] == "protected_swing_v2"
+        r.label == r.side == d
+        and r.entry_side == 0
+        and not s.band(d)
+        and not s.band(-d)
     )
+    assert r.entry_reason == "structure_choch_context_only"
+    assert (
+        r.entry_audit()["range_midpoint"] is None
+        and r.entry_audit()["entry_policy"] == "bos_half_range_close_v4"
+    )
+    assert ds[46].structure.band(d) is None
 
 
 @pytest.mark.parametrize("d", [-1, 1])
@@ -96,13 +101,13 @@ def test_one_completed_move_after_tip_no_three_right_bars_no_doji_or_same_bar(d)
         assert r.structure.band(d) is None and r.structure.pullback_seen_s is None
     r3 = h.update(row(48, 3681.50, 3683, 3680.6, 3682))
     assert r3.structure.extreme is None and r3.structure.pullback_seen_s == r3.close_s
-    assert r3.structure.band(d).contains(r3.close)
+    assert r3.structure.band(d) is None
     r4 = h.update(row(49, 3682, 3682.50, 3678.6, 3679))
     assert (
         r4.structure.pullback_seen_s is None
         and r4.structure.origin == r3.structure.origin
     )
-    assert r3.structure.band(d).contains(r3.close)  # immutable close, no backdating
+    assert r3.structure.band(d) is None  # immutable close, no backdating
 
 
 @pytest.mark.parametrize("d", [-1, 1])
@@ -154,15 +159,20 @@ def test_no_promotion_on_wick_or_equal_close_no_guard_widen_after_sweep(d):
     )
 
 
-def test_one_sided_boundaries_are_strict_finite_and_fail_closed_when_absent():
-    for z in (Band("buy", 100, None, True), Band("sell", None, 100, high_open=True)):
-        assert all(
-            not z.contains(x) for x in (100, float("inf"), float("-inf"), float("nan"))
+def test_incomplete_or_nonfinite_bands_never_grant_permission():
+    for z in (
+        Band("old_buy", 100, None, True),
+        Band("old_sell", None, 100, high_open=True),
+        Band("absent", None, None),
+        Band("reversed", 101, 100),
+        Band("infinite", 100, float("inf")),
+    ):
+        assert not any(
+            z.contains(x) for x in (50, 100, 101, 200, float("inf"), float("nan"))
         )
-    assert not Band("absent", None, None).contains(100)
-    assert Band("buy", 100, None, True).contains(200) and Band(
-        "sell", None, 100, high_open=True
-    ).contains(50)
+    for x in (100, float("inf"), float("nan")):
+        assert not Band("buy", 100, 110, True).contains(x)
+    assert Band("buy", 100, 110, True).contains(110)
 
 
 @pytest.mark.parametrize("d", [-1, 1])
@@ -179,7 +189,15 @@ def test_incident_and_choch_go_through_real_shadow_desk_with_frozen_quote_bounda
     engine = Hull(1, Indicator(), 0.01)
     for b in bs:
         r = engine.update(replace(b, t=b.t + offset))
-    assert r.close_s == T and r.entry_side == d
+    assert r.close_s == T and r.side == d
+    if target == 45:
+        assert (
+            not r.entry_side
+            and desk.batch("XAUUSDm", r) == "structure_choch_context_only"
+        )
+        assert not mt.requests and not desk.waiting
+        return
+    assert r.entry_side == d
     band = r.structure.band(d)
     edge = band.low if d == 1 else band.high
     px = edge if touch else r.close

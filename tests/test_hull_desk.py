@@ -246,8 +246,8 @@ def test_preflight_resolves_only_requested_symbols_and_never_sends(
     assert (
         answer["timeframes"] == [1, 2, 5]
         and answer["signal_policy"] == "fc_hull_either_v2"
-        and answer["entry_timing"] == "live_continuation_v1"
-        and answer["entry_quote_policy"] == "current_live_tick_or_confirmed_close_v1"
+        and answer["entry_timing"] == "confirmed_close_only"
+        and answer["entry_quote_policy"] == "first_fresh_post_close_tick_v1"
         and answer["specs"]["XAUUSDm"]["bid_chart_verified"]
         and answer["batch_entry_policy"] == "first_eligible_while_flat_v1"
         and list(answer["specs"]) == ["XAUUSDm"]
@@ -325,9 +325,7 @@ def test_cli_native_m2_entry_filter_and_independent_exit(
 
     cfg = load_yaml(ROOT / "config.yaml")
     cfg["run"]["mode"] = "demo"
-    cfg["hull"]["entry_timing"] = (
-        "confirmed_close_only"  # exercise the explicit legacy mode
-    )
+    cfg["hull"]["entry_timing"] = "confirmed_close_only"  # explicit current clock
     cfg["hull"]["indicator"]["exit_opposite"] = exit_opposite
     h = HullConfig.model_validate(cfg["hull"])
     mt = MT()
@@ -438,24 +436,22 @@ def test_cli_native_m2_entry_filter_and_independent_exit(
 
 
 @pytest.mark.parametrize("bias", [1, -1])
-def test_actual_hull_label_beyond_confirmed_bos_opens_protected_batch(hull_desk, bias):
+def test_actual_countertrend_label_beyond_confirmed_bos_cannot_open(hull_desk, bias):
     mt, desk, _ = hull_desk()
     row = sequence(bias, closes=PATH[:21], end_s=T)[-1]
-    assert row.label == row.entry_side == -bias and row.structure.event == "bos"
-    mt.q.bid = row.close
-    mt.q.ask = row.close + 0.1
-    assert desk.batch("XAUUSDm", row) == "demo_batch_sent"
-    assert len(mt.positions) == 10
-    for p in mt.positions:
-        assert p.type == (mt.ORDER_TYPE_SELL if bias == 1 else mt.ORDER_TYPE_BUY)
-        assert p.volume == 0.10 and p.tp > 0 and p.sl > 0
+    assert row.label == row.side == -bias and row.structure.event == "bos"
+    assert (
+        row.entry_side == 0
+        and desk.batch("XAUUSDm", row) == "countertrend_not_an_entry"
+    )
+    assert not mt.requests and not mt.positions and not desk.waiting
 
 
 @pytest.mark.parametrize("bad_close", [False, True])
 @pytest.mark.parametrize("bias", [1, -1])
 def test_bos_close_and_executable_quote_both_must_pass(hull_desk, bias, bad_close):
-    row = sequence(bias, closes=PATH[:21], end_s=T)[-1]
-    edge = row.structure.broken.price
+    row = sequence(bias, closes=PATH[:18] + [118.35], end_s=T)[-1]
+    edge = row.structure.origin.price
     mt, desk, _ = hull_desk()
     ask_offset = 0.1 if row.side == 1 else 0.0
     # Close valid but executable quote exactly on BOS; or close invalid but
@@ -494,7 +490,7 @@ def test_each_batch_leg_rechecks_frozen_zone_and_does_not_top_up(hull_desk):
     mt.order_send = drift
     assert (
         desk.batch("XAUUSDm", d)
-        == "protected_partial_no_topup:quote_outside_bull_protected_pullback_buy"
+        == "protected_partial_no_topup:quote_outside_bull_bos_discount_buy"
     )
     assert (
         len(mt.positions) == len(mt.requests) == 1

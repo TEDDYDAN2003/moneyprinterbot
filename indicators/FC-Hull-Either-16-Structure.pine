@@ -1,10 +1,9 @@
 //@version=6
-indicator("FC Hull Either 16 · BOS Range & CHoCH Retest v3", shorttitle="FC Range 3", overlay=true, max_bars_back=2100, max_lines_count=300, max_labels_count=300)
+indicator("FC Hull Either 16 · BOS Half-Range v4", shorttitle="FC Range 4", overlay=true, max_bars_back=2100, max_lines_count=300, max_labels_count=300)
 
 // Standalone chart study, not an MT5 connection. Native chart candles only.
-// Chart-only policy: momentum_retest_v3. The Python scanner still uses protected_swing_v2.
-// A countertrend watch is NOT a valid entry. A confirmed reversal may stage a chart limit;
-// the first possible fill is on a later candle. No broker API, no forward pivot placement.
+// Shared entry policy: bos_half_range_close_v4. Closed trend crosses only.
+// CHoCH changes the protected structure; it NEVER creates an entry, watch or retest limit.
 const string G_VIEW = "1 · Suggestions and alerts"
 const string G_HULL = "2 · Hull signal"
 const string G_STRUCT = "3 · Confirmed market structure"
@@ -13,10 +12,9 @@ const string G_RISK = "5 · Chart stops and exits"
 const string G_MONEY = "6 · Chart account and costs"
 const string G_PLAN = "7 · Chart plans and statistics"
 
-string labelMode = input.string("Valid suggestions only", "Labels and alerts", options=["Valid suggestions only", "Structure only (bands / retests)", "Simulated fills only", "All Hull crosses (debug)"], group=G_VIEW, tooltip="Valid: a trend cross in the BOS-proven half-range, or a simulated reversal limit retest (not the CHoCH close). Structure: band crosses and first retest touches, before chart risk/slot checks. Fills: simulated executions only. Raw: unfiltered diagnostic crosses, including countertrend. No view places orders.")
-bool showCross = input.bool(true, "Show signal labels", group=G_VIEW, tooltip="Hides the marks only. The two alert conditions still use the chosen Labels and alerts setting.")
-bool showBands = input.bool(false, "Draw active BUY and SELL bands", group=G_VIEW, tooltip="Only bullish discount or bearish premium is an entry band. The former opposite zone may arm a watch, never a countertrend entry.")
-bool showStages = input.bool(true, "Show watch / retest-limit levels", group=G_VIEW, tooltip="Gold dots = watch, no order. Blue diamond = limit staged; blue line = still waiting for a retest. Read the Data Window for stage events. Neither is a BUY/SELL fill.")
+string labelMode = input.string("Valid suggestions only", "Labels and alerts", options=["Valid suggestions only", "Structure-qualified crosses", "Simulated fills only", "All Hull crosses (debug)"], group=G_VIEW, tooltip="Valid: a fresh closed trend cross in a BOS-proven half-range with chart stop and slot checks. Structure: band crosses only. Fills: next-open chart executions. Raw: diagnostics, not entries. CHoCH is context only in all entry views.")
+bool showCross = input.bool(true, "Show signal labels", group=G_VIEW, tooltip="Hides the marks only. Alert conditions still use the chosen view. Debug has its own explicitly raw alert.")
+bool showBands = input.bool(false, "Draw active BUY and SELL bands", group=G_VIEW, tooltip="Only bullish discount or bearish premium is an entry band. No opposite zone or retest plan.")
 int hullLen = input.int(16, "Hull length", minval=2, maxval=500, group=G_HULL)
 string sourceMode = input.string("Either source", "Signal source mode", options=["Either source", "Directional", "Low only", "High only"], group=G_HULL, tooltip="Either: a strict cross of the Low or High Hull A. Same-direction crosses on one close count once. Opposed crosses on the same close produce no signal.")
 bool alternateOnly = input.bool(false, "Require selected BUY and SELL crosses to alternate", group=G_HULL, tooltip="Leave off for the bot's rule: a later fresh same-side cross can qualify once flat. This optional filter operates on crosses, not on filled positions.")
@@ -34,7 +32,7 @@ int atrLength = input.int(14, "Wilder ATR length", minval=1, maxval=500, group=G
 float atrBuffer = input.float(0.1, "Stop buffer × ATR", minval=0, maxval=100, step=0.05, group=G_RISK)
 float pipSize = input.float(0.01, "Pip size in price units", minval=0.00000001, maxval=1000, step=0.00001, group=G_RISK)
 float extraPips = input.float(0.0, "Extra stop buffer (pips)", minval=0, maxval=100000, step=0.5, group=G_RISK)
-float targetR = input.float(1.5, "Target R multiple", minval=0.1, maxval=100, step=0.1, group=G_RISK, tooltip="Chart target only: measured from the trend signal close, or the reversal retest limit, to its stop. This single-position simulation cannot see MT5 tickets and does not model the bot’s per-ticket 70/30 exits.")
+float targetR = input.float(1.5, "Target R multiple", minval=0.1, maxval=100, step=0.1, group=G_RISK, tooltip="Chart target only: measured from the qualified signal close to its stop. This single-position simulation cannot see MT5 tickets and does not model the bot’s per-ticket 70/30 exits.")
 bool exitOpposite = input.bool(true, "Exit chart trade on a selected opposite", group=G_RISK, tooltip="An opposite with a valid stop and optional EMA can close the old position without itself passing structure. A replacement needs all entry checks. Old exits execute first at the next chart open.")
 
 float initialCapital = input.float(10000.0, "Initial capital", minval=0.01, maxval=1000000000, step=100, group=G_MONEY)
@@ -137,7 +135,7 @@ f_level(array<line> lines, array<label> tags, int x1, int x2, float price, strin
     array.push(lines, ln)
     array.push(tags, tag)
 
-// protected_swing_v2. Only structural closing breaks change the protected origin.
+// Protected-swing detector: only structural closing breaks change the protected origin.
 // 0 none, 1 context, 2 CHoCH, 3 continuation BOS. Never relabel earlier bars.
 var float knownH = na
 var float knownL = na
@@ -222,7 +220,7 @@ bool seenPullback = not na(pullbackSeenBar)
 float reaction = seenPullback ? retraceWick : na
 // Only a proved continuation BOS plus its confirmed outer extreme defines a dealing range.
 // No extra internal HL/LH is needed. Equality at the midpoint is allowed; the guard is strict.
-bool rangeReady = eventKind == 3 and not na(origin) and not na(extreme) and bias * (extreme - origin) > 0
+bool rangeReady = eventKind == 3 and not breakNow and not na(broken) and not na(origin) and not na(extreme) and bias * (extreme - origin) > 0 and bias * (extreme - broken) > 0
 float midRange = rangeReady ? math.round((origin + extreme) * 0.5, 9) : na
 float buyLo = rangeReady and bias == 1 ? origin : na
 float buyHi = rangeReady and bias == 1 ? midRange : na
@@ -237,100 +235,33 @@ f_inside(float px, float lo, float hi, bool openLo, bool openHi) =>
 int selected = rawBuy ? 1 : rawSell ? -1 : 0
 bool insideBuy = f_inside(close, buyLo, buyHi, true, false)
 bool insideSell = f_inside(close, sellLo, sellHi, false, true)
-int trendSide = rawBuy and insideBuy ? 1 : rawSell and insideSell ? -1 : 0
-
-// Watch and retest are separate from the ordinary one-shot next-open continuation plan.
-var int watchSide = 0
-var float watchGuard = na
-var int retSide = 0
-var float retLevel = na
-var int retBar = na
-var bool retOK = false
-var float retSL = na
-var float retTP = na
-int armedNow = 0
-int confirmNow = 0
-int placedNow = 0
-int cancelledNow = 0
-int touched = 0
-float touchedPx = na
-float touchedSL = na
-float touchedTP = na
-bool touchedOK = false
-int retestFill = 0
-bool gapInTape = bar_index > 0 and time != time_close[1]
-bool chochClose = breakNow and eventKind == 2
-if barstate.isconfirmed
-    // Process the order from the PREVIOUS close, before this bar's close-only signals.
-    if retSide != 0
-        if not gapInTape and bar_index > retBar and (retSide == 1 ? low <= retLevel : high >= retLevel)
-            touched := retSide
-            touchedPx := retLevel
-            touchedOK := retOK
-            touchedSL := retSL
-            touchedTP := retTP
-            retSide := 0
-        else if gapInTape or candidate == -retSide or conflict or breakNow or bias != retSide
-            cancelledNow := retSide
-            retSide := 0
-        if retSide == 0
-            retLevel := na
-            retBar := na
-            retOK := false
-            retSL := na
-            retTP := na
-    // An opposing raw direction cancels even if it would not pass entry/EMA/alternation.
-    if watchSide != 0 and (gapInTape or candidate == -watchSide or conflict)
-        cancelledNow := watchSide
-        watchSide := 0
-        watchGuard := na
-    if chochClose
-        bool stored = watchSide == bias and not na(watchGuard) and watchGuard == broken
-        if not conflict and candidate != -bias and (stored or selected == bias)
-            confirmNow := bias
-        if watchSide != 0 and not stored
-            cancelledNow := watchSide
-        watchSide := 0
-        watchGuard := na
-    else
-        if watchSide != 0 and (breakNow or not rangeReady or bias != -watchSide or origin != watchGuard)
-            cancelledNow := watchSide
-            watchSide := 0
-            watchGuard := na
-        bool oldBuyZone = rangeReady and bias == -1 and rawBuy and close >= extreme and close < broken
-        bool oldSellZone = rangeReady and bias == 1 and rawSell and close > broken and close <= extreme
-        if watchSide == 0 and ((oldBuyZone and allowLong) or (oldSellZone and allowShort))
-            watchSide := selected
-            watchGuard := origin
-            armedNow := selected
-int structureSide = touched != 0 ? touched : trendSide
-int calcSide = selected != 0 ? selected : confirmNow
+int structureSide = rawBuy and insideBuy ? 1 : rawSell and insideSell ? -1 : 0
 
 // Independent of structure: freeze the selected stop anchor on THIS close.
 var int lastBuyBar = na
 var int lastSellBar = na
 float anchorPx = na
-if calcSide != 0
+if selected != 0
     if stopMode == "Confirmed pivot (original chart)"
-        anchorPx := calcSide == 1 ? knownL : knownH
+        anchorPx := rawBuy ? knownL : knownH
     else
-        int since = calcSide == 1 ? lastSellBar : lastBuyBar
+        int since = rawBuy ? lastSellBar : lastBuyBar
         for k = 1 to pullbackBars
             if bar_index >= k and (na(since) or bar_index - k >= since)
-                float w = calcSide == 1 ? low[k] : high[k]
-                anchorPx := na(anchorPx) ? w : calcSide == 1 ? math.min(anchorPx, w) : math.max(anchorPx, w)
+                float w = rawBuy ? low[k] : high[k]
+                anchorPx := na(anchorPx) ? w : rawBuy ? math.min(anchorPx, w) : math.max(anchorPx, w)
     if rawBuy
         lastBuyBar := bar_index
-    else if rawSell
+    else
         lastSellBar := bar_index
-float rawSL = anchorPx - calcSide * (atrBuffer * atr + extraPips * pipSize)
-bool stopOK = calcSide != 0 and not na(rawSL) and rawSL > 0 and calcSide * (close - rawSL) > 0
-bool emaOK = not useEma or (not na(ema) and calcSide * (close - ema) > 0)
+float rawSL = anchorPx - selected * (atrBuffer * atr + extraPips * pipSize)
+bool stopOK = selected != 0 and not na(rawSL) and rawSL > 0 and selected * (close - rawSL) > 0
+bool emaOK = not useEma or (not na(ema) and selected * (close - ema) > 0)
 bool exitGrade = stopOK and emaOK
 float stopPlan = rawSL
 if stopOK and stopMode == "Local pullback (bot)"
     // Outward rounding to the chart's trade tick; no hidden spread buffer.
-    stopPlan := (calcSide == 1 ? math.floor(rawSL / syminfo.mintick + 1e-9) : math.ceil(rawSL / syminfo.mintick - 1e-9)) * syminfo.mintick
+    stopPlan := (rawBuy ? math.floor(rawSL / syminfo.mintick + 1e-9) : math.ceil(rawSL / syminfo.mintick - 1e-9)) * syminfo.mintick
 
 var array<line> planLines = array.new<line>()
 var array<label> planTags = array.new<label>()
@@ -368,44 +299,31 @@ float slip = slippageTicks * tickSize
 int suggestion = 0
 int filledSide = 0
 int maybeCloseTie = 0
-bool limitFilledInsideBar = false
 float simFillPx = na
 float simFillSL = na
 float simFillTP = na
 
 // Single-position chart proxy. Phase 0: prior position's opening gap/queued exit.
-// Phase 1: try a frozen trend plan once at the adjacent open, OR a prior CHoCH
-// limit on a later touch. The confirming bar cannot contribute a retest or a fill.
+// Phase 1: try the prior close's plan ONCE at this open, then process bar range.
+// Do not use this bar's high, low or new structural levels to admit an open fill.
 if barstate.isconfirmed
     for phase = 0 to 1
-        if phase == 1 and (pendingSide != 0 or (touched != 0 and touchedOK))
-            bool isLimit = touched != 0 and touchedOK and pendingSide == 0
-            int pd = isLimit ? touched : pendingSide
-            bool marketableOpen = isLimit and pd * (open - touchedPx) <= 0
-            // A passive order cannot execute worse than its limit. No same-bar CHoCH fill.
-            float px = not isLimit ? open + pd * slip : not marketableOpen ? touchedPx : pd == 1 ? math.min(touchedPx, open + slip) : math.max(touchedPx, open - slip)
-            float sl = isLimit ? touchedSL : pendingSL
-            float tp = isLimit ? touchedTP : pendingTP
-            bool nextBar = isLimit or (not na(pendingAt) and time == pendingAt)
-            bool frozenOK = isLimit or f_inside(px, pendingLo, pendingHi, pendingOpenLo, pendingOpenHi)
-            bool bracketOK = pd * (open - sl) > 0 and pd * (px - sl) > 0 and pd * (tp - px) > 0
+        if phase == 1 and pendingSide != 0
+            float px = open + pendingSide * slip
+            bool nextBar = not na(pendingAt) and time == pendingAt
+            bool frozenOK = f_inside(px, pendingLo, pendingHi, pendingOpenLo, pendingOpenHi)
+            bool bracketOK = pendingSide * (open - pendingSL) > 0 and pendingSide * (px - pendingSL) > 0 and pendingSide * (pendingTP - px) > 0
             float qty = px > 0 ? math.max(0.0, cash * equityPercent / 100.0) / (px * pointValue) : 0.0
             if side == 0 and nextBar and frozenOK and bracketOK and qty > 0
-                side := pd
+                side := pendingSide
                 filledSide := side
-                if isLimit
-                    retestFill := pd
-                    limitFilledInsideBar := not marketableOpen
-                    suggestion := pd
-                    suggestionCount += 1
-                    lastDecision := pd == 1 ? "BUY: retest filled" : "SELL: retest filled"
                 fillCount += 1
                 entry := px
-                stop := sl
-                target := tp
+                stop := pendingSL
+                target := pendingTP
                 simFillPx := px
-                simFillSL := sl
-                simFillTP := tp
+                simFillSL := pendingSL
+                simFillTP := pendingTP
                 units := qty
                 entryFee := math.abs(px * qty * pointValue) * feeRate
                 cash -= entryFee
@@ -420,7 +338,7 @@ if barstate.isconfirmed
                     f_level(planLines, planTags, bar_index, endBar, target, "TP", #16A34A, line.style_dashed)
             else
                 openVetoCount += 1
-                lastDecision := not nextBar ? "Veto: missing next bar" : not frozenOK ? "Veto: left frozen band" : "Veto: bracket/size/busy"
+                lastDecision := not nextBar ? "Open veto: missing next bar" : not frozenOK ? "Open veto: left frozen band" : "Open veto: bracket/size/busy"
             pendingSide := 0
             pendingSL := na
             pendingTP := na
@@ -439,8 +357,7 @@ if barstate.isconfirmed
                     withSlip := gapStop or not gapTarget
             else
                 bool hitStop = isLong ? low <= stop : high >= stop
-                // A favorable wick might precede an intrabar retest. Require proof AFTER fill.
-                bool hitTarget = limitFilledInsideBar ? side * (close - target) >= 0 : isLong ? high >= target : low <= target
+                bool hitTarget = isLong ? high >= target : low <= target
                 if hitStop or hitTarget
                     rawExit := hitStop ? stop : target
                     withSlip := hitStop  // both touched: adverse barrier first
@@ -471,52 +388,37 @@ if barstate.isconfirmed
     // A qualified opposite may conditionally reverse, but the old exit is
     // independent of permission to enter. A repeat in an open trade never queues.
     closeNext := exitOpposite and side != 0 and selected == -side and exitGrade
-    bool slotOK = (side == 0 or closeNext) and calcSide != maybeCloseTie
-    bool sideAllowed = calcSide == 1 ? allowLong : allowShort
+    bool slotOK = (side == 0 or closeNext) and selected != maybeCloseTie
+    bool sideAllowed = rawBuy ? allowLong : allowShort
     if structureSide != 0
         structureCount += 1
-    if confirmNow != 0
-        // Structural touch can be inspected independently of risk/slot; vetoed plans never fill.
-        retSide := confirmNow
-        retLevel := broken
-        retBar := bar_index
-        retOK := sideAllowed and emaOK and stopOK and stopPlan > 0 and confirmNow * (broken - stopPlan) > 0 and slotOK and pendingSide == 0 and cash > 0
-        retSL := retOK ? stopPlan : na
-        retTP := retOK ? broken + (broken - stopPlan) * targetR : na
-        placedNow := retOK ? confirmNow : 0
-        lastDecision := retOK ? (confirmNow == 1 ? "BUY limit ready; wait retest" : "SELL limit ready; wait retest") : "CHoCH: chart plan vetoed"
-    else if trendSide != 0 and retestFill == 0
-        if not sideAllowed or not emaOK
+    if selected != 0
+        if structureSide == 0
+            lastDecision := eventKind == 2 ? "CHoCH: context only" : "Outside proven trend band"
+        else if not sideAllowed or not emaOK
             lastDecision := "Rejected: direction / EMA"
         else if not stopOK or stopPlan <= 0
             lastDecision := "Rejected: no valid stop"
-        else if not slotOK or pendingSide != 0 or retOK
-            lastDecision := "Rejected: chart slot reserved"
+        else if not slotOK or pendingSide != 0
+            lastDecision := "Rejected: chart position busy"
         else if cash <= 0
             lastDecision := "Rejected: no chart capital"
         else
-            suggestion := trendSide
+            suggestion := selected
             suggestionCount += 1
-            pendingSide := trendSide
+            pendingSide := selected
             pendingSL := stopPlan
             pendingTP := close + (close - stopPlan) * targetR
             pendingLo := rawBuy ? buyLo : sellLo
             pendingHi := rawBuy ? buyHi : sellHi
-            pendingOpenLo := rawBuy
-            pendingOpenHi := rawSell
+            pendingOpenLo := rawBuy ? strictBuyLo : strictSellLo
+            pendingOpenHi := rawBuy ? strictBuyHi : strictSellHi
             pendingAt := time_close
             lastDecision := rawBuy ? "BUY: bullish discount" : "SELL: bearish premium"
-    else if retestFill == 0
-        if armedNow != 0
-            lastDecision := armedNow == 1 ? "Watch BUY; no order" : "Watch SELL; no order"
-        else if cancelledNow != 0
-            lastDecision := "Watch / retest cancelled"
-        else if conflict
-            lastDecision := "Rejected: conflicting crosses"
-        else if repeatSkipped
-            lastDecision := "Rejected: alternation setting"
-        else if selected != 0
-            lastDecision := "Rejected: no entry zone"
+    else if conflict
+        lastDecision := "Rejected: conflicting crosses"
+    else if repeatSkipped
+        lastDecision := "Rejected: alternation setting"
     float marked = cash + (side == 0 ? 0.0 : (close - entry) * side * units * pointValue)
     peak := math.max(peak, marked)
     maxDD := math.max(maxDD, peak - marked)
@@ -524,7 +426,7 @@ if barstate.isconfirmed
 // The view controls BOTH BUY/SELL marks and the two selectable alert conditions.
 // It cannot change structural state, plan eligibility, exits, or what gets filled.
 int displaySide = switch labelMode
-    "Structure only (bands / retests)" => structureSide
+    "Structure-qualified crosses" => structureSide
     "Simulated fills only" => filledSide
     "All Hull crosses (debug)" => selected
     => suggestion
@@ -543,26 +445,17 @@ sp1 = plot(showBands ? sellLo : na, "Active SELL band low", color=#C85866, style
 sp2 = plot(showBands ? sellHi : na, "Active SELL band high", color=#C85866, style=plot.style_linebr)
 fill(bp1, bp2, color=color.new(#259981, 90), title="BUY structure band", fillgaps=false)
 fill(sp1, sp2, color=color.new(#C85866, 90), title="SELL structure band", fillgaps=false)
-plotshape(showCross and displaySide == 1, title="BUY · selected view", style=shape.labelup, location=location.belowbar, color=#15803D, text="BUY", textcolor=color.white, size=size.tiny)
-plotshape(showCross and displaySide == -1, title="SELL · selected view", style=shape.labeldown, location=location.abovebar, color=#C6354C, text="SELL", textcolor=color.white, size=size.tiny)
+bool rawView = labelMode == "All Hull crosses (debug)"
+plotshape(showCross and not rawView and displaySide == 1, title="BUY · selected view", style=shape.labelup, location=location.belowbar, color=#15803D, text="BUY", textcolor=color.white, size=size.tiny)
+plotshape(showCross and not rawView and displaySide == -1, title="SELL · selected view", style=shape.labeldown, location=location.abovebar, color=#C6354C, text="SELL", textcolor=color.white, size=size.tiny)
 plotshape(showCross and labelMode == "All Hull crosses (debug)" and conflict, title="Debug: conflict (no signal)", style=shape.xcross, location=location.abovebar, color=#C47B12, size=size.tiny)
-alertcondition(displaySide == 1, title="Hull BUY · selected view", message="Hull BUY | {{ticker}} | {{interval}} | selected chart view | bar close {{close}}")
-alertcondition(displaySide == -1, title="Hull SELL · selected view", message="Hull SELL | {{ticker}} | {{interval}} | selected chart view | bar close {{close}}")
-// Stage alerts are deliberately separate from the selected BUY/SELL entry alerts.
-alertcondition(placedNow == 1, title="BUY retest limit ready · not filled", message="Confirmed bullish CHoCH. Chart BUY retest limit staged; no fill yet. {{ticker}} {{interval}}")
-alertcondition(placedNow == -1, title="SELL retest limit ready · not filled", message="Confirmed bearish CHoCH. Chart SELL retest limit staged; no fill yet. {{ticker}} {{interval}}")
-plot(showStages and watchSide != 0 ? watchGuard : na, "Watch guard · no order", color=#AB813D, style=plot.style_circles)
-plot(showStages and retOK ? retLevel : na, "Resting simulated limit", color=#5869AC, linewidth=2, style=plot.style_linebr)
-plotshape(showStages and placedNow != 0 ? retLevel : na, title="Limit staged · NOT a fill", style=shape.diamond, location=location.absolute, color=#5869AC, size=size.tiny)
+plotshape(showCross and rawView and displaySide == 1, title="Raw upward Hull cross", style=shape.labelup, location=location.belowbar, color=#64748B, text="RAW+", textcolor=color.white, size=size.tiny)
+plotshape(showCross and rawView and displaySide == -1, title="Raw downward Hull cross", style=shape.labeldown, location=location.abovebar, color=#64748B, text="RAW−", textcolor=color.white, size=size.tiny)
+alertcondition(rawView and displaySide != 0, title="Raw Hull cross · diagnostic only", message="Raw Hull cross only | {{ticker}} {{interval}} | not an entry")
+alertcondition(not rawView and displaySide == 1, title="Hull BUY · selected view", message="Hull BUY | {{ticker}} | {{interval}} | selected chart view | bar close {{close}}")
+alertcondition(not rawView and displaySide == -1, title="Hull SELL · selected view", message="Hull SELL | {{ticker}} | {{interval}} | selected chart view | bar close {{close}}")
 plot(simFillPx, "Simulated fill price", display=display.data_window)
 plot(midRange, "BOS range midpoint", display=display.data_window)
-plot(watchSide, "Watch side · not an entry", display=display.data_window)
-plot(armedNow, "Watch armed on this close", display=display.data_window)
-plot(confirmNow, "CHoCH watch or fresh cross confirmed", display=display.data_window)
-plot(placedNow, "Retest limit staged on this close", display=display.data_window)
-plot(touched, "Later structural retest touch", display=display.data_window)
-plot(retestFill, "Later simulated retest fill", display=display.data_window)
-plot(cancelledNow, "Watch or unfilled retest cancelled", display=display.data_window)
 plot(selected, "Raw cross (+1/-1/0)", display=display.data_window)
 plot(structureSide, "Structure pass at close (+1/-1/0)", display=display.data_window)
 plot(suggestion, "Valid chart suggestion (+1/-1/0)", display=display.data_window)
@@ -582,7 +475,7 @@ string corner = switch tableLocation
     "bottom_right" => position.bottom_right
     "bottom_left" => position.bottom_left
     => position.top_right
-var table stats = table.new(corner, 2, 18, bgcolor=color.new(#0F172A, 8), frame_color=#475569, frame_width=1)
+var table stats = table.new(corner, 2, 17, bgcolor=color.new(#0F172A, 8), frame_color=#475569, frame_width=1)
 f_row(table t, int row, string name, string value) =>
     table.cell(t, 0, row, name, text_halign=text.align_left, text_color=row == 0 ? #FACC15 : #CBD5E1, text_size=size.small)
     table.cell(t, 1, row, value, text_halign=text.align_right, text_color=color.white, text_size=size.small)
@@ -592,7 +485,7 @@ if showTable and barstate.islast
     float pf = grossLoss > 0 ? grossWin / grossLoss : na
     float avgWin = wins > 0 ? grossWin / wins : na
     float avgLoss = losses > 0 ? -grossLoss / losses : na
-    f_row(stats, 0, "FC RANGE 3 · CHART SIM", syminfo.ticker)
+    f_row(stats, 0, "FC RANGE 4 · CHART SIM", syminfo.ticker)
     f_row(stats, 1, "Trades · W/L/BE", str.tostring(done) + " · " + str.tostring(wins) + "/" + str.tostring(losses) + "/" + str.tostring(flats))
     f_row(stats, 2, "Win rate", done > 0 ? f_num(winRate) + "%" : "—")
     f_row(stats, 3, "Net / avg", f_num(totalNet) + " / " + f_num(done > 0 ? totalNet / done : na))
@@ -611,4 +504,3 @@ if showTable and barstate.islast
     f_row(stats, 14, "Structure / valid closes", str.tostring(structureCount) + " / " + str.tostring(suggestionCount))
     f_row(stats, 15, "Chart fills / open vetoes", str.tostring(fillCount) + " / " + str.tostring(openVetoCount))
     f_row(stats, 16, "Last decision", lastDecision)
-    f_row(stats, 17, "Reversal stage", retOK ? (retSide == 1 ? "BUY limit " : "SELL limit ") + f_price(retLevel) : watchSide != 0 ? (watchSide == 1 ? "Watch BUY > " : "Watch SELL < ") + f_price(watchGuard) : "—")

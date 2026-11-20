@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class Strict(BaseModel):
@@ -17,7 +17,7 @@ FRAMES = (1, 2, 5)
 LADDER = "profit_ladder_70_30_v1"
 FIXED = "fixed_tp"
 TARGET_POLICY = "base_plus_entry_spread_v1"  # all newly opened Hull tickets, never retrofit saved goals
-LIVE_CONTINUATION = "live_continuation_v1"
+RETIRED_LIVE_TIMING = "live_continuation_v1"
 CLOSE_ONLY = "confirmed_close_only"
 BATCH_ENTRY_POLICY = "first_eligible_while_flat_v1"
 # Removed in Hull only. Older full-file demo configs may still contain the keys.
@@ -79,15 +79,20 @@ class Limits(Strict):
 
 
 class HullConfig(Strict):
-    entry_timing: Literal["live_continuation_v1", "confirmed_close_only"] = (
-        LIVE_CONTINUATION
-    )
+    entry_timing: Literal["confirmed_close_only"] = CLOSE_ONLY
     exit_policy: Literal["profit_ladder_70_30_v1", "fixed_tp"] = LADDER
     indicator: Indicator = Indicator()
     limits: Limits = Limits()
     magic: int = Field(26111825, gt=0, lt=2**31)
     enabled: tuple[str, ...] = ("XAUUSD",)
     symbols: dict[str, Profile] = Field(min_length=1)
+
+    @field_validator("entry_timing", mode="before")
+    @classmethod
+    def migrate_retired_live_clock(cls, value):
+        # Old full-file private configs must not reactivate pre-close execution.
+        # Preflight/startup report the migration. No private YAML or ticket state is edited.
+        return CLOSE_ONLY if value == RETIRED_LIVE_TIMING else value
 
     @model_validator(mode="after")
     def valid(self):

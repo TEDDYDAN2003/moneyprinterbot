@@ -1,4 +1,4 @@
-"""Compare the unchanged production Python lane to the archived v2 Pine oracle on identical OHLC.
+"""Compare the production closed-cross lane to the current v4 Pine source on identical OHLC.
 
 Run from a full checkout with bot dependencies installed; the MQ5 shim is checked by check_port.py.
 A chart's one-position fills are deliberately NOT used as broker executions.
@@ -18,15 +18,24 @@ from bot.zones.engine import Bar
 
 def main(path):
     tape = json.loads(Path(path).read_text())
-    if tape.get("policy") == "momentum_retest_v3":
-        raise SystemExit("The scanner remains v2. Generate its oracle from qa/reference.pine, not the v3 chart.")
+    if tape.get("policy") != "bos_half_range_close_v4":
+        raise SystemExit("Use the current v4 chart oracle.")
+    gate_count = 0
     total = 0
     for case in tape["cases"]:
         opts = case["opts"]
         h = Hull(
             1,
             Indicator(
-                hull_len=opts.get("hullLen", 16), swing_len=opts.get("swingLen", 3)
+                hull_len=opts.get("hullLen", 16),
+                swing_len=opts.get("swingLen", 3),
+                atr_length=opts.get("atrLength", 14),
+                pullback_bars=opts.get("pullbackBars", 7),
+                stop="confirmed_pivot"
+                if opts.get("stopMode", "").startswith("Confirmed")
+                else "local_pullback",
+                signal="ema_plan" if opts.get("useEma") else "labels",
+                ema_length=opts.get("emaLength", 200),
             ),
             0.01,
         )
@@ -56,6 +65,7 @@ def main(path):
             kind = {"none": 0, "seed": 1, "choch": 2, "bos": 3}[s.event]
             expected = {
                 "selected": direction,
+                "midRange": s.midpoint,
                 "structureSide": direction
                 if direction and not s.veto(direction, b.c)
                 else 0,
@@ -77,32 +87,25 @@ def main(path):
             # Exact comparisons: structure levels are copied OHLC wicks, not fitted floats.
             for key, value in expected.items():
                 assert p[key] == value, (case["name"], i, key, value, p[key])
-            # Independent, hand-specified acceptance observations (not generated from the ports).
-            if case["name"].startswith("protected-"):
-                d = -1 if "sell" in case["name"] else 1
-                if i in (45, 92):
-                    assert (
-                        r.entry_side
-                        == p["selected"]
-                        == p["structureSide"]
-                        == p["suggestion"]
-                        == d
-                    )
-                    assert s.bias == d and s.event == ("choch" if i == 45 else "bos")
-                if i == 46:
-                    touch = case["name"].endswith("touch")
-                    assert p["filledSide"] == (0 if touch else d) and p[
-                        "openVetoCount"
-                    ] == int(touch)
-                if i == 92:
-                    assert (s.origin.price, r.close) == (
-                        (3682.84, 3677.159) if d == -1 else (3677.16, 3682.841)
-                    )
-                if i == 93:
-                    assert p["filledSide"] == d
+            # Bot has no chart-only alternation, side visibility or simulated slot. Compare
+            # its actual stop/EMA/structure gate before occupancy under matching settings.
+            if source == "Either source" and not opts.get("alternateOnly"):
+                gate = r.entry_side
+                if not opts.get("allowShort", True) and gate == -1:
+                    gate = 0
+                assert gate == p["riskQualified"], (
+                    case["name"],
+                    i,
+                    gate,
+                    p["riskQualified"],
+                    r.entry_reason,
+                )
+                gate_count += 1
+            if s.event == "choch":
+                assert not r.entry_side and not s.band(1) and not s.band(-1)
             total += 1
     print(
-        f"PASS: Python / Pine raw and structure decisions, 16 exact fields on {total:,} closed bars; named regression and frozen-quote vetoes."
+        f"PASS: Python / Pine raw and structure decisions, 17 exact fields on {total:,} closed bars; {gate_count:,} comparable stop/EMA/entry decisions."
     )
 
 
