@@ -283,7 +283,7 @@ class Desk:
             ):
                 raise Block("same_side_batch_open")
             raise Block("symbol_busy_or_batch_changed")
-        if stage == "first_plan":
+        if stage == "first_plan" or (stage == "tick_reprice" and not expected):
             self._check_flat_at_trigger(name, d, time.time())
         i = mt.symbol_info(name)
         grid = Grid.from_info(i)
@@ -600,16 +600,27 @@ class Desk:
         expected = set()
         n = None
         sent = 0
+        recheck = None  # one bounded *unsent* reprice per leg, never a send retry
         try:
             while True:
                 left, plan, q, i = self.prepare(
                     name,
                     d,
                     window,
-                    "first_plan" if n is None else "next_leg",
+                    "tick_reprice"
+                    if recheck is not None
+                    else "first_plan"
+                    if n is None
+                    else "next_leg",
                     expected,
                     None if n is None else n - sent,
                 )
+                if recheck is None:
+                    base_bid, base_ask = q.bid, q.ask
+                    base_grid = Grid.from_info(i)
+                    tolerance = base_grid.tick * (1 + 1e-9)
+                elif (q.bid, q.ask) != recheck or Grid.from_info(i) != base_grid:
+                    raise Block("final_quote_or_safety_changed")
                 if n is None:
                     n = left
                     self.emit(
@@ -666,7 +677,13 @@ class Desk:
                 _, again, q2, _ = self.prepare(
                     name, d, window, "pre_send", expected, n - sent
                 )
-                if again != plan or (q.bid, q.ask) != (q2.bid, q2.ask):
+                # Remote one-tick tolerance, anchored to the ORIGINAL quote for this
+                # leg. Both sides must fit, AND the broker-checked plan must still match.
+                checked_prices = (q2.bid, q2.ask)
+                if (
+                    again != plan
+                    or max(abs(q2.bid - base_bid), abs(q2.ask - base_ask)) > tolerance
+                ):
                     raise Block("quote_or_plan_changed")
                 self.state["manual_hold"] = {
                     "symbol": name,
@@ -678,15 +695,28 @@ class Desk:
                 self.account()
                 try:
                     q3, checked = self._entry_quote(name, window, "final_send")
+                    final_prices = (q3.bid, q3.ask)
+                    if (
+                        self.kill.exists()
+                        or max(abs(q3.bid - base_bid), abs(q3.ask - base_ask))
+                        > tolerance
+                        or (recheck is not None and final_prices != checked_prices)
+                    ):
+                        raise Block("final_quote_or_safety_changed")
                 except Block:
-                    # No send has happened on this leg. Do not requeue after a precheck.
+                    # No send has happened on this leg. Do not requeue after a veto.
                     self.state.pop("manual_hold")
                     self.persist()
                     raise
-                if self.kill.exists() or (q3.bid, q3.ask) != (q.bid, q.ask):
-                    self.state.pop("manual_hold")
+                if final_prices != checked_prices:
+                    # One tick can still cross a spread cap, structure edge, stop or
+                    # funding limit. Rebuild and broker-check the actual new request
+                    # once, at this exact quote, on the same signal/deadline. Never
+                    # edit the price of an already checked request and send it blind.
+                    recheck = final_prices
+                    self.state.pop("manual_hold")  # no send was made
                     self.persist()
-                    raise Block("final_quote_or_safety_changed")
+                    continue
                 res = self.mt.order_send(req)
                 self.emit(
                     "demo_result",
@@ -706,6 +736,7 @@ class Desk:
                     return status + "_manual_hold"
                 expected.add(ticket)
                 sent += 1
+                recheck = None
                 self.state.pop("manual_hold")
                 self.persist()
                 if sent == n:
