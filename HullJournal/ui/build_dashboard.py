@@ -29,6 +29,13 @@ def js(obj):
 s = (
     (assets / "page.tpl")
     .read_text(encoding="utf8")
+    .replace(
+        "__MARKET_SECTION__", (assets / "market_windows.tpl").read_text(encoding="utf8")
+    )
+    .replace(
+        "__MARKET_DATA__",
+        js(json.loads((assets / "market_windows.json").read_text(encoding="utf8"))),
+    )
     .replace("__STYLE__", (assets / "style.css").read_text(encoding="utf8"))
     .replace(
         "__SCRIPT__",
@@ -36,7 +43,9 @@ s = (
         .read_text(encoding="utf8")
         .replace(
             "/* ANALYTICS_MODULE */",
-            (assets / "analytics.js").read_text(encoding="utf8"),
+            (assets / "analytics.js").read_text(encoding="utf8")
+            + "\n"
+            + (assets / "market_windows.js").read_text(encoding="utf8"),
         ),
     )
     .replace("__SAMPLE__", js(pack))

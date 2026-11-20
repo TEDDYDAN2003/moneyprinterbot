@@ -1,0 +1,649 @@
+{
+  "start": "2026-09-01",
+  "end": "2026-10-31",
+  "markets": [
+    {
+      "key": "JP225",
+      "symbol": "JP225m",
+      "base": "Nikkei 225 · Japan",
+      "kind": "Indices",
+      "aliases": [
+        "JP 225",
+        "JP225",
+        "JP225m",
+        "Japan 225",
+        "NIKKEI"
+      ],
+      "stats": {
+        "Asia-Pacific": {
+          "n": 4510,
+          "days": 52,
+          "range": 12.8415,
+          "spread": 0.4873
+        },
+        "Frankfurt open": {
+          "n": 528,
+          "days": 44,
+          "range": 10.8602,
+          "spread": 0.4896
+        },
+        "London": {
+          "n": 2574,
+          "days": 44,
+          "range": 10.3207,
+          "spread": 0.4802
+        },
+        "London + New York": {
+          "n": 2171,
+          "days": 44,
+          "range": 13.1299,
+          "spread": 0.4773
+        },
+        "New York": {
+          "n": 2488,
+          "days": 44,
+          "range": 7.5446,
+          "spread": 0.4769
+        },
+        "New York open": {
+          "n": 528,
+          "days": 44,
+          "range": 18.8507,
+          "spread": 0.4769
+        },
+        "Tokyo open": {
+          "n": 528,
+          "days": 44,
+          "range": 23.6998,
+          "spread": 0.5193
+        }
+      }
+    },
+    {
+      "key": "DE40 / DE30",
+      "symbol": "DE30m",
+      "base": "DAX · Germany",
+      "kind": "Indices",
+      "aliases": [
+        "DE30",
+        "DE30m",
+        "DE40",
+        "DE40m",
+        "GER30",
+        "GER40",
+        "Germany 30",
+        "Germany 40"
+      ],
+      "stats": {
+        "Asia-Pacific": {
+          "n": 4609,
+          "days": 52,
+          "range": 3.9473,
+          "spread": 0.276
+        },
+        "Frankfurt open": {
+          "n": 528,
+          "days": 44,
+          "range": 12.2303,
+          "spread": 0.2749
+        },
+        "London": {
+          "n": 2574,
+          "days": 44,
+          "range": 9.1207,
+          "spread": 0.2749
+        },
+        "London + New York": {
+          "n": 2171,
+          "days": 44,
+          "range": 8.8628,
+          "spread": 0.2748
+        },
+        "New York": {
+          "n": 2418,
+          "days": 44,
+          "range": 4.2156,
+          "spread": 0.2757
+        },
+        "New York open": {
+          "n": 528,
+          "days": 44,
+          "range": 10.5835,
+          "spread": 0.2748
+        },
+        "Tokyo open": {
+          "n": 522,
+          "days": 44,
+          "range": 4.7546,
+          "spread": 0.2761
+        }
+      }
+    },
+    {
+      "key": "US500",
+      "symbol": "US500m",
+      "base": "S&P 500 · US",
+      "kind": "Indices",
+      "aliases": [
+        "SPX500",
+        "US 500",
+        "US SPX 500",
+        "US500",
+        "US500m"
+      ],
+      "stats": {
+        "Asia-Pacific": {
+          "n": 4776,
+          "days": 52,
+          "range": 2.9478,
+          "spread": 0.5192
+        },
+        "Frankfurt open": {
+          "n": 528,
+          "days": 44,
+          "range": 4.4914,
+          "spread": 0.5194
+        },
+        "London": {
+          "n": 2573,
+          "days": 44,
+          "range": 4.2097,
+          "spread": 0.5192
+        },
+        "London + New York": {
+          "n": 2171,
+          "days": 44,
+          "range": 7.0358,
+          "spread": 0.5189
+        },
+        "New York": {
+          "n": 2516,
+          "days": 44,
+          "range": 5.0211,
+          "spread": 0.5188
+        },
+        "New York open": {
+          "n": 528,
+          "days": 44,
+          "range": 9.8413,
+          "spread": 0.519
+        },
+        "Tokyo open": {
+          "n": 528,
+          "days": 44,
+          "range": 3.8941,
+          "spread": 0.5192
+        }
+      }
+    },
+    {
+      "key": "NAS100USD",
+      "symbol": "USTEC_x100m",
+      "base": "Nasdaq-100 · US",
+      "kind": "Indices",
+      "aliases": [
+        "NAS100",
+        "NAS100USD",
+        "US100",
+        "USTEC",
+        "USTEC_x100m",
+        "USTECm"
+      ],
+      "stats": {
+        "Asia-Pacific": {
+          "n": 4332,
+          "days": 48,
+          "range": 5.5986,
+          "spread": 0.3766
+        },
+        "Frankfurt open": {
+          "n": 480,
+          "days": 40,
+          "range": 7.2593,
+          "spread": 0.3772
+        },
+        "London": {
+          "n": 2382,
+          "days": 40,
+          "range": 6.7369,
+          "spread": 0.3775
+        },
+        "London + New York": {
+          "n": 1931,
+          "days": 40,
+          "range": 10.9624,
+          "spread": 0.3771
+        },
+        "New York": {
+          "n": 2332,
+          "days": 40,
+          "range": 6.7466,
+          "spread": 0.3755
+        },
+        "New York open": {
+          "n": 480,
+          "days": 40,
+          "range": 17.2201,
+          "spread": 0.3776
+        },
+        "Tokyo open": {
+          "n": 480,
+          "days": 40,
+          "range": 7.1994,
+          "spread": 0.3761
+        }
+      }
+    },
+    {
+      "key": "US30",
+      "symbol": "US30m",
+      "base": "Dow Jones · US",
+      "kind": "Indices",
+      "aliases": [
+        "US Wall Street 30",
+        "US30",
+        "US30m",
+        "Wall Street 30"
+      ],
+      "stats": {
+        "Asia-Pacific": {
+          "n": 4737,
+          "days": 52,
+          "range": 2.8544,
+          "spread": 0.2493
+        },
+        "Frankfurt open": {
+          "n": 528,
+          "days": 44,
+          "range": 5.5594,
+          "spread": 0.2492
+        },
+        "London": {
+          "n": 2574,
+          "days": 44,
+          "range": 5.1798,
+          "spread": 0.2493
+        },
+        "London + New York": {
+          "n": 2171,
+          "days": 44,
+          "range": 8.3871,
+          "spread": 0.1941
+        },
+        "New York": {
+          "n": 2523,
+          "days": 44,
+          "range": 5.2006,
+          "spread": 0.1932
+        },
+        "New York open": {
+          "n": 528,
+          "days": 44,
+          "range": 13.0856,
+          "spread": 0.1921
+        },
+        "Tokyo open": {
+          "n": 527,
+          "days": 44,
+          "range": 3.5193,
+          "spread": 0.2494
+        }
+      }
+    },
+    {
+      "key": "XAUUSD",
+      "symbol": "XAUUSDm",
+      "base": "Gold · global / USD",
+      "kind": "Metals",
+      "aliases": [
+        "GOLD",
+        "XAUUSD",
+        "XAUUSDm"
+      ],
+      "stats": {
+        "Asia-Pacific": {
+          "n": 4779,
+          "days": 52,
+          "range": 8.733,
+          "spread": 0.5873
+        },
+        "Frankfurt open": {
+          "n": 528,
+          "days": 44,
+          "range": 9.7822,
+          "spread": 0.5877
+        },
+        "London": {
+          "n": 2580,
+          "days": 44,
+          "range": 8.883,
+          "spread": 0.5878
+        },
+        "London + New York": {
+          "n": 2172,
+          "days": 44,
+          "range": 13.6093,
+          "spread": 0.5906
+        },
+        "New York": {
+          "n": 2506,
+          "days": 44,
+          "range": 7.556,
+          "spread": 0.5873
+        },
+        "New York open": {
+          "n": 528,
+          "days": 44,
+          "range": 16.6425,
+          "spread": 0.5899
+        },
+        "Tokyo open": {
+          "n": 528,
+          "days": 44,
+          "range": 10.7757,
+          "spread": 0.5875
+        }
+      }
+    },
+    {
+      "key": "GBPJPY",
+      "symbol": "GBPJPYm",
+      "base": "Sterling / yen · UK & Japan",
+      "kind": "FX",
+      "aliases": [
+        "GBPJPY",
+        "GBPJPYm"
+      ],
+      "stats": {
+        "Asia-Pacific": {
+          "n": 4940,
+          "days": 52,
+          "range": 2.679,
+          "spread": 1.0507
+        },
+        "Frankfurt open": {
+          "n": 528,
+          "days": 44,
+          "range": 4.3042,
+          "spread": 1.0485
+        },
+        "London": {
+          "n": 2580,
+          "days": 44,
+          "range": 3.7514,
+          "spread": 1.0496
+        },
+        "London + New York": {
+          "n": 2172,
+          "days": 44,
+          "range": 3.9295,
+          "spread": 1.0489
+        },
+        "New York": {
+          "n": 2564,
+          "days": 44,
+          "range": 2.0012,
+          "spread": 1.0533
+        },
+        "New York open": {
+          "n": 528,
+          "days": 44,
+          "range": 4.6305,
+          "spread": 1.0492
+        },
+        "Off-session": {
+          "n": 219,
+          "days": 23,
+          "range": 0.7443,
+          "spread": 10.4292
+        },
+        "Tokyo open": {
+          "n": 528,
+          "days": 44,
+          "range": 3.7108,
+          "spread": 1.0502
+        }
+      }
+    },
+    {
+      "key": "EURUSD",
+      "symbol": "EURUSDm",
+      "base": "Euro / dollar · euro area & US",
+      "kind": "FX",
+      "aliases": [
+        "EURUSD",
+        "EURUSDm"
+      ],
+      "stats": {
+        "Asia-Pacific": {
+          "n": 4833,
+          "days": 52,
+          "range": 1.5996,
+          "spread": 0.7109
+        },
+        "Frankfurt open": {
+          "n": 528,
+          "days": 44,
+          "range": 3.0335,
+          "spread": 0.7061
+        },
+        "London": {
+          "n": 2580,
+          "days": 44,
+          "range": 2.7621,
+          "spread": 0.7051
+        },
+        "London + New York": {
+          "n": 2172,
+          "days": 44,
+          "range": 3.3914,
+          "spread": 0.7089
+        },
+        "New York": {
+          "n": 2534,
+          "days": 44,
+          "range": 1.8661,
+          "spread": 0.7064
+        },
+        "New York open": {
+          "n": 528,
+          "days": 44,
+          "range": 3.8504,
+          "spread": 0.7069
+        },
+        "Off-session": {
+          "n": 223,
+          "days": 23,
+          "range": 0.7799,
+          "spread": 4.1388
+        },
+        "Tokyo open": {
+          "n": 528,
+          "days": 44,
+          "range": 1.8291,
+          "spread": 0.7057
+        }
+      }
+    },
+    {
+      "key": "GBPUSD",
+      "symbol": "GBPUSDm",
+      "base": "Sterling / dollar · UK & US",
+      "kind": "FX",
+      "aliases": [
+        "GBPUSD",
+        "GBPUSDm"
+      ],
+      "stats": {
+        "Asia-Pacific": {
+          "n": 4879,
+          "days": 52,
+          "range": 1.7195,
+          "spread": 0.7502
+        },
+        "Frankfurt open": {
+          "n": 528,
+          "days": 44,
+          "range": 3.2814,
+          "spread": 0.7496
+        },
+        "London": {
+          "n": 2580,
+          "days": 44,
+          "range": 3.0244,
+          "spread": 0.7495
+        },
+        "London + New York": {
+          "n": 2172,
+          "days": 44,
+          "range": 3.7635,
+          "spread": 0.7494
+        },
+        "New York": {
+          "n": 2534,
+          "days": 44,
+          "range": 2.0194,
+          "spread": 0.7497
+        },
+        "New York open": {
+          "n": 528,
+          "days": 44,
+          "range": 4.1224,
+          "spread": 0.7496
+        },
+        "Off-session": {
+          "n": 240,
+          "days": 23,
+          "range": 0.7107,
+          "spread": 5.1727
+        },
+        "Tokyo open": {
+          "n": 528,
+          "days": 44,
+          "range": 1.9928,
+          "spread": 0.7495
+        }
+      }
+    },
+    {
+      "key": "USDJPY",
+      "symbol": "USDJPYm",
+      "base": "Dollar / yen · US & Japan",
+      "kind": "FX",
+      "aliases": [
+        "USDJPY",
+        "USDJPYm"
+      ],
+      "stats": {
+        "Asia-Pacific": {
+          "n": 4955,
+          "days": 52,
+          "range": 3.034,
+          "spread": 0.6344
+        },
+        "Frankfurt open": {
+          "n": 528,
+          "days": 44,
+          "range": 4.0896,
+          "spread": 0.634
+        },
+        "London": {
+          "n": 2580,
+          "days": 44,
+          "range": 3.5381,
+          "spread": 0.634
+        },
+        "London + New York": {
+          "n": 2172,
+          "days": 44,
+          "range": 4.0027,
+          "spread": 0.6342
+        },
+        "New York": {
+          "n": 2554,
+          "days": 44,
+          "range": 2.3095,
+          "spread": 0.6353
+        },
+        "New York open": {
+          "n": 528,
+          "days": 44,
+          "range": 4.6447,
+          "spread": 0.6345
+        },
+        "Off-session": {
+          "n": 191,
+          "days": 23,
+          "range": 1.1373,
+          "spread": 3.9745
+        },
+        "Tokyo open": {
+          "n": 528,
+          "days": 44,
+          "range": 4.3353,
+          "spread": 0.6339
+        }
+      }
+    },
+    {
+      "key": "AUDUSD",
+      "symbol": "AUDUSDm",
+      "base": "Aussie / dollar · Australia & US",
+      "kind": "FX",
+      "aliases": [
+        "AUDUSD",
+        "AUDUSDm"
+      ],
+      "stats": {
+        "Asia-Pacific": {
+          "n": 4749,
+          "days": 52,
+          "range": 2.4208,
+          "spread": 1.2815
+        },
+        "Frankfurt open": {
+          "n": 528,
+          "days": 44,
+          "range": 3.4297,
+          "spread": 1.2813
+        },
+        "London": {
+          "n": 2579,
+          "days": 44,
+          "range": 2.945,
+          "spread": 1.2805
+        },
+        "London + New York": {
+          "n": 2171,
+          "days": 44,
+          "range": 3.8412,
+          "spread": 1.2807
+        },
+        "New York": {
+          "n": 2464,
+          "days": 44,
+          "range": 2.008,
+          "spread": 1.2805
+        },
+        "New York open": {
+          "n": 528,
+          "days": 44,
+          "range": 4.454,
+          "spread": 1.2812
+        },
+        "Off-session": {
+          "n": 232,
+          "days": 23,
+          "range": 0.9264,
+          "spread": 6.4899
+        },
+        "Tokyo open": {
+          "n": 528,
+          "days": 44,
+          "range": 2.857,
+          "spread": 1.2805
+        }
+      }
+    }
+  ]
+}
