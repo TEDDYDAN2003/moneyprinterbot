@@ -616,7 +616,16 @@ class Desk:
                 _, again, q2, _ = self.prepare(
                     name, d, window, "pre_send", expected, n - sent
                 )
-                if again != plan or (q.bid, q.ask) != (q2.bid, q2.ask):
+                # Allow up to 1 broker tick of quote movement between first_plan and
+                # pre_send: fast-moving instruments (e.g. US30) tick during the
+                # order_check round-trip, but the plan SL/TP (chart-derived, grid-
+                # snapped) are still valid and the broker fills at market anyway.
+                _tick_tol = Grid.from_info(i).tick * (1 + 1e-9)
+                _quote_drifted = (
+                    abs(q2.bid - q.bid) > _tick_tol
+                    or abs(q2.ask - q.ask) > _tick_tol
+                )
+                if again != plan or _quote_drifted:
                     raise Block("quote_or_plan_changed")
                 self.state["manual_hold"] = {
                     "symbol": name,
@@ -632,10 +641,18 @@ class Desk:
                     self.state.pop("manual_hold")
                     self.persist()
                     raise
-                if self.kill.exists() or (q3.bid, q3.ask) != (q.bid, q.ask):
+                _final_drifted = (
+                    abs(q3.bid - q.bid) > _tick_tol
+                    or abs(q3.ask - q.ask) > _tick_tol
+                )
+                if self.kill.exists() or _final_drifted:
                     self.state.pop("manual_hold")
                     self.persist()
                     raise Block("final_quote_or_safety_changed")
+                # Refresh the market price in the request so the broker does not
+                # reject due to a stale price when the quote moved within tolerance.
+                buy = d.side == 1
+                req = dict(req, price=q3.ask if buy else q3.bid)
                 res = self.mt.order_send(req)
                 self.emit(
                     "demo_result",
