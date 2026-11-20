@@ -336,4 +336,8 @@ hull:
     USDJPY:   {aliases: [USDJPYm, USDJPY], lots: 1.3, target_usd: 10, rate: slow, pip_size: 0.01, max_spread: 0.025}
     NAS100USD: {broker_symbol: USTEC_x100m, aliases: [NAS100USD, NAS100, US100, USTEC, USTECm, USTEC_x100m], lots: 1, target_usd: 10, rate: slow, pip_size: 1, max_spread: 3.0}
     US30:     {broker_symbol: US30m, aliases: [US30, US30m, 'Wall Street 30', 'US Wall Street 30'], lots: 1, target_usd: 10, rate: slow, pip_size: 1, max_spread: 3.0}
+    US500:    {broker_symbol: US500m, aliases: [US500, US500m, SPX500, 'US SPX 500', 'US 500'], lots: 1, target_usd: 10, rate: slow, pip_size: 1, max_spread: 1.0}
+    DE40:     {broker_symbol: DE30m, aliases: [DE40, DE40m, DE30, DE30m, GER40, GER30, 'Germany 40', 'Germany 30'], lots: 1, target_usd: 10, rate: slow, pip_size: 1, max_spread: 2.0}
+    DE30:     {broker_symbol: DE30m, aliases: [DE30, DE30m, DE40, DE40m, GER40, GER30, 'Germany 40', 'Germany 30'], lots: 1, target_usd: 10, rate: slow, pip_size: 1, max_spread: 2.0}
+    JP225:    {broker_symbol: JP225m, aliases: [JP225, JP225m, NIKKEI, 'Japan 225', 'JP 225'], lots: 3, target_usd: 10, rate: slow, pip_size: 1, max_spread: 6.0}
     1HZ100V:   {aliases: [1HZ100V, 'Volatility 100 (1s) Index'], session: continuous, lots: 0.01, target_usd: 10, rate: slow, pip_size: 0.01}
