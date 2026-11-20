@@ -17,7 +17,7 @@ HULL START XAUUSD:0.09:10:slow EURUSD:0.01:10:slow GBPUSD:0.01:10:slow
 
 ## Trade journal and chart indicators
 
-**[Download both v4 chart indicators](downloads/Hull-Chart-Indicators-v4.zip)** · [Shared scanner/chart rules and example](docs/HULL_STRUCTURE.md). Only a fresh closed trend cross in a confirmed BOS half-range can qualify. CHoCH changes bias only: no entry, watch or retest order.
+**[Download both v4 chart indicators](downloads/Hull-Chart-Indicators-v4.zip)** · [Shared scanner/chart rules and example](docs/HULL_STRUCTURE.md). The default view is **Valid suggestions only**. For reference, **All Hull crosses (debug)** marks upward/downward crosses on Hull B with green/red × symbols instead of text. Only a fresh closed trend cross in a confirmed BOS half-range can qualify. CHoCH changes bias only: no entry, watch or retest order.
 
 **[Download the Windows journal and MT5 indicator kit](downloads/Hull-Ledger-Analytics-and-MT5.zip).** Neither tool places orders or changes how the scanner trades.
 

@@ -1,6 +1,7 @@
 //@version=6
 indicator("FC Hull Either 16 · BOS Half-Range v4", shorttitle="FC Range 4", overlay=true, max_bars_back=2100, max_lines_count=300, max_labels_count=300)
 
+// Chart display v4.01: reference crosses on Hull B, no entry captions in debug.
 // Standalone chart study, not an MT5 connection. Native chart candles only.
 // Shared entry policy: bos_half_range_close_v4. Closed trend crosses only.
 // CHoCH changes the protected structure; it NEVER creates an entry, watch or retest limit.
@@ -12,8 +13,8 @@ const string G_RISK = "5 · Chart stops and exits"
 const string G_MONEY = "6 · Chart account and costs"
 const string G_PLAN = "7 · Chart plans and statistics"
 
-string labelMode = input.string("Valid suggestions only", "Labels and alerts", options=["Valid suggestions only", "Structure-qualified crosses", "Simulated fills only", "All Hull crosses (debug)"], group=G_VIEW, tooltip="Valid: a fresh closed trend cross in a BOS-proven half-range with chart stop and slot checks. Structure: band crosses only. Fills: next-open chart executions. Raw: diagnostics, not entries. CHoCH is context only in all entry views.")
-bool showCross = input.bool(true, "Show signal labels", group=G_VIEW, tooltip="Hides the marks only. Alert conditions still use the chosen view. Debug has its own explicitly raw alert.")
+string labelMode = input.string("Valid suggestions only", "Labels and alerts", options=["Valid suggestions only", "Structure-qualified crosses", "Simulated fills only", "All Hull crosses (debug)"], group=G_VIEW, tooltip="Valid: a fresh closed trend cross in a BOS-proven half-range with chart stop and slot checks. Structure: band crosses only. Fills: next-open chart executions. All Hull crosses: green/red crosses on Hull B for reference, not entries. CHoCH is context only in all entry views.")
+bool showCross = input.bool(true, "Show signal labels", group=G_VIEW, tooltip="Hides the marks only. In All Hull crosses, a green × is up and a red × is down; amber above the bar means the sources conflict. Alerts still use the chosen view.")
 bool showBands = input.bool(false, "Draw active BUY and SELL bands", group=G_VIEW, tooltip="Only bullish discount or bearish premium is an entry band. No opposite zone or retest plan.")
 int hullLen = input.int(16, "Hull length", minval=2, maxval=500, group=G_HULL)
 string sourceMode = input.string("Either source", "Signal source mode", options=["Either source", "Directional", "Low only", "High only"], group=G_HULL, tooltip="Either: a strict cross of the Low or High Hull A. Same-direction crosses on one close count once. Opposed crosses on the same close produce no signal.")
@@ -448,9 +449,10 @@ fill(sp1, sp2, color=color.new(#C85866, 90), title="SELL structure band", fillga
 bool rawView = labelMode == "All Hull crosses (debug)"
 plotshape(showCross and not rawView and displaySide == 1, title="BUY · selected view", style=shape.labelup, location=location.belowbar, color=#15803D, text="BUY", textcolor=color.white, size=size.tiny)
 plotshape(showCross and not rawView and displaySide == -1, title="SELL · selected view", style=shape.labeldown, location=location.abovebar, color=#C6354C, text="SELL", textcolor=color.white, size=size.tiny)
-plotshape(showCross and labelMode == "All Hull crosses (debug)" and conflict, title="Debug: conflict (no signal)", style=shape.xcross, location=location.abovebar, color=#C47B12, size=size.tiny)
-plotshape(showCross and rawView and displaySide == 1, title="Raw upward Hull cross", style=shape.labelup, location=location.belowbar, color=#64748B, text="RAW+", textcolor=color.white, size=size.tiny)
-plotshape(showCross and rawView and displaySide == -1, title="Raw downward Hull cross", style=shape.labeldown, location=location.abovebar, color=#64748B, text="RAW−", textcolor=color.white, size=size.tiny)
+// Put the reference mark on B at the confirming bar, not at a guessed intrabar crossing price.
+plotshape(showCross and rawView and conflict, title="Debug: conflict (no signal)", style=shape.xcross, location=location.abovebar, color=#C47B12, size=size.tiny)
+plotshape(showCross and rawView and displaySide == 1 ? b : na, title="Upward Hull cross (reference)", style=shape.xcross, location=location.absolute, color=#15803D, size=size.tiny)
+plotshape(showCross and rawView and displaySide == -1 ? b : na, title="Downward Hull cross (reference)", style=shape.xcross, location=location.absolute, color=#C6354C, size=size.tiny)
 alertcondition(rawView and displaySide != 0, title="Raw Hull cross · diagnostic only", message="Raw Hull cross only | {{ticker}} {{interval}} | not an entry")
 alertcondition(not rawView and displaySide == 1, title="Hull BUY · selected view", message="Hull BUY | {{ticker}} | {{interval}} | selected chart view | bar close {{close}}")
 alertcondition(not rawView and displaySide == -1, title="Hull SELL · selected view", message="Hull SELL | {{ticker}} | {{interval}} | selected chart view | bar close {{close}}")

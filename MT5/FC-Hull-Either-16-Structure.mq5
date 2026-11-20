@@ -1,6 +1,6 @@
 // FC Hull Either 16 | Market Structure Suggestions | MT5 custom indicator (not an EA).
 // No order, account, network or file APIs. All P/L and occupancy below are chart simulations.
-#property version "4.00"
+#property version "4.01"
 #property description "BOS-proven half-range trend entries at candle close. CHoCH is context only, never a reversal order."
 #property indicator_chart_window
 #property indicator_buffers 48
@@ -162,7 +162,7 @@ input int InPlanBars=15;                    // Plan length in bars
 input int InKeepPlans=40;                   // Max recent plans to draw
 input bool InTable=true;                    // Show simulation panel
 input ENUM_BASE_CORNER InCorner=CORNER_RIGHT_UPPER; // Panel corner
-input int InTextCount=100;                  // Recent BUY/SELL text captions (0 = arrows only)
+input int InTextCount=100;                  // Recent BUY/SELL captions (never used in reference view)
 
 // BEGIN PORTABLE CALCULATION
 // Chronological indices: oldest = 0. StepClosed is called ONCE per confirmed candle.
@@ -416,8 +416,11 @@ int OnInit(){
         Bind(33,Off33)&&Bind(34,Off34)&&Bind(35,MidCode)&&Bind(36,Off36)&&Bind(37,Off37)&&Bind(38,Off38)&&Bind(39,Off39)&&Bind(40,Off40)&&Bind(41,Off41)&&Bind(42,Off42)&&Bind(43,Off43)&&Bind(44,FillPrice)&&
         Bind(45,WorkH,INDICATOR_CALCULATIONS)&&Bind(46,WorkL,INDICATOR_CALCULATIONS)&&Bind(47,WorkB,INDICATOR_CALCULATIONS)))return INIT_FAILED;
    for(int j=0;j<39;j++){PlotIndexSetDouble(j,PLOT_EMPTY_VALUE,j<5?0.0:EMPTY_VALUE);PlotIndexSetInteger(j,PLOT_SHOW_DATA,(j>=5 && j<=26)||j==29||j==38);}
-   PlotIndexSetInteger(13,PLOT_ARROW,233);PlotIndexSetInteger(13,PLOT_ARROW_SHIFT,8);
-   PlotIndexSetInteger(14,PLOT_ARROW,234);PlotIndexSetInteger(14,PLOT_ARROW_SHIFT,-8);
+   // Wingdings 251 = ×. Use the same two public marker buffers; change only their presentation.
+   bool reference=(InView==FC_RAW);
+   PlotIndexSetInteger(13,PLOT_ARROW,reference?251:233);PlotIndexSetInteger(13,PLOT_ARROW_SHIFT,reference?0:8);
+   PlotIndexSetInteger(14,PLOT_ARROW,reference?251:234);PlotIndexSetInteger(14,PLOT_ARROW_SHIFT,reference?0:-8);
+   if(reference){PlotIndexSetString(13,PLOT_LABEL,"Upward Hull cross (reference)");PlotIndexSetString(14,PLOT_LABEL,"Downward Hull cross (reference)");}
    PlotIndexSetInteger(15,PLOT_ARROW,251);PlotIndexSetInteger(15,PLOT_ARROW_SHIFT,-12);
    gridTick=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE);if(gridTick<=0)gridTick=_Point;
    if(gridTick<=0 || PeriodSeconds(_Period)<=0)return INIT_FAILED;
@@ -446,8 +449,10 @@ void PaintBar(const int i,const double h,const double l,const FCBar &r,const boo
    HullB[i]=r.b;HullInk[i]=(last==1?1:last==-1?2:0);LineH[i]=InChannel?r.hi:EMPTY_VALUE;LineL[i]=InChannel?r.lo:EMPTY_VALUE;
    LineEMA[i]=InShowEMA&&InUseEMA?r.ema:EMPTY_VALUE;
    BandBL[i]=InBands?r.buyLo:EMPTY_VALUE;BandBH[i]=InBands?r.buyHi:EMPTY_VALUE;BandSL[i]=InBands?r.sellLo:EMPTY_VALUE;BandSH[i]=InBands?r.sellHi:EMPTY_VALUE;
-   BuyArrow[i]=InMarks&&r.display==1?l:EMPTY_VALUE;SellArrow[i]=InMarks&&r.display==-1?h:EMPTY_VALUE;
-   ConflictMark[i]=InMarks&&InView==FC_RAW&&r.conflict!=0?h:EMPTY_VALUE;
+   bool marks=InMarks&&closed;
+   BuyArrow[i]=marks&&r.display==1?(InView==FC_RAW?r.b:l):EMPTY_VALUE;
+   SellArrow[i]=marks&&r.display==-1?(InView==FC_RAW?r.b:h):EMPTY_VALUE;
+   ConflictMark[i]=marks&&InView==FC_RAW&&r.conflict!=0?h:EMPTY_VALUE;
    RawCode[i]=r.raw;StructureCode[i]=r.structure;ValidCode[i]=r.valid;FillCode[i]=r.filled;ConflictCode[i]=r.conflict;
    // Public v3 indices stay inert. There is no watch, staging state, order or retest fill.
    Off33[i]=EMPTY_VALUE;Off34[i]=EMPTY_VALUE;MidCode[i]=r.mid;
@@ -458,7 +463,7 @@ void PaintBar(const int i,const double h,const double l,const FCBar &r,const boo
 void Remember(const int i,const datetime t,const double h,const double l,const FCBar &r){
    if(InPlans && r.filled!=0){planRing[planNext].bar=i;planRing[planNext].ep=r.fillPx;planRing[planNext].sl=r.fillSL;planRing[planNext].tp=r.fillTP;
       planNext=(planNext+1)%InKeepPlans;if(planCount<InKeepPlans)planCount++;}
-   if(InMarks&&InTextCount>0&&r.display!=0){double pad=MathMax(5*_Point,(r.atr!=EMPTY_VALUE?r.atr:h-l)*0.23);
+   if(InMarks&&InView!=FC_RAW&&InTextCount>0&&r.display!=0){double pad=MathMax(5*_Point,(r.atr!=EMPTY_VALUE?r.atr:h-l)*0.23);
       textRing[textNext].at=t;textRing[textNext].dir=r.display;textRing[textNext].px=r.display==1?l-pad:h+pad;
       textNext=(textNext+1)%InTextCount;if(textCount<InTextCount)textCount++;}
 }
@@ -476,7 +481,7 @@ void PlanLine(const string n,const string tag,const datetime a,const datetime b,
 }
 void DrawRecent(const datetime &tm[],const int size){
    for(int j=0;j<textCount;j++)TextAt(prefix+"m"+IntegerToString(j),textRing[j].at,textRing[j].px,
-      InView==FC_RAW?(textRing[j].dir>0?"RAW+":"RAW-"):(textRing[j].dir>0?"BUY":"SELL"),textRing[j].dir>0?clrMediumSeaGreen:clrTomato,textRing[j].dir>0?ANCHOR_UPPER:ANCHOR_LOWER);
+      textRing[j].dir>0?"BUY":"SELL",textRing[j].dir>0?clrMediumSeaGreen:clrTomato,textRing[j].dir>0?ANCHOR_UPPER:ANCHOR_LOWER);
    for(int j=0;j<planCount;j++){
       int k=planRing[j].bar,idx=k+InPlanBars;datetime a=tm[k],b=tm[(int)MathMin(idx,size-1)];
       // Future projection only; replace projected endpoints with actual bar times as they arrive.

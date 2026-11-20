@@ -1,4 +1,4 @@
-FC HULL V4 | OFFLINE RELEASE CHECKS
+FC HULL V4 · CHART DISPLAY 4.01 | OFFLINE RELEASE CHECKS
 Policy: bos_half_range_close_v4 / confirmed_close_only
 
 All tapes in these checks are synthetic. Repeated scenarios overlap; bar counts
@@ -7,14 +7,20 @@ There was no broker connection or deployment. Not a native TradingView or
 MetaEditor compile. The optional MT5 buffer checker is for local compilation.
 
 Source digests (SHA-256; bot sources live in the full checkout):
-b8107242046efb2e60a882780c4d471b4900cf601ae477ffa4e64b81aac75334  indicators/FC-Hull-Either-16-Structure.pine
-ab4da82e38ee36163634bef7da9d24790aa9e07edd825474d1d5da74edb16b40  MT5/FC-Hull-Either-16-Structure.mq5
+099ed74e85cdabd96e503ed3d12c5c1a938b9351277d3497a86f513117203031  indicators/FC-Hull-Either-16-Structure.pine
+6913336cae88cb1f788601875981b6b62fb2345585acea88be721bded625427a  MT5/FC-Hull-Either-16-Structure.mq5
 f2444d05d3c1e65ac670e168895cf23926481b44ab00fd4778ebc49191b6506a  src/bot/hull/structure.py
 2e37165a2d677bcfa2c626e55340c9e8386beca6f8c688f3e86630120aedd7b7  src/bot/hull/terminal.py
 e4aa76e5dae339fff5b105e08ad38873f5bce24bd2470b11422bc2a47d562136  src/bot/hull/desk.py
 3f9974c152522ea9a9a8c35fe0cbe9462d3ad661a5714e1f2eef91cb19191556  src/bot/hull/signal.py
 
+Reference-view comparison against published v4 (06dfe97):
+All 49 fields of all 28,936 closed-bar decisions were unchanged. The before
+and after oracle JSON files (including the fixtures and scenarios) were byte-identical:
+SHA-256 4d8601652192c75e6fc94c6e7853985da8cd89b3c7fc69a74e88ac745b500184
+
 === PineTS 0.13.1, actual MQ5 calculation in C++17 host, independent rules and Python ===
+PASS Pine: plain up/down reference × on Hull B; no reference captions, forming marks or changes to the valid-view default.
 bos_half_range_close_v4 29 PineTS scenarios 28936 bar decisions 49 fields
 PASS 36 mirrored BOS half-range / CHoCH context-only / later retest rejection / exit paths
 PASS defaults 2494 closed bars
@@ -46,6 +52,7 @@ PASS Simulated fills only 2494 closed bars
 PASS All Hull crosses (debug) 2494 closed bars
 PASS no-reversal-buy 421 closed bars
 PASS no-reversal-sell 421 closed bars
+PASS MT5 chart adapter: reference × glyph, location, captions off, hidden marks, and unchanged other views.
 PASS: actual calculation source, incremental/full replay, no forming-bar marks, no stage popups, no attach/backfill alert. C++ compatibility shim; not a native MT5 compile.
 PASS v4 semantic invariants {'bars': 28936, 'trend-1': 95, 'choch_context_only': 537, 'trend1': 130}
 PASS: Python / Pine raw and structure decisions, 17 exact fields on 28,936 closed bars; 18,960 comparable stop/EMA/entry decisions.
@@ -58,15 +65,15 @@ PASS: Python / Pine raw and structure decisions, 17 exact fields on 28,936 close
 ........................................................................ [ 76%]
 ........................................................................ [ 91%]
 ........................................                                 [100%]
-472 passed in 19.47s
+472 passed in 15.26s
 
 === Journal regressions (local synthetic examples only) ===
 ----------------------------------------------------------------------
-Ran 34 tests in 0.663s
+Ran 34 tests in 0.622s
 
 OK
 
 Tracked config validated: run.mode=paper and entry_timing=confirmed_close_only.
 
-Read v4-cases.csv for two mirrored veto sequences and two positive trend examples.
+Read v4-cases.csv for mirrored veto sequences and positive trend examples.
 Test procedures: README.md in this folder.

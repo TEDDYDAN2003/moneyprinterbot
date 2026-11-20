@@ -61,7 +61,7 @@ Journal: extract the entire kit, read HullJournal/START-HERE.md, and use Start-J
 """
 CHART_INTRO = """MT5: copy MT5/FC-Hull-Either-16-Structure.mq5 to MQL5/Indicators, open THAT file in MetaEditor and compile with F7. Refresh Navigator and attach FC Hull BOS Half-Range v4. Do not paste Pine in MetaEditor.
 
-TradingView: paste indicators/FC-Hull-Either-16-Structure.pine into Pine Editor. Save and add FC Range 4. Select Valid suggestions only. Delete v3 limit-ready alerts and recreate desired v4 alerts.
+TradingView: paste indicators/FC-Hull-Either-16-Structure.pine into Pine Editor. Save and add FC Range 4. Valid suggestions only remains the default. All Hull crosses (debug) now shows plain green/red crosses on Hull B, for reference only. No bot update is needed for this display change. Delete v3 limit-ready alerts and recreate desired v4 alerts.
 
 Rules: docs/HULL_STRUCTURE.md. CHoCH is context only. No reversal watch, no staged limit, no entry on a retest. A new completed trend cross must qualify in a confirmed BOS half-range. The Python scanner uses the same entry policy, bos_half_range_close_v4 and confirmed_close_only, when separately installed. MT5/qa/v4-cases.csv and MT5/qa/v4-verification.txt contain worked test traces and the offline results. A chart installation cannot start or update the bot. Do not replace a running armed scanner or delete its state.
 """
@@ -105,7 +105,7 @@ def main():
     pack(
         ROOT / "downloads/Hull-Chart-Indicators-v4.zip",
         charts,
-        "FC HULL BOS HALF-RANGE V4 | CHARTS ONLY\n\n" + CHART_INTRO,
+        "FC HULL BOS HALF-RANGE V4 | CHART DISPLAY 4.01 | CHARTS ONLY\n\n" + CHART_INTRO,
     )
     pack(
         ROOT / "downloads/Hull-Ledger-Analytics-and-MT5.zip",

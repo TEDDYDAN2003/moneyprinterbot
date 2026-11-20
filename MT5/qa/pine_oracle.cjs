@@ -30,17 +30,45 @@ async function run(bars, opts, live=false) {
   const e = new PineTS({getMarketData:async()=>data,getSymbolInfo:async()=>sym,configure(){}},'QA:FIX','1',data.length); e.setAlertMode('all');
   return e.run(new Indicator(src+'\n'+diag+'\nplot(barstate.isconfirmed ? 1 : 0, "Q:closed")',opts));
 }
+// Inspect the real plotted shapes as well as the engine's numeric diagnostics.
+function checkMarks(ctx, opts, name) {
+  const debug=opts.labelMode==='All Hull crosses (debug)', visible=opts.showCross!==false;
+  const data=k=>ctx.plots[k].data.map(p=>p.value), selected=data('Q:selected'), b=data('Q:b'), shown=data('Q:displaySide');
+  for (const [d,title,label,ink] of [[1,'Upward','BUY','#15803D'],[-1,'Downward','SELL','#C6354C']]) {
+    const cross=ctx.plots[title+' Hull cross (reference)'], trade=ctx.plots[label+' · selected view'];
+    assert.deepEqual([cross.options.shape,cross.options.location,cross.options.color,cross.options.text||''],['shape_xcross','Absolute',ink,''],name+' glyph/style');
+    for (let i=0;i<b.length;i++) {
+      const px=cross.data[i].value;
+      if (visible && debug && selected[i]===d) assert.equal(px,b[i],`${name} ${title} × must be on Hull B @${i}`);
+      else assert(px==null||Number.isNaN(px),`${name} stray reference × @${i}`);
+      assert.equal(!!trade.data[i].value,visible&&!debug&&shown[i]===d,`${name} misplaced entry caption @${i}`);
+    }
+  }
+}
 (async()=>{
+  assert.equal(new Indicator(src).getInputsMeta().find(m=>m.varId==='labelMode').defval,'Valid suggestions only');
   const out = {policy:'bos_half_range_close_v4',keys,fixtures:set.fixtures,cases:[]};
   for (const [name,fixture,opts] of cases) {
     const bars = set.fixtures[fixture], ctx = await run(bars,opts);
     const cols = keys.map(k=>ctx.plots['Q:'+k].data.map(p=>p.value));
     out.cases.push({name,fixture,opts,rows:bars.map((_,i)=>cols.map(c=>c[i]))});
+    checkMarks(ctx,opts,name);
     const valid = ctx.plots['Q:displaySide'].data;
     const debug = opts.labelMode === 'All Hull crosses (debug)';
     const expectedAlerts = valid.flatMap((x,i)=>x.value ? [[i,debug ? 'Raw Hull cross · diagnostic only' : `Hull ${x.value===1?'BUY':'SELL'} · selected view`]] : []);
     assert.deepEqual(ctx.alerts.map(a=>[a.bar_index,a.title]),expectedAlerts,name+' exact alert bars and titles');
     if (debug) assert(ctx.alerts.every(a=>a.message.includes('not an entry')),name+' debug alerts must be explicitly diagnostic');
+    if (name==='All Hull crosses (debug)') {
+      // Both directions would mark this last bar if closed. A changing open bar must not.
+      for (const d of [1,-1]) {
+        const i=valid.findIndex(p=>p.value===d); assert(i>0);
+        const live=await run(bars.slice(0,i+1),opts,true);
+        assert.equal(live.plots['Q:closed'].data[i].value,0);
+        assert.equal(live.plots['Q:selected'].data[i].value,0); checkMarks(live,opts,'forming reference');
+      }
+      const hidden={...opts,showCross:false}, sample=await run(bars.slice(0,140),hidden);
+      assert(sample.alerts.length>0); checkMarks(sample,hidden,'hidden reference marks');
+    }
     if (['no-reversal-buy','no-reversal-sell','protected-buy','protected-sell'].includes(name)) {
       for (const i of (name.startsWith('no-reversal')?[410,418,420]:[45,92,93])) {
         const live = await run(bars.slice(0,i+1),opts,true);
@@ -52,6 +80,7 @@ async function run(bars, opts, live=false) {
       }
     }
   }
+  console.log('PASS Pine: plain up/down reference × on Hull B; no reference captions, forming marks or changes to the valid-view default.');
   fs.writeFileSync(process.argv[4],JSON.stringify(out));
   console.log(out.policy, out.cases.length,'PineTS scenarios',out.cases.reduce((a,c)=>a+c.rows.length,0),'bar decisions',keys.length,'fields');
 })().catch(e=>{console.error(e);process.exitCode=1});
