@@ -8,6 +8,8 @@
 
 **Dynamic Hull 16:** the approved bot lanes are **M15, M30 and M45**, independent per broker symbol. A confirmed MSS flattens only that lane, even without a Hull cross. [Bot rules / upgrade](docs/HULL_STRUCTURE.md) · [Read-only MT5 indicator](MT5/DYNAMIC-LANES.md). The checked-in mode remains paper.
 
+**Chart replay (no orders):** [Free Chart JS + Inputs JSON and TradingView setup](docs/HULL_CHART_REPLAY.md). See the absolute target of each open 15m/30m/45m test entry while the entry-session win rates update.
+
 ## Start with just your profiles (after timeframe selection)
 
 Open **[Hull demo start](docs/Hull-demo-start.html)**, tick the symbols you want, set lot, base USD per ticket and rate, and click **Copy start line**. Paste that line into the AI agent that has this repository and MT5 Desktop on your Windows machine. It means **run the checks and start one read-only observer**, not “send orders.” You do not need to repeat the setup prompt.
@@ -33,7 +35,9 @@ HULL START XAUUSD:0.09:10:slow EURUSD:0.01:10:slow GBPUSD:0.01:10:slow
 |---|---|---|
 | Hull Ledger | [Windows setup and upgrade guide](HullJournal/START-HERE.md) · [Offline dashboard](HullJournal/Hull-Journal.html) | Actual closed MT5 demo tickets and completed setups. Filter by symbol, timeframe, trading session, entry reason or exit reason; compare gross P/L, costs and net. The HTML sample is synthetic. |
 | Archived v4 MT5 chart indicator | [MQL5 source](MT5/FC-Hull-Either-16-Structure.mq5) · [Install and compile in MetaEditor](MT5/INSTALL-MT5.md) | Structure-filtered Either 16 suggestions and **simulated** chart fills. Install under `MQL5/Indicators`, not `Experts`. |
-| Current TradingView chart indicator | [FC DynHull source](indicators/FC-Hull-Dynamic-Source.pine) | Raw live Hull crosses and confirmed internal structure. Bot entry and exit handling is separate. |
+| Current MT5 lane monitor | [MQ5 source](MT5/FC-Dynamic-Hull-Lanes.mq5) · [Install](MT5/DYNAMIC-LANES.md) | Read-only M15/M30/M45 lane and MSS information; no order manager. |
+| Free Chart replay | [Script](indicators/freechart/FC-Dynamic-Hull-Replay.js) + [Inputs JSON](indicators/freechart/FC-Dynamic-Hull-Replay.inputs.json) | Independent counted entries, open TP guides and replay rates using the TradingView study rules. |
+| Current TradingView chart indicator | [FC DynHull source](indicators/FC-Hull-Dynamic-Source.pine) | Live chart crosses, confirmed structure, audited close-entry statistics and each open test TP. Bot entry and exit handling is separate. |
 
 Upgrading the journal? Preserve its existing `data` folder or point the new reporter at it with `--out`. You do **not** need to restart or arm the trading bot.
 

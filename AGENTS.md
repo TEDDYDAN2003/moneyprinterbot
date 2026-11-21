@@ -1,16 +1,26 @@
-# Hull: start the demo or sync the journal
+# Dynamic Hull: replay charts, run the demo or sync the journal
 
 **Wickless is a separate bot:** for `WICKLESS OBSERVE`, use the pasted Wickless JSON and the [Wickless operator guide](docs/WICKLESS.md), not Hull profiles, tickets or commands. Ordinary setup, implementation and test requests never send orders.
 
 **Dynamic Hull:** M15/M30/M45 authorized as independent lanes in `hull.eligible_timeframes`, not authorization to start a scanner or send orders. `structure_timeframe: null`. A confirmed MSS closes only the originating symbol/timeframe; M45 is three aligned M15 candles. [Rules and private YAML migration](docs/HULL_STRUCTURE.md).
 
-Open **PowerShell in the bot folder** on your Windows MT5 PC (usually `$HOME\Downloads\xauusdm-directional-research`). You should see `config.yaml` and `HullJournal`. No environment activation is needed.
+For **MT5 only**, open **PowerShell in the bot folder** on your Windows MT5 PC (usually `$HOME\Downloads\xauusdm-directional-research`). You should see `config.yaml` and `HullJournal`. No environment activation is needed.
 
 | What do you want to do? | Start here |
 |---|---|
+| Backtest visually / show open TP | [C. Replay on Free Chart or TradingView](#c-replay-on-free-chart-or-tradingview) — no terminal, credentials, Python or arming |
+| See the MT5 chart monitor | [Install the Dynamic indicator](MT5/DYNAMIC-LANES.md) under `MQL5/Indicators` — not an Expert Advisor |
 | Send demo orders | [A. Start the demo manually](#a-start-the-demo-manually) — only step 4 sends orders |
 | View or export trades | [B. Sync the journal](#b-sync-the-journal) — read-only; no scanner required |
 | First use or new code | [Setup](#setup) — do this first, then return here |
+
+## C. Replay on Free Chart or TradingView
+
+1. **Free Chart:** open the symbol on standard **15m** candles → right toolbar **Build Indicators (`</>`) → New Indicator**. Paste [`FC-Dynamic-Hull-Replay.inputs.json`](indicators/freechart/FC-Dynamic-Hull-Replay.inputs.json) in **Inputs** and [`FC-Dynamic-Hull-Replay.js`](indicators/freechart/FC-Dynamic-Hull-Replay.js) in **Script**. Use the full contents, no fences. Name it **FC Dynamic Hull 16 Replay**, set **Overlay on**, choose the symbol’s price precision and **Apply**.
+2. **Define a real target.** In its settings enter the **chart tick size**, your **lots and gross USD goal**, the broker’s **USD tick value at one lot**, and the **price size of that broker tick** if different. Recheck per symbol. If no verified cash conversion is available, choose **Chart ticks** and a tick distance instead. Set **Test from UTC** to your replay start if you do not want earlier trades counted. Keep earlier bars loaded for warm-up.
+3. **Step replay.** Safe default: the next visible bar’s **open** confirms earlier closes. Use **Completed-bar steps only** only if replay reveals fully closed candles, never for developing bars. On entry, each lane shows a labelled horizontal TP and its **Open TP price**; on settlement that guide disappears. Rates update from confirmed closes. Panning shows the snapshot at the right edge; rewinding recomputes the prefix, not another set of trades.
+4. **TradingView:** paste the [Pine indicator](indicators/FC-Hull-Dynamic-Source.pine) in **Pine Editor → Save → Add to chart**. Leave **Display → Show open TP lines (15m / 30m / 45m)** on; the table also prints each held lane’s price. For comparison use the same date window, feed, manual sizing, BE %, **Dynamic/16** and blank structure timeframe.
+5. **Interpretation:** these are chart-study trades, **not the Python bot’s or the platform simulator’s fills**. One slot per lane; first aligned cross after MSS allowed; MSS alone does not exit this study. Open slots excluded; unknown TP/BE order stays unknown. Overall and entry-session rates include an *All TFs* count-weighted column. [Worked sizing example, clock choices, troubleshooting and tests](docs/HULL_CHART_REPLAY.md).
 
 ## A. Start the demo manually
 
@@ -34,7 +44,7 @@ $profiles = @(
 if (-not $profiles) { throw 'Choose at least one profile.' }
 ```
 
-For US30 only, leave only `'US30:1:10:slow'`. **Slow requests ten tickets:** if all fill, that row means **10 lots total**, with a **$10 base per ticket**. MT5 values each leg’s entry spread in USD at its own volume. If that value is $13, that leg targets **+$23 gross** before fees, not a guaranteed $23 net. Its ladder uses the same frozen $23. Spread points are not dollars. Verify `US30m` for US30 and `USTEC_x100m` for NAS100USD. Re-run step 2 whenever you open a new scanner window.
+For US30 only, leave only `'US30:1:10:slow'`. **Slow requests ten tickets:** if all fill, that row means **10 lots for that lane** (up to **30 lots** if all three slow lanes fill, subject to account limits), with a **$10 base per ticket**. MT5 values each leg’s entry spread in USD at its own volume. If that value is $13, that leg targets **+$23 gross** before fees, not a guaranteed $23 net. Its ladder uses the same frozen $23. Spread points are not dollars. Verify `US30m` for US30 and `USTEC_x100m` for NAS100USD. Re-run step 2 whenever you open a new scanner window.
 
 **3. Check before sending — read-only.** Use the **same** config and profiles you will arm:
 
@@ -45,7 +55,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Invalid config. Do not arm.' }
 if ($LASTEXITCODE -ne 0) { throw 'Preflight failed. Do not arm.' }
 ```
 
-Verify the demo account, trading permissions, symbols, batch sizes, history on the approved timeframes, positions/orders and `review_before_demo`. Look for `new_ticket_target_policy: base_plus_entry_spread_v1`; each symbol’s `target_preview_by_side` shows the indicative BUY and SELL goals on the current quote. Verify `entry_policy: fc_dynamic_skip_first_mss_v2`, `entry_timing: live_hull_cross`, and `choch_entry: never_standalone`. Do **not** arm with an unexplained warning.
+Verify the demo account, trading permissions, symbols, batch sizes, history on the approved timeframes, positions/orders and `review_before_demo`. Look for `new_ticket_target_policy: base_plus_entry_spread_v1`; each symbol’s `target_preview_by_side` shows the indicative BUY and SELL goals on the current quote. Verify `timeframes: [M15, M30, M45]`, `mss_exit: flatten_own_lane_on_confirmed_shift`, `batch_entry_policy: first_eligible_while_lane_flat_v2`, `entry_policy: fc_dynamic_skip_first_mss_v2`, `entry_timing: live_hull_cross`, and `choch_entry: never_standalone`. Do **not** arm with an unexplained warning.
 
 Want to watch first? Run `& $py -m bot.cli trade-all --config $cfg @profiles` **without** the arm flag. It must say `READ ONLY`. Stop **that observer** with Ctrl+C before step 4. If the account or profiles change, repeat preflight.
 
@@ -108,7 +118,7 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" 
    if (-not (Test-Path .\config.demo.local.yaml)) { Copy-Item .\config.yaml .\config.demo.local.yaml }
    notepad .\config.demo.local.yaml
    ```
-   In its **existing `run:` section**, set `mode: demo`, then save. Leave the tracked `config.yaml` in `paper` mode. Go to [A](#a-start-the-demo-manually).
+   In its **existing `run:` section**, set `mode: demo`. In `hull` verify `eligible_timeframes: [M15, M30, M45]`; in `hull.indicator` verify `hull_len: 16`, `source: dynamic`, `structure_timeframe: null`, `exit_opposite: true` and `exit_on_mss: true`. Save the private copy; do not guess the timeframe of legacy tickets or erase state. Leave the tracked `config.yaml` in `paper` mode. Go to [A](#a-start-the-demo-manually).
 
 ## When does the signal appear?
 

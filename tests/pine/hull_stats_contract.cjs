@@ -162,7 +162,7 @@ async function timeframes(){
   const value=(w,n,u)=>!n?'— (0)':(u?((Math.floor(1000*w/n)/10).toFixed(1)+'–'+(Math.ceil(1000*(w+u)/n)/10).toFixed(1)):(100*w/n).toFixed(1))+'% ('+n+')';
   for(const host of ['15','30','45','90']){
     const table=(await run(code,bars,host,cfg)).plots.__tables__.data[0].value[0];
-    assert.deepEqual([table.columns,table.rows],[5,10]);
+    assert.deepEqual([table.columns,table.rows],[5,11]);
     const txt=table.cells.map(row=>row.map(c=>c.text));
     assert.deepEqual(txt[0],['Win rate (n)','15m','30m','45m','All TFs']);
     assert.deepEqual(txt.slice(1,6).map(r=>r[0]),['Overall','Asian','London','New York','NY–London KZ']);
@@ -351,4 +351,49 @@ async function pooling(){
     assert.equal(cells[2][4].text,ok?'— (0)':'n/a');
   }
 }
-(async()=>{await defaultHullLength();await levels();await score();await clocks();await attribution();const histories=await pathOracle();await fineAudit();await priceExample();await timeframes();await pooling();console.log('PASS: '+histories+' exhaustive discrete OHLC/state cases, Hull/16, timestamped lower-bar exits, ambiguous/open paths, coverage fallback, ordered reversals, session tags, pooling and bounds (fabricated candles only).');})().catch(e=>{console.error(e.stack||e);process.exitCode=1;});
+async function openGuides(){
+  const stub=code.slice(0,code.lastIndexOf('if barstate.islast')).replace(/Row book = f_study\(\)[\s\S]*?(?=f_closed\()/,'Row book = Row.new()\n');
+  const test=stub+`\nslot(int d0,int index0,float px,bool doubt) =>
+    Row q=Row.new()
+    q.side:=d0
+    q.entryAt:=time_close-(bar_index-index0)*900000
+    q.target:=px
+    q.possibleBE:=doubt
+    q.validTF:=true
+    q.firstTestClose:=time_close
+    q.lastTestClose:=time_close
+    q.priced:=true
+    q.entry:=100
+    q.points:=4
+    q.wins:=0
+    q.losses:=0
+    q.beLosses:=0
+    q.endTime:=time_close
+    q
+Row qa=slot(bar_index<2?1:bar_index==2?-1:0,bar_index<2?0:2,bar_index<2?104:96,false)
+Row qb=slot(bar_index==1 or bar_index==2?-1:0,1,92,bar_index==2)
+Row qc=slot(bar_index==2 or bar_index==3?1:0,2,116,false)
+f_panel(qa,qb,qc)
+`;
+  const at=(i)=>start+(i+1)*step, stages=[
+    [[0,104,'15m BUY']],[[0,104,'15m BUY'],[1,92,'30m SELL']],
+    [[2,96,'15m SELL'],[1,92,'30m SELL?'],[2,116,'45m BUY']],[[2,116,'45m BUY']],[]
+  ];
+  const overlay=(x,k)=>x.plots['__'+k+'_overlay__']?.data[0].value||[];
+  for(let i=0;i<stages.length;i++){
+    const x=await run(test,timed(Array(i+1).fill([100,102,99,100]))),lines=overlay(x,'lines'),labels=overlay(x,'labels'),cells=x.plots.__tables__.data[0].value[0].cells;
+    assert.equal(lines.length,stages[i].length);assert.equal(labels.length,lines.length);
+    for(const [j,price,tag] of stages[i]){
+      assert(lines.some(q=>q.x1===at(j)&&q.x2===at(i)+1&&q.y1===price&&q.y2===price));
+      assert(labels.some(q=>q.x===at(i)&&q.y===price&&q.text===tag+' TP '+price));
+    }
+    for(const [j,tf] of ['15m','30m','45m'].entries()){
+      const entry=stages[i].find(q=>q[2].startsWith(tf));assert.equal(cells[10][j+1].text,entry?String(entry[1]):'—');
+    }
+  }
+  for(const [opts,want] of [[{showOpenTP:false},'104'],[{endAt:at(0)},'—']]){
+    const x=await run(test,timed(Array(2).fill([100,102,99,100])),'15',opts);
+    assert.equal(overlay(x,'lines').length,0);assert.equal(x.plots.__tables__.data[0].value[0].cells[10][1].text,want);
+  }
+}
+(async()=>{await defaultHullLength();await openGuides();await levels();await score();await clocks();await attribution();const histories=await pathOracle();await fineAudit();await priceExample();await timeframes();await pooling();console.log('PASS: '+histories+' exhaustive discrete OHLC/state cases, Hull/16, timestamped lower-bar exits, ambiguous/open paths, coverage fallback, ordered reversals, session tags, pooling, active target guides and bounds (fabricated candles only).');})().catch(e=>{console.error(e.stack||e);process.exitCode=1;});

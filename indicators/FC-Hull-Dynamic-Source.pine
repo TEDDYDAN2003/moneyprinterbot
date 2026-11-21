@@ -15,6 +15,7 @@ bool swings = input.bool(true, "Show swings", group="Display")
 bool breaks = input.bool(true, "Show BOS / MSS", group="Display")
 int stripWidth = input.int(10, "Trend strip thickness", 1, 20, group="Display")
 string marks = input.string("Valid suggestions only", "Chart signals", options=["Valid suggestions only", "All Hull crosses"], group="Display", tooltip="All crosses is a reference view; it does not change entry alerts or the tester.")
+bool showOpenTP = input.bool(true, "Show open TP lines (15m / 30m / 45m)", group="Display", tooltip="One frozen target per held test entry, from its confirmed close. Disappears after confirmed settlement. A ? means a possible but unproven earlier BE. Not a broker order.")
 bool auditMarks = input.bool(false, "Mark counted test entries and exits", group="Display", tooltip="On a 15m, 30m or 45m chart: orange dot = test entry, cyan dot = its TP. TP/BE/L/? marks the bar where the result is known or the trade must be flat, not the exact exit tick. ? = unproven order.")
 const string T = "Win-rate table • one position per timeframe"
 float lots = input.float(0.10, "Lot size", minval=0.000001, group=T)
@@ -356,6 +357,7 @@ type Row
     bool entered = false
     int exitCode = 0
     int missedSizing = 0
+    int entryAt = na  // actual entry close; used by open target guides, never a trigger
 
 // No intrabar arrays leave their native signal context. The panel receives scalar snapshots.
 type MinutePrint
@@ -519,6 +521,7 @@ f_score(int signal, int bias, int ticks, bool valid, array<MinutePrint> xs) =>
     var bool fromNY = false
     var bool fromKZ = false
     var float entry = na
+    var int entryAt = na
     var float target = na
     var float points = na
     var int targetTicks = na
@@ -593,13 +596,14 @@ f_score(int signal, int bias, int ticks, bool valid, array<MinutePrint> xs) =>
         fromKZ := tagK
         d := signal
         entry := close
+        entryAt := time_close
         targetTicks := ticks
         target := math.round_to_mintick(entry + d * targetTicks * syminfo.mintick)
         points := distancePts
         away := false
         possibleBE := false
         armed := bePct == 0
-    Row.new(time_close, wins, losses, be, d, entry, target, na(points) ? distancePts : points, valid, sawPrice, asianW, asianN, londonW, londonN, nyW, nyN, kzW, kzN, unknown, asianU, londonU, nyU, kzU, mixed, fineBars, coarseBars, possibleBE, heldSignals, firstTestClose, lastTestClose, entered, exitCode, missedSizing)
+    Row.new(time_close, wins, losses, be, d, entry, target, na(points) ? distancePts : points, valid, sawPrice, asianW, asianN, londonW, londonN, nyW, nyN, kzW, kzN, unknown, asianU, londonU, nyU, kzU, mixed, fineBars, coarseBars, possibleBE, heldSignals, firstTestClose, lastTestClose, entered, exitCode, missedSizing, entryAt)
 
 // Explicitly requested from WITHIN each native signal context (Pine v6 dynamic requests).
 // Other host intervals need no micro history of their own just to display the table.
@@ -656,7 +660,7 @@ f_counts(Row r, int g) =>
 
 const string countTip = "n = finished test trades, including unknown outcomes. With ? cases, the lower end counts none as wins; the upper end counts all as wins. Held slots are excluded. Bounds describe counted entries only, not a different entry list after a possible stop. Sessions overlap; Overall counts each case once per timeframe."
 const string poolTip = "All TFs sums case counts before computing rates. The three independent tests are not a deduplicated portfolio."
-var table panel = table.new(position.top_right, 5, 10, bgcolor=#18212C, frame_color=#465567, frame_width=1, force_overlay=true)
+var table panel = table.new(position.top_right, 5, 11, bgcolor=#18212C, frame_color=#465567, frame_width=1, force_overlay=true)
 
 f_cell(int col, int row, string value, string tip) =>
     color bg = row == 0 ? #263547 : row == 1 ? #203B41 : col == 4 ? #263341 : row % 2 == 0 ? #17212C : #1E2A37
@@ -686,6 +690,35 @@ f_wlu(int w, int l, int u) =>
 f_coverage(int fine, int coarse) =>
     fine + coarse == 0 ? "—" : str.tostring(100.0 * fine / (fine + coarse), "0.0") + "%"
 
+// The last fill remains available to the audit tooltip after closure. Never use
+// that cached price as a live guide: it must belong to a currently held book.
+f_openTP(Row r) =>
+    not na(r) and r.validTF and r.side != 0 and not na(r.entryAt) and cutoff <= endAt ? r.target : na
+
+// Each written call owns one pair of drawing handles. Move them on reversals,
+// delete them on settlement, and never connect two different trades diagonally.
+f_guide(Row r, string tf, color tint) =>
+    var line guide = na
+    var label badge = na
+    float tp = f_openTP(r)
+    if showOpenTP and not na(tp)
+        int anchor = math.max(r.entryAt, cutoff)
+        string title = tf + (r.side == 1 ? " BUY" : " SELL") + (r.possibleBE ? "?" : "") + " TP " + str.tostring(tp, format.mintick)
+        if na(guide)
+            guide := line.new(r.entryAt, tp, anchor + 1, tp, xloc=xloc.bar_time, extend=extend.right, color=tint, style=line.style_dashed, width=2, force_overlay=true)
+            badge := label.new(anchor, tp, title, xloc=xloc.bar_time, style=label.style_label_left, color=tint, textcolor=#102433, size=size.tiny, force_overlay=true)
+        else
+            line.set_xy1(guide, r.entryAt, tp)
+            line.set_xy2(guide, anchor + 1, tp)
+            label.set_xy(badge, anchor, tp)
+            label.set_text(badge, title)
+    else if not na(guide)
+        line.delete(guide)
+        label.delete(badge)
+        guide := na
+        badge := na
+    tp
+
 f_footer(int col, Row r) =>
     bool ok = f_ok(r)
     bool ready = f_inWindow(r)
@@ -703,6 +736,8 @@ f_footer(int col, Row r) =>
     f_cell(col, 7, ok ? f_coverage(r.fineBars, r.coarseBars) : "n/a", cover)
     f_cell(col, 8, distance, prices + "\n" + sizing)
     f_cell(col, 9, side, ok ? "? = could already have stopped; slot stays reserved until closure is certain. Extra same-side candidates withheld under that uncertainty: " + str.tostring(r.heldSignals) : unavailable)
+    float openTP = f_openTP(r)
+    f_cell(col, 10, na(openTP) ? "—" : str.tostring(openTP, format.mintick), "Absolute target price for this held test slot; dash = no current target. " + prices)
 
 f_panel(Row r15, Row r30, Row r45) =>
     f_cell(0, 0, "Win rate (n)", countTip)
@@ -726,6 +761,11 @@ f_panel(Row r15, Row r30, Row r45) =>
     f_cell(0, 7, inspectTF + "m coverage", "Share of held signal bars with a complete, matching set of inspection candles. Not the share with a known outcome.")
     f_cell(0, 8, "TP Δ / pts", "Price distance / broker points at the last entry. Before the first entry: estimate. No spread, fees, broker SL or ladder.")
     f_cell(0, 9, "Position", "One test slot per timeframe; never a live position report.")
+    f_cell(0, 10, "Open TP price", "Frozen on entry; not the latest raw signal or the last closed trade’s target.")
+    f_cell(4, 10, "—", "Independent positions do not have a shared TP price.")
+    f_guide(r15, "15m", #51D3C2)
+    f_guide(r30, "30m", #73AEFF)
+    f_guide(r45, "45m", #E9ACF4)
     f_footer(1, r15)
     f_footer(2, r30)
     f_footer(3, r45)
