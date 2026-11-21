@@ -53,7 +53,7 @@ git rev-parse HEAD
 
 Stop if the checkout is dirty, on another branch, diverged or the pull fails. Do not reset, force, or discard local work. After preflight, match the **latest** observer `started.summary.checkout_head_at_start` against `git rev-parse HEAD`, check `source_module` points into this checkout, and verify `entry_policy: fc_dynamic_skip_first_mss_v2`, `entry_timing: live_hull_cross`, `entry_quote_policy: current_live_tick_or_confirmed_close_v1` and the default `new_ticket_exit_policy: profit_ladder_70_30_v1`. For a non-Git install the SHA may be null: verify the source/version before reuse. An older `started` record or `git status` alone does not prove the running version.
 
-**Current signal:** verify `signal_policy: fc_dynamic_source_internal_v1`, `indicator.source: dynamic`, `indicator.hull_len: 24`, the approved timeframe list, and `batch_entry_policy: first_eligible_while_flat_v1`. The same-side no-stacking rule, local-wick initial stop and per-ticket 70/30 ladder remain in place. [Configuration migration](docs/HULL_STRUCTURE.md#upgrade-the-local-configuration).
+**Current signal:** verify `signal_policy: fc_dynamic_source_internal_v1`, `indicator.source: dynamic`, `indicator.hull_len: 16`, the approved timeframe list, and `batch_entry_policy: first_eligible_while_flat_v1`. The same-side no-stacking rule, local-wick initial stop and per-ticket 70/30 ladder remain in place. [Configuration migration](docs/HULL_STRUCTURE.md#upgrade-the-local-configuration).
 
 ### 1. Read the request
 

@@ -40,15 +40,15 @@ PATH = [
 NAME = "XAUUSDm"
 
 
-def fixture(invert=False):
+def fixture(invert=False, path=PATH):
     def px(x):
         return 200 - x if invert else x
 
     out = []
-    for i, (hi, lo, c) in enumerate(PATH):
+    for i, (hi, lo, c) in enumerate(path):
         out.append(
             Bar(
-                T + (i - len(PATH)) * 60,
+                T + (i - len(path)) * 60,
                 px((hi + lo) / 2),
                 px(lo if invert else hi),
                 px(hi if invert else lo),
@@ -178,22 +178,21 @@ def test_observer_uses_verified_live_chart_candle_not_next_bar_close(
     mt = MT()
     cfg = load_yaml(ROOT / "config.yaml")
     cfg["hull"]["eligible_timeframes"] = ["M1"]
-    cfg["hull"]["indicator"].update(hull_len=4, swing_len=1, atr_length=2)
+    cfg["hull"]["indicator"].update(swing_len=1, atr_length=2)
     cfg["hull"]["symbols"]["XAUUSD"].update(session="continuous")
     h = HullConfig.model_validate(cfg["hull"])
-    bars = fixture(invert)
-    if already_skipped:
-        # This close consumes the first cross. Two more closed candles set up
-        # the next live opportunity, with the same MSS and no BOS requirement.
-        for i, x in enumerate((15, 16, 16)):
-            o, c = bars[-1].c, 200 - x if invert else x
-            bars.append(Bar(T + i * 60, o, max(o, c), min(o, c), c))
-        bars = [replace(b, t=b.t - 180) for b in bars]
+    # Exercise the production 16-period clock. Warm the curves, flip structure,
+    # then either present the first aligned cross or consume it during warmup.
+    path = [(11, 9, 10)] * 20 + PATH
+    for c in [16] * 5 + [14] + ([13, 12, 14, 16, 17] if already_skipped else []):
+        o = path[-1][2]
+        path.append((max(o, c), min(o, c), c))
+    bars = fixture(invert, path)
     cur = bars[-1].c
     wall = [T + 0.1]
 
     def quote():
-        x = cur if wall[0] < T + 0.2 else cur + (1 if invert else -1)
+        x = cur if wall[0] < T + 0.2 else cur + (4 if invert else -4)
         return NS(time_msc=int(wall[0] * 1000), bid=x, ask=x + 0.01)
 
     def rates(_name, tf, shift, n):

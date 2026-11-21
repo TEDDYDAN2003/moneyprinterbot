@@ -23,6 +23,7 @@ TF_NAME = {v: k for k, v in NATIVE_TF.items()}
 LADDER = "profit_ladder_70_30_v1"
 FIXED = "fixed_tp"
 TARGET_POLICY = "base_plus_entry_spread_v1"  # all newly opened Hull tickets, never retrofit saved goals
+DYNAMIC_HULL_LENGTH = 16  # shared base period for the active scanner
 LIVE_TIMING = "live_hull_cross"
 ENTRY_POLICY = "fc_dynamic_skip_first_mss_v2"
 BATCH_ENTRY_POLICY = "first_eligible_while_flat_v1"
@@ -31,7 +32,7 @@ RETIRED_LIMITS = ("drawdown_usd", "max_orders_minute")
 
 
 class Indicator(Strict):
-    hull_len: int = Field(24, ge=2, le=500)
+    hull_len: int = Field(DYNAMIC_HULL_LENGTH, ge=2, le=500)
     source: Literal[
         "dynamic", "open", "high", "low", "close", "hl2", "hlc3", "ohlc4", "custom"
     ] = "dynamic"
@@ -108,6 +109,18 @@ class HullConfig(Strict):
     magic: int = Field(26111825, gt=0, lt=2**31)
     enabled: tuple[str, ...] = ("XAUUSD",)
     symbols: dict[str, Profile] = Field(min_length=1)
+
+    @field_validator("indicator")
+    @classmethod
+    def bot_length(cls, v: Indicator) -> Indicator:
+        # Private YAML files are full configs: never silently run an old period.
+        # Standalone indicator arithmetic can still be exercised at other lengths.
+        if v.hull_len != DYNAMIC_HULL_LENGTH:
+            raise ValueError(
+                f"The active Hull bot requires hull.indicator.hull_len: {DYNAMIC_HULL_LENGTH} "
+                f"(got {v.hull_len}). Update this field in your local config."
+            )
+        return v
 
     @field_validator("eligible_timeframes")
     @classmethod

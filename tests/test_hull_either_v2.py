@@ -278,7 +278,7 @@ def test_versioned_defaults_only_indicator_input_changes_and_legacy_opt_in():
     h = HullConfig.model_validate(load_yaml(ROOT / "config.yaml")["hull"])
     p = h.indicator
     assert p == Indicator() and (p.hull_len, p.source, p.signal_policy) == (
-        24,
+        16,
         "dynamic",
         "fc_dynamic_source_internal_v1",
     )
@@ -292,8 +292,8 @@ def test_versioned_defaults_only_indicator_input_changes_and_legacy_opt_in():
         h.exit_policy,
     ) == (True, "local_pullback", 7, 14, 0.1, 0, LADDER)
     assert BATCH_ENTRY_POLICY == "first_eligible_while_flat_v1"
-    old = Indicator(hull_len=24, source="hl2")
-    assert old.signal_policy == "fc_dynamic_source_internal_v1"
+    fixed = Indicator(source="hl2")
+    assert fixed.hull_len == 16 and fixed.signal_policy == "fc_dynamic_source_internal_v1"
 
 
 def test_a_waiting_quote_cannot_revive_a_repeat_when_history_catches_up(hull_desk):

@@ -5,7 +5,7 @@ indicator("FC Dynamic Hull • Session Win Rates • 15 / 30 / 45", "FC Hull WR"
 // An aligned Hull cross may enter on or after a confirmed MSS/CHoCH; the shift alone is not an entry.
 // Raw opposite crosses still exit; an opposite close before TP/active BE is a loss.
 const string G = "Hull"
-int length = input.int(24, "Length", 2, 500, group=G)
+int length = input.int(16, "Length (Hull A and B)", 2, 500, group=G, tooltip="Shared by the chart and the 15m, 30m and 45m studies. Use 16 to match the bot.")
 string src = input.string("Dynamic", "Hull A source", options=["Dynamic","Low","High","HL2","Open","Close","HLC3","OHLC4","Custom"], group=G, tooltip="Dynamic: Low Hull A in bullish structure, High Hull A in bearish structure. Hull B always uses close.")
 string neutralSrc = input.string("High", "Dynamic before first trend", options=["High","Wait"], group=G, active=src == "Dynamic")
 float custom = input.source(hl2, "Custom source", group=G, active=src == "Custom", tooltip="For native timeframe comparisons, use an OHLC-derived price rather than an external indicator plot.")

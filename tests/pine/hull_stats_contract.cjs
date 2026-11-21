@@ -27,6 +27,32 @@ const choose=(v)=>'array.from('+v.join(', ')+').get(bar_index)';
 const mirror=(rows)=>rows.map(([o,h,l,c])=>[200-o,200-l,200-h,200-c]);
 const controls={length:4,n:1,lots:1,cash:4,usdTick:1};
 
+async function defaultHullLength() {
+  // Exercise the shipped input (no length override) against literal 16-base
+  // formulas for BOTH curves. Fabricated OHLC only; no trade study.
+  const bars=timed(Array.from({length:90},(_,i)=>{
+    const c=100+(i*19)%23; return [c,c+1+i%3,c-1-i%5,c];
+  }));
+  const probe=code.slice(0,code.indexOf('// These context series'))+`
+int testBias = bar_index % 2 == 0 ? 1 : -1
+[_, aProbe, bProbe, _] = f_hull(testBias)
+float aLo16 = ta.wma(2 * ta.wma(low, 8) - ta.wma(low, 16), 4)
+float aHi16 = ta.wma(2 * ta.wma(high, 8) - ta.wma(high, 16), 4)
+float b16 = ta.wma(3 * ta.wma(close, 2) - ta.wma(close, 4) - ta.wma(close, 8), 8)
+plot(length, "length")
+plot(aProbe, "a")
+plot(bProbe, "b")
+plot(testBias == 1 ? aLo16 : aHi16, "wantA")
+plot(b16, "wantB")
+`;
+  for(const tf of ['15','30','45']) {
+    const ctx=await run(probe,bars,tf);
+    assert(vals(ctx,'length').every(n=>n===16));
+    for(const [actual,want] of [['a','wantA'],['b','wantB']]) {
+      assert(Number.isFinite(vals(ctx,actual).at(-1))); assert.deepEqual(vals(ctx,actual),vals(ctx,want));
+    }
+  }
+}
 async function levels() {
   // O,H,L,C, activeBE, already-away-from-fill, raw relative to side, target ticks, result.
   const cases=[
@@ -167,4 +193,4 @@ async function pooling(){
     assert.equal(cells[2][4].text,ok?'— (0)':'n/a');
   }
 }
-(async()=>{await levels();await score();await clocks();await attribution();await timeframes();await pooling();console.log('PASS: synthetic Pine contracts for sessions, DST, immutable entry attribution, pooled counts, valid post-MSS crosses and native timeframe calculations.');})().catch(e=>{console.error(e.stack||e);process.exitCode=1;});
+(async()=>{await defaultHullLength();await levels();await score();await clocks();await attribution();await timeframes();await pooling();console.log('PASS: synthetic Pine contracts for sessions, DST, immutable entry attribution, pooled counts, valid post-MSS crosses and native timeframe calculations.');})().catch(e=>{console.error(e.stack||e);process.exitCode=1;});

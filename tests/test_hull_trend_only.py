@@ -10,11 +10,37 @@ from pydantic import ValidationError
 from bot.config.loader import load_yaml
 from bot.hull.config import HullConfig, Indicator, selection
 from bot.hull.curves import LiveTick
+from bot.hull.signal import Hull
 from bot.hull.structure import Structure
 from bot.hull.terminal import dispatch, run
 
 NAME = "XAUUSDm"
 OK = dict(data_ok=True, history_ok=True, rewarmed=False)
+
+
+def test_shipped_and_missing_length_both_drive_a_and_b_from_16():
+    raw = load_yaml(ROOT / "config.yaml")["hull"]
+    assert raw["indicator"]["hull_len"] == 16
+    for settings in (raw["indicator"], {}, {"source": "dynamic"}):
+        cfg = HullConfig.model_validate(raw | {"indicator": settings})
+        assert cfg.indicator.hull_len == 16
+        engine = Hull(15, cfg.indicator, 0.01)
+        assert {
+            source: (a.fast.n, a.slow.n, a.smooth.n)
+            for source, a in engine.baselines.items()
+        } == {"low": (8, 16, 4), "high": (8, 16, 4)}
+        assert tuple(w.n for w in engine.b_weights) == (2, 4, 8, 8)
+    without_indicator = {k: v for k, v in raw.items() if k != "indicator"}
+    assert HullConfig.model_validate(without_indicator).indicator.hull_len == 16
+
+
+@pytest.mark.parametrize("period", [24, 12])
+def test_active_bot_refuses_non_16_private_settings(period):
+    raw = load_yaml(ROOT / "config.yaml")["hull"]
+    with pytest.raises(ValidationError, match=r"hull\.indicator\.hull_len: 16"):
+        HullConfig.model_validate(
+            raw | {"indicator": raw["indicator"] | {"hull_len": period}}
+        )
 
 
 def test_empty_allowlist_and_cli_override_cannot_initialize_mt5(monkeypatch):

@@ -308,7 +308,7 @@ hull:
   enabled: [XAUUSD]
   magic: 26111825
   indicator:
-    hull_len: 24
+    hull_len: 16            # shared base period for both Hull curves on every bot lane
     source: dynamic         # bullish: Low; bearish: High. B always uses close.
     neutral_mode: high      # Pine default; still no neutral entries
     structure_timeframe: null  # Pine 'Chart': each signal lane's own native timeframe
