@@ -6,10 +6,10 @@ import pytest
 from hull_cases import PATH, known_range, sequence
 
 from bot.config.loader import load_yaml
-from bot.hull.config import HullConfig, Indicator
+from bot.hull.v4.config import HullConfig, Indicator
 from bot.hull.orders import Grid
-from bot.hull.replay import Account, Clock
-from bot.hull.signal import Reading
+from bot.hull.v4.replay import Account, Clock
+from bot.hull.v4.signal import Reading
 from bot.zones.engine import Bar
 from bot.zones.feed import Minute
 from bot.zones.hours import Hours
@@ -31,7 +31,9 @@ def test_m2_aggregation_never_reads_the_forming_bar_to_confirm_signal():
 
 
 def test_first_crossing_quote_gap_stop_and_tp_never_waits_for_momentum():
-    cfg = load_yaml(Path(__file__).resolve().parents[1] / "config.yaml")
+    cfg = load_yaml(
+        Path(__file__).resolve().parents[1] / "research/hull_labels/v4-config.yaml"
+    )
     h = HullConfig.model_validate(cfg["hull"])
     p = h.symbols["XAUUSD"]
     g = Grid(0.001, 0.001, 3, 0, 0.01, 100, 0.01)
@@ -95,7 +97,9 @@ def test_first_crossing_quote_gap_stop_and_tp_never_waits_for_momentum():
 def test_replay_original_opposite_exit_separate_from_structure_entry(
     bias, exit_opposite, valid
 ):
-    cfg = load_yaml(Path(__file__).resolve().parents[1] / "config.yaml")
+    cfg = load_yaml(
+        Path(__file__).resolve().parents[1] / "research/hull_labels/v4-config.yaml"
+    )
     h = HullConfig.model_validate(cfg["hull"])
     g = Grid(0.001, 0.001, 3, 0, 0.01, 100, 0.01)
     p = h.symbols["XAUUSD"].model_copy(update={"lots": 0.01})
@@ -147,7 +151,9 @@ def test_replay_original_opposite_exit_separate_from_structure_entry(
 
 @pytest.mark.parametrize("lag_ms,allowed", [(8000, True), (8001, False)])
 def test_replay_uses_first_actual_tick_and_same_inclusive_deadline(lag_ms, allowed):
-    cfg = load_yaml(Path(__file__).resolve().parents[1] / "config.yaml")
+    cfg = load_yaml(
+        Path(__file__).resolve().parents[1] / "research/hull_labels/v4-config.yaml"
+    )
     h = HullConfig.model_validate(cfg["hull"])
     r = sequence(1, closes=PATH[:18] + [118.35], end_s=T)[-1]
     x = r.close

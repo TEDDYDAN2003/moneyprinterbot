@@ -21,8 +21,30 @@ MAGIC = 26111825
 ENTRY_WINDOW = (
     60  # The shipped scanner caps entry age at 30s. Allow late sequential receipts.
 )
-TAG = re.compile(r"h(1|2|5)_(\d{9,11})_([1-9]\d{0,3})\Z")
-LIVE_TAG = re.compile(r"i(1|2|5)_([1-9]\d{11,13})_([1-9]\d{0,3})\Z")
+# Recognized ticket formats only; parsing a tag never authorizes a timeframe.
+NATIVE_MINUTES = {
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    10,
+    12,
+    15,
+    20,
+    30,
+    60,
+    120,
+    180,
+    240,
+    360,
+    480,
+    720,
+    1440,
+}
+TAG = re.compile(r"h([1-9]\d{0,3})_(\d{9,11})_([1-9]\d{0,3})\Z")
+LIVE_TAG = re.compile(r"i([1-9]\d{0,3})_([1-9]\d{11,13})_([1-9]\d{0,3})\Z")
 LIVE_KEY_MIN = 10**11  # disjoint from every accepted legacy seconds key
 CASH = ("gross_profit", "commission", "swap", "fee")
 FIELDS = [
@@ -207,6 +229,12 @@ def norm(x):
     )
 
 
+def tf_name(minutes):
+    if minutes == 1440:
+        return "D1"
+    return f"H{minutes // 60}" if minutes >= 60 else f"M{minutes}"
+
+
 def tag(s):
     text = str(s or "")
     m = TAG.fullmatch(text) or LIVE_TAG.fullmatch(text)
@@ -214,7 +242,7 @@ def tag(s):
         return None
     tf, stamp, leg = map(int, m.groups())
     maximum = 32_503_680_000 * (1000 if text.startswith("i") else 1)
-    return (tf, stamp, leg) if 0 < stamp < maximum else None
+    return (tf, stamp, leg) if tf in NATIVE_MINUTES and 0 < stamp < maximum else None
 
 
 def trigger_ms(key):
@@ -315,7 +343,7 @@ def import_log(c, path, magic):
                         stamp = int(ev["trigger_msc"])
                         quote = ev["trigger"]
                         if (
-                            tf not in (1, 2, 5)
+                            tf not in NATIVE_MINUTES
                             or not (end - 60 * tf) * 1000 <= stamp < end * 1000
                             or stamp != quote["ms"]
                             or not 0 < dec(quote["bid"]) <= dec(quote["ask"])
@@ -693,7 +721,7 @@ def make_views(c):
         r = None
         if link:
             tf, stamp, _leg = link
-            gid = f"{sy}|M{tf}|{stamp}|{side}"
+            gid = f"{sy}|{tf_name(tf)}|{stamp}|{side}"
             model = labels.get((sy, tf, stamp, side), "")
         else:
             unknown[sy].append((start // 1000 - 2, start // 1000 + 2))
@@ -742,7 +770,7 @@ def make_views(c):
             r.update(
                 record_type="ticket",
                 symbol=sy,
-                timeframe=f"M{link[0]}" if link else "Unknown",
+                timeframe=tf_name(link[0]) if link else "Unknown",
                 side=side,
                 position_id=pid,
                 setup_id=gid,
@@ -853,7 +881,7 @@ def make_views(c):
         r.update(
             record_type="setup",
             symbol=sy,
-            timeframe=f"M{tf}",
+            timeframe=tf_name(tf),
             side=side,
             setup_id=first["setup_id"],
             ticket_count=str(len(rs)),

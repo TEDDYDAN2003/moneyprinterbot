@@ -1,23 +1,16 @@
 """First-tick regression tests. All prices, quotes, terminals and clocks here are fixtures."""
 
 import json
-import math
-import sys
 from dataclasses import replace
-from datetime import UTC, datetime
-from itertools import pairwise
 from types import SimpleNamespace as NS
 
 import pytest
-from hull_mt import MT, ROOT, T, scanner_clock, sig
+from hull_mt import T, sig
 
-from bot.config.loader import load_yaml
-from bot.hull.config import HullConfig, Indicator, Limits, selection
-from bot.hull.entry_clock import QUOTE_POLICY, WAITING, check_quote, poll_delay
-from bot.hull.signal import Hull
+from bot.hull.config import Limits
+from bot.hull.entry_clock import WAITING, check_quote, poll_delay
 from bot.hull.structure import Structure
-from bot.hull.terminal import dispatch, run
-from bot.zones.engine import Bar
+from bot.hull.terminal import dispatch
 
 
 @pytest.mark.parametrize(
@@ -144,6 +137,7 @@ def test_first_quote_resumption_rechecks_guards_and_never_repeats_exit(
     if change == "stop":
         d.cancel_all_waits()
     elif change == "supersede":
+        monkeypatch.setattr("bot.hull.desk.time.time", lambda: T + 60.1)
         dispatch(
             d,
             name,
@@ -195,205 +189,13 @@ def test_after_first_plan_a_preclose_tick_with_identical_prices_cannot_send_or_w
     assert len(rejected) == 1 and rejected[0]["stage"] == stage
 
 
-def eurusd_bars(end):
-    """Synthetic M1 tape: legacy Hull 24/hl2, 3/3 pivots. NOT the incident's broker history."""
-    anchors = [
-        (0, 120),
-        (5, 122),
-        (11, 114.8),
-        (16, 118),
-        (22, 111.4),
-        (27, 115),
-        (33, 108),
-        (38, 112),
-        (44, 103),
-        (50, 107),
-        (56, 98),
-        (62, 102.4),
-        (68, 95),
-        (80, 109.65),
-        (90, 100.40),
-        (96, 102.9),
-        (100, 104.1),
-        (104, 103.55),
-        (108, 105.2),
-        (119, 115.65),
-        (124, 114.6),
-    ]
-    cc = []
-    for (a, v), (b, w) in pairwise(anchors):
-        for i in range(a, b):
-            f = (i - a) / (b - a)
-            cc.append(
-                round(
-                    v + (w - v) * f + 0.1 * math.sin(i * 2.4) * math.sin(math.pi * f), 2
-                )
-            )
-
-    def fx(n):
-        return round(1.1077 - n * 0.0001, 5)
-
-    bars = []
-    for i, c in enumerate(cc):
-        o = cc[i - 1] if i else c + 0.2
-        h = round(max(o, c) + 0.08 + 0.11 * ((i * 7) % 9) / 8, 2)
-        l = round(min(o, c) - 0.08 - 0.09 * ((i * 5) % 11) / 10, 2)
-        if i == 80:
-            h = 110.0
-        if i == 90:
-            l = 100.0
-        if i == 119:
-            h = 116.0
-        bars.append(Bar(end - 60 * (len(cc) - i), fx(o), fx(l), fx(h), fx(c)))
-    return bars
-
-
-@pytest.mark.parametrize(
-    "case,armed,outcome",
-    [
-        ("fresh", True, "demo_batch_sent"),
-        ("fresh", False, "shadow_plan_only"),
-        ("late", True, "entry_window_expired"),
-        ("outside", True, "quote_outside_bull_bos_discount_buy"),
-    ],
-)
-def test_eurusd_1952_bar_1953_close_waits_for_quote_not_replayed(
-    case, armed, outcome, tmp_path, monkeypatch
-):
-    symbol = "EURUSDm"
-    end = int(datetime(2026, 11, 18, 19, 53, tzinfo=UTC).timestamp())
-    # Positive v4 timing fixture: use the known bar-92 BOS BUY on a synthetic FX grid.
-    raw = json.loads((ROOT / "MT5/qa/protected_cases.json").read_text())["fixtures"][
-        "protected-buy"
-    ][:93]
-    bars = [
-        Bar(
-            end - (len(raw) - i) * 60,
-            *(round(1.1 + (x - 3680) * 0.001, 6) for x in row[1:]),
-        )
-        for i, row in enumerate(raw)
-    ]
-    cfg = load_yaml(ROOT / "config.yaml")
-    cfg["run"]["mode"] = "demo" if armed else "paper"
-    h = HullConfig.model_validate(cfg["hull"])
-    eng = Hull(1, h.indicator, 0.0001)
-    r = [eng.update(b) for b in bars][-1]
-    assert (
-        r.close_s == end
-        and r.entry_side == 1
-        and r.entry_audit()["entry_setup"] == "bull_bos_discount_buy"
-    )
-    mt = MT()
-    mt.i.name = symbol
-    mt.i.trade_tick_size = mt.i.point = 0.00001
-    mt.i.digits = 5
-    mt.i.trade_contract_size = 100000
-    mt.initialize = lambda: True
-    mt.shutdown = lambda: None
-    mt.history_deals_get = lambda *_: []
-    mt.order_calc_profit = lambda side, n, lot, start, px: (
-        (1 if side == 0 else -1) * lot * 100000 * (px - start)
-    )
-    wall = [end - 0.25]
-    mono = [300.0]
-    sleeps = []
-
-    def quote(n):
-        assert n == symbol
-        if wall[0] < end + 0.70:
-            ms = end * 1000 - 100
-        else:
-            ms = int((wall[0] - 0.05) * 1000)
-        ask = (
-            r.structure.origin.price
-            if case == "outside" and end + 0.70 <= wall[0] < end + 1.0
-            else round(r.close + 0.00005, 5)
-        )
-        return NS(time_msc=ms, bid=round(ask - 0.00005, 5), ask=ask)
-
-    def rates(n, tf, shift, count):
-        assert n == symbol and tf == 1
-        assert shift == 1
-        return [
-            {"time": b.t, "open": b.o, "high": b.h, "low": b.l, "close": b.c}
-            for b in bars
-            if b.t + 60 <= wall[0]
-        ][-count:]
-
-    def advance(dt):
-        sleeps.append(dt)
-        actual = 9.0 if case == "late" and wall[0] >= end else dt
-        wall[0] += actual
-        mono[0] += actual
-
-    mt.symbol_info_tick = quote
-    mt.copy_rates_from_pos = rates
-    scanner_clock(monkeypatch, lambda: wall[0], advance, lambda: mono[0])
-    monkeypatch.setitem(sys.modules, "MetaTrader5", mt)
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    monkeypatch.chdir(tmp_path)
-    run(
-        cfg,
-        h,
-        selection(h, profiles=["EURUSD:0.01:10:slow"]),
-        (1,),
-        armed=armed,
-        poll=10.0,
-        iterations=6,
-    )
-    records = [
-        json.loads(v)
-        for v in next(tmp_path.glob("reports/hull_runtime/*/*.jsonl"))
-        .read_text()
-        .splitlines()
-    ]
-    summary = records[0]["summary"]
-    assert (
-        summary["entry_policy"] == "bos_half_range_close_v4"
-        and summary["entry_quote_policy"] == QUOTE_POLICY
-    )
-    (label,) = [v for v in records if v["event"] == "closed_label"]
-    assert (
-        label["bar_open_utc"].endswith("19:52:00.000+00:00")
-        and label["signal_close_utc"].endswith("19:53:00.000+00:00")
-        and label["entry_side"] == 1
-    )
-    timing = [v for v in records if v["event"] == "entry_quote_check"]
-    first = timing[0]
-    assert (
-        first["reason"] == "quote_precedes_signal_close"
-        and first["tick_time_msc"] == end * 1000 - 100
-        and first["disposition"] == "wait"
-    )
-    (decision,) = [v for v in records if v["event"] == "label_decision"]
-    assert decision["outcome"] == outcome and decision["close_s"] == end
-    assert all(dt <= 0.25 for dt in sleeps[:2])
-    assert timing[-1]["reason"] == (
-        "entry_window_expired" if case == "late" else "ready"
-    )
-    if outcome == "demo_batch_sent":
-        assert (
-            timing[-1]["signal_age_ms"] == 750
-            and len(mt.positions) == len(mt.requests) == 10
-        )
-        assert all(
-            p.type == mt.POSITION_TYPE_BUY
-            and p.volume == 0.01
-            and p.sl < p.price_open < p.tp
-            for p in mt.positions
-        )
-    else:
-        assert not mt.requests and not mt.positions
-
-
 @pytest.mark.parametrize(
     "lane,outcome,chosen,exits",
     [
         ("duplicate", "shadow_plan_only", 1, [1]),
         ("opposite_invalid", "shadow_plan_only", 1, [1, 2]),
         ("same_higher", "shadow_plan_only", 5, [1, 5]),
-        ("opposite_valid", "opposite_labels_same_close", 1, [1, 2]),
+        ("opposite_valid", "conflicting_trend_signals_same_tick", 1, [1, 2]),
     ],
 )
 def test_late_native_lane_at_same_close_does_not_reset_a_quote_window(
@@ -485,12 +287,9 @@ def test_waiting_symbol_does_not_hold_up_another_symbol(hull_desk):
     assert not d.waiting and not mt.requests
 
 
-def test_old_fx_countertrend_cross_cannot_reserve_even_a_first_quote(hull_desk):
-    h = Hull(1, Indicator(hull_len=24, source="hl2"), 0.0001)
-    for b in eurusd_bars(T):
-        r = h.update(b)
-    assert r.label == r.side == 1 and r.structure.bias == -1 and r.entry_side == 0
+def test_countertrend_raw_cross_cannot_reserve_a_first_entry_quote(hull_desk):
     mt, d, _ = hull_desk(armed=False)
     mt.q = None
+    r = replace(sig(), structure=Structure(bias=-1))
     dispatch(d, "XAUUSDm", [r], data_ok=True, history_ok=True, rewarmed=False)
     assert not d.waiting and not mt.requests

@@ -1,8 +1,8 @@
 """Shared test data, never used to select live parameters."""
 
-from bot.hull.config import Indicator
-from bot.hull.signal import Hull
-from bot.hull.structure import Pivot, Structure
+from bot.hull.v4.config import Indicator
+from bot.hull.v4.signal import Hull, Reading
+from bot.hull.v4.structure import Pivot, Structure
 from bot.zones.engine import Bar
 
 
@@ -65,3 +65,28 @@ def sequence(bias=1, tf=1, closes=PATH, end_s=None):
         v = x if bias == 1 else 240 - x
         out.append(pipe.update(Bar(start + 60 * tf * i, v, v + 0.25, v - 0.25, v)))
     return out
+
+
+def v4_sig(sl=1999.95, side=1):
+    from hull_mt import T
+
+    return Reading(
+        T,
+        1,
+        2000.0,
+        2000.0,
+        2001.0,
+        2002.0,
+        0.4,
+        side,
+        side,
+        "ready",
+        sl + side * 0.04,
+        T - 120,
+        sl,
+        T - 300,
+        4,
+        None,
+        None,
+        known_range(side, 2000.0, T),
+    )

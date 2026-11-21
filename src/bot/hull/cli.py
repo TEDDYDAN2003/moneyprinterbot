@@ -1,19 +1,22 @@
 from bot.config.loader import load_yaml
 
-from .config import FRAMES, HullConfig, selection
+from .config import NATIVE_TF, HullConfig, selection
 
 
 def register(sub):
     for name, helptext in [
         ("trade", "observe Hull labels; explicit demo arming only"),
-        ("trade-all", "one Hull scanner for selected symbols on M1/M2/M5"),
+        (
+            "trade-all",
+            "one Dynamic Hull scanner for selected symbols and explicitly approved timeframes",
+        ),
         (
             "hull-preflight",
             "inspect demo terminal, symbol metadata and sizing; no orders",
         ),
         (
             "hull-replay",
-            "closed-label benchmark with ordered quotes; not intrabar entry replay",
+            "archived v4 offline benchmark ONLY; not the Dynamic Hull bot",
         ),
     ]:
         p = sub.add_parser(
@@ -37,8 +40,8 @@ def register(sub):
         )
         p.add_argument(
             "--timeframe",
-            choices=("M1", "M2", "M5"),
-            help="optional single lane; otherwise all three",
+            choices=tuple(NATIVE_TF),
+            help="optional single approved lane; cannot override an empty allowlist",
         )
         if name in ("trade", "trade-all"):
             p.add_argument(
@@ -69,16 +72,34 @@ def handle(args):
         raise ValueError(
             "Missing hull section. No fallback to the retired M15/zone executor."
         )
-    h = HullConfig.model_validate(cfg["hull"])
-    p = selection(h, args.symbols, args.profile, args.lots, args.target_usd, args.rate)
-    frames = (int(args.timeframe[1:]),) if args.timeframe else FRAMES
     if args.command == "hull-replay":
-        from .replay import run_replay
+        # Refuse to misrepresent a closed-label replay as the new live strategy.
+        if (
+            cfg["hull"].get("entry_timing") == "live_hull_cross"
+            or "eligible_timeframes" in cfg["hull"]
+        ):
+            raise ValueError(
+                "hull-replay is archived v4 only; not a Dynamic Hull backtest"
+            )
+        from .v4.config import HullConfig as V4, FRAMES
+        from .v4.replay import run_replay
 
+        h = V4.model_validate(cfg["hull"])
+        p = selection(
+            h, args.symbols, args.profile, args.lots, args.target_usd, args.rate
+        )
+        frames = (NATIVE_TF[args.timeframe],) if args.timeframe else FRAMES
+        if set(frames) - set(FRAMES):
+            raise ValueError("Not a v4 benchmark timeframe")
         run_replay(args, cfg, h, p, frames)
     else:
         from .terminal import run
 
+        h = HullConfig.model_validate(cfg["hull"])
+        frames = h.lanes((NATIVE_TF[args.timeframe],) if args.timeframe else None)
+        p = selection(
+            h, args.symbols, args.profile, args.lots, args.target_usd, args.rate
+        )
         run(
             cfg,
             h,

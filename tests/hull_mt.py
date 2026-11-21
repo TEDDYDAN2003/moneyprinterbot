@@ -4,7 +4,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace as NS
 
-from hull_cases import known_range
+from bot.hull.structure import Structure
 
 from bot.hull.signal import Reading
 
@@ -150,7 +150,6 @@ def sig(sl=1999.95, side=1):
         2000.0,
         2000.0,
         2001.0,
-        2002.0,
         0.4,
         side,
         side,
@@ -162,5 +161,6 @@ def sig(sl=1999.95, side=1):
         4,
         None,
         None,
-        known_range(side, 2000.0, T),
+        Structure(closed_s=T, bias=side),
+        "low" if side == 1 else "high",
     )

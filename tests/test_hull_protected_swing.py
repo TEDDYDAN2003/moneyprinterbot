@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from bot.hull.config import Indicator
-from bot.hull.signal import Hull
-from bot.hull.structure import Band
+from bot.hull.v4.config import Indicator
+from bot.hull.v4.signal import Hull
+from bot.hull.v4.structure import Band
 from bot.zones.engine import Bar
 
 FIX = json.loads(
@@ -177,10 +177,7 @@ def test_incomplete_or_nonfinite_bands_never_grant_permission():
 
 @pytest.mark.parametrize("d", [-1, 1])
 @pytest.mark.parametrize("target", [45, 92])
-@pytest.mark.parametrize("touch", [False, True])
-def test_incident_and_choch_go_through_real_shadow_desk_with_frozen_quote_boundary(
-    hull_desk, d, target, touch
-):
+def test_historical_readings_cannot_reach_dynamic_orders(hull_desk, d, target):
     from hull_mt import T
 
     mt, desk, _ = hull_desk(armed=False)
@@ -190,23 +187,9 @@ def test_incident_and_choch_go_through_real_shadow_desk_with_frozen_quote_bounda
     for b in bs:
         r = engine.update(replace(b, t=b.t + offset))
     assert r.close_s == T and r.side == d
-    if target == 45:
-        assert (
-            not r.entry_side
-            and desk.batch("XAUUSDm", r) == "structure_choch_context_only"
-        )
-        assert not mt.requests and not desk.waiting
-        return
-    assert r.entry_side == d
-    band = r.structure.band(d)
-    edge = band.low if d == 1 else band.high
-    px = edge if touch else r.close
-    mt.q.bid, mt.q.ask = (
-        (round(px - 0.01, 3), px) if d == 1 else (px, round(px + 0.01, 3))
-    )
-    expected = "quote_outside_" + band.name if touch else "shadow_plan_only"
-    assert desk.batch("XAUUSDm", r) == expected
-    assert not mt.requests and not mt.positions
+    # Historical v4 readings are not executable through the Dynamic desk.
+    assert desk.batch("XAUUSDm", r) == "not_dynamic_hull_signal"
+    assert not mt.requests and not desk.waiting
 
 
 def test_long_tapes_cannot_flip_bias_or_promote_origins_on_internal_noise():

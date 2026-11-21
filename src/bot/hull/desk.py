@@ -12,7 +12,7 @@ from bot.execution.demo_runner import DemoSafetyError, _filling_mode, _side_is_a
 from bot.zones.hours import Hours
 from bot.zones.monitor import account_check, fresh, save, snapshot
 
-from .config import COUNTS, FIXED, LADDER, TARGET_POLICY
+from .config import COUNTS, FIXED, LADDER, TARGET_POLICY, TF_NAME
 from .entry_clock import FAST_POLL_S, WAITING, TimingBlock, check_quote, utc
 from .ladder import Protection, executable, inside
 from .ladder_desk import TicketLadders
@@ -101,6 +101,10 @@ class Desk:
         self.hours = Hours(cfg)
         self.ladders = TicketLadders(self)
         self.last_service = time.monotonic()
+        self.verify_signal = (
+            None  # installed by the native scanner; mandatory for live orders
+        )
+        self.exits = self.state.setdefault("opposite_exits", {})
         self.waiting: dict[str, FirstQuoteWindow] = {}  # never restored after restart
 
     def persist(self):
@@ -147,9 +151,26 @@ class Desk:
             getattr(q, "bid", None),
             getattr(q, "ask", None),
             monotonic_expired=time.monotonic() > window.end_mono,
+            live_bar_end=d.close_s if d.trigger else None,
         )
         if check.reason != "ready":
             raise TimingBlock(check, stage)
+        if self.verify_signal is not None or d.trigger is not None:
+            if self.verify_signal is None or not self.verify_signal(name, d, q):
+                raise Block("live_cross_or_trend_no_longer_verified")
+            now = time.time()
+            check = check_quote(
+                d.signal_s,
+                now,
+                self.lim,
+                q.time_msc,
+                q.bid,
+                q.ask,
+                monotonic_expired=time.monotonic() > window.end_mono,
+                live_bar_end=d.close_s if d.trigger else None,
+            )
+            if check.reason != "ready":
+                raise TimingBlock(check, stage)
         if stage == "first_plan":
             self.emit(
                 "entry_quote_check",
@@ -230,8 +251,12 @@ class Desk:
                 raise Block("same_side_batch_at_signal_close")
 
     def prepare(self, name, d, window, stage, expected=None, remaining=None):
+        if TF_NAME.get(d.tf) not in self.h.eligible_timeframes:
+            raise Block("timeframe_not_eligible")
         if not d.entry_side:
             raise Block(d.entry_reason)
+        if any(x["symbol"] == name for x in self.exits.values()):
+            raise Block("opposite_exit_not_confirmed_flat")
         mt = self.mt
         p = self.syms[name][1]
         a = self.account()
@@ -300,7 +325,7 @@ class Desk:
                 raise Block(why)
         return n, plan, q, i
 
-    def close_owned(self, pos, reason):
+    def close_owned(self, pos, reason, *, intent=None):
         if not self.armed or not self.owned(pos):
             return
         mt = self.mt
@@ -315,10 +340,17 @@ class Desk:
         ):
             return
         p = active[0]
+        if p.type != pos.type or (intent and not self._matches_exit(p, intent)):
+            return
         q = mt.symbol_info_tick(p.symbol)
         i = mt.symbol_info(p.symbol)
         if i is None or not fresh(q, time.time(), self.lim.max_quote_age_s):
             return
+        if intent and (
+            q.time_msc < intent["trigger_msc"]
+            or q.time_msc <= intent.get("last_tick", -1)
+        ):
+            return  # wait for a fresh post-signal executable quote; never widen the stop
         buy = p.type != mt.POSITION_TYPE_BUY
         req = {
             "action": mt.TRADE_ACTION_DEAL,
@@ -334,7 +366,22 @@ class Desk:
             "comment": "hull_exit",
         }
         self.account()
+        if intent is not None:
+            # Write ahead of the send. A crash/unknown ack must not send a duplicate close.
+            intent.update(
+                status="verify_or_review", last_tick=q.time_msc, volume_sent=p.volume
+            )
+            self.persist()
         res = mt.order_send(req)
+        if intent is not None:
+            code = getattr(res, "retcode", None)
+            intent["retcode"] = code
+            if code == getattr(mt, "TRADE_RETCODE_DONE_PARTIAL", 10010):
+                intent["status"] = "verify_partial"
+            elif code in (10004, 10018, 10020, 10021, 10024):
+                # Definite no-fill: requote, closed market, price changed/off, throttled.
+                intent["status"] = "await_quote"
+            self.persist()
         self.emit(
             "exit_request",
             symbol=p.symbol,
@@ -343,29 +390,94 @@ class Desk:
             retcode=getattr(res, "retcode", None),
         )
 
+    @staticmethod
+    def _matches_exit(p, x):
+        return (
+            p.symbol == x["symbol"]
+            and p.type == x["type"]
+            and getattr(p, "identifier", p.ticket) == x["identifier"]
+            and p.price_open == x["open"]
+        )
+
+    def _service_exit(self, p, x):
+        key = str(p.ticket)
+        if not self.owned(p) or not self._matches_exit(p, x):
+            if x["status"] != "identity_review":
+                x["status"] = "identity_review"
+                self.persist()
+                self.emit(
+                    "opposite_exit_review",
+                    symbol=x["symbol"],
+                    ticket=p.ticket,
+                    reason="identity_changed",
+                )
+            return
+        if x["status"] == "verify_partial" and 0 < p.volume < x["volume_sent"]:
+            x["status"] = "await_quote"  # only the reconciled remaining volume
+        if x["status"] == "await_quote":
+            self.close_owned(p, "opposite_hull_label", intent=x)
+            after = self.mt.positions_get(ticket=p.ticket)
+            if after is not None and not after:
+                self.exits.pop(key, None)
+                self.persist()
+                self.emit("opposite_exit_confirmed", symbol=p.symbol, ticket=p.ticket)
+            elif x["status"] == "verify_or_review":
+                self.emit(
+                    "opposite_exit_review",
+                    symbol=p.symbol,
+                    ticket=p.ticket,
+                    retcode=x.get("retcode"),
+                )
+
     def close_opposite(self, name, reading):
-        """Close all owned positions against a fresh opposite Hull label."""
-        if not self.armed or not reading.side or reading.trigger is not None:
+        """Latch and immediately service raw opposite signals. No entry/stop/zone gate."""
+        now = time.time()
+        if (
+            not self.armed
+            or not isinstance(reading, Reading)
+            or reading.label not in (-1, 1)
+            or TF_NAME.get(reading.tf) not in self.h.eligible_timeframes
+            or not 0 <= now - reading.signal_s <= self.lim.max_entry_age_s
+            or (reading.trigger is not None and now >= reading.close_s)
+        ):
             return 0
-        ps, _ = snapshot(self.mt)
-        closed = 0
-        for pos in ps:
-            if pos.symbol != name or not self.owned(pos):
+        ps = self.mt.positions_get()
+        if ps is None:
+            raise DemoSafetyError("Cannot verify owned positions for opposite exit")
+        matched = []
+        for p in ps:
+            if (
+                p.symbol != name
+                or not self.owned(p)
+                or p.type == self.typ(reading.label)
+                or getattr(p, "time_msc", 0) > reading.signal_msc
+            ):
                 continue
-            pos_side = 1 if pos.type == self.mt.POSITION_TYPE_BUY else -1
-            if pos_side != reading.side:
-                self.close_owned(pos, "opposite_hull_label")
-                closed += 1
-        if closed:
-            self.persist()
-        return closed
+            key = str(p.ticket)
+            self.exits.setdefault(
+                key,
+                {
+                    "symbol": name,
+                    "type": p.type,
+                    "open": p.price_open,
+                    "identifier": getattr(p, "identifier", p.ticket),
+                    "trigger_msc": reading.signal_msc,
+                    "status": "await_quote",
+                },
+            )
+            matched.append(p)
+        if matched:
+            self.persist()  # reserve every owned leg BEFORE the first close request
+            for p in matched:
+                self._service_exit(p, self.exits[str(p.ticket)])
+        return len(matched)  # matched tickets, NOT a claim of a fill
 
     def service_if_due(self):
         # Single MT5 writer: also check between confirmed legs / symbols when a
         # batch or scan is slow. Never interleave amendments into an entry send.
         if (
             self.armed
-            and self.ladders.book
+            and (self.ladders.book or self.exits)
             and time.monotonic() - self.last_service >= FAST_POLL_S
         ):
             self.supervise()
@@ -387,6 +499,9 @@ class Desk:
             if not self.owned(p):
                 continue
             key = str(p.ticket)
+            if key in self.exits:
+                self._service_exit(p, self.exits[key])
+                continue  # never amend a ticket with a pending close
             is_ladder = key in self.ladders.book
             goal = goals.get(key) if not is_ladder else None
             why = (
@@ -402,6 +517,12 @@ class Desk:
                 self.close_owned(p, why)
             elif is_ladder:
                 self.ladders.supervise(p, quotes, grids, plans)
+        for key in set(self.exits) - active:
+            pending = self.exits.pop(key)
+            self.persist()
+            self.emit(
+                "opposite_exit_confirmed", symbol=pending["symbol"], ticket=int(key)
+            )
         self.ladders.prune(active)
         if stale := set(goals) - active:
             for k in stale:
@@ -538,8 +659,16 @@ class Desk:
         return last == [d.close_s, d.side]
 
     def batch(self, name, d, *, raw_tf=None, observed_lanes=()):
-        if d.trigger is not None:
-            return "closed_cross_required"
+        if not isinstance(d, Reading):
+            return "not_dynamic_hull_signal"
+        if TF_NAME.get(d.tf) not in self.h.eligible_timeframes:
+            return "timeframe_not_eligible"
+        if not d.entry_side:
+            return d.entry_reason
+        bars = self.state.setdefault("dynamic_entry_bars", {}).setdefault(name, {})
+        bar_id = f"{d.tf}:{d.side}"
+        if bars.get(bar_id, -1) >= d.close_s:
+            return "already_consumed"
         seen = self.state.setdefault("consumed", {})
         if seen.get(name, 0) >= d.signal_s or self._live_reserved(name, d):
             return "already_consumed"
@@ -547,9 +676,8 @@ class Desk:
         # Reserve ONCE before touching broker order APIs. Only the original,
         # in-memory first-quote window may resume this reservation. A restart cannot.
         seen[name] = d.signal_s  # seconds, backwards-compatible with closed-only state
+        bars[bar_id] = d.close_s
         self.persist()
-        if not d.entry_side:
-            return d.entry_reason
         mono = time.monotonic()
         remaining = d.signal_s + self.lim.max_entry_age_s - time.time()
         window = FirstQuoteWindow(d, mono + remaining, raw_tf, {d.tf, *observed_lanes})
@@ -619,7 +747,11 @@ class Desk:
                     "magic": self.h.magic,
                     "type_time": self.mt.ORDER_TIME_GTC,
                     "type_filling": _filling_mode(self.mt, i),
-                    "comment": f"h{d.tf}_{d.close_s}_{sent + 1}",
+                    "comment": (
+                        f"i{d.tf}_{d.trigger.ms}_{sent + 1}"
+                        if d.trigger
+                        else f"h{d.tf}_{d.close_s}_{sent + 1}"
+                    ),
                 }
                 chk = self.mt.order_check(req)
                 a = self.account()
@@ -694,7 +826,7 @@ class Desk:
                     self.persist()
                     raise
                 if final_prices != checked_prices:
-                    # One tick can still cross a spread cap, structure edge, stop or
+                    # One tick can still cross a spread cap, stop distance or
                     # funding limit. Rebuild and broker-check the actual new request
                     # once, at this exact quote, on the same signal/deadline. Never
                     # edit the price of an already checked request and send it blind.

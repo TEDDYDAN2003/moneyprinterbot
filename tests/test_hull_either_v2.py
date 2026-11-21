@@ -15,8 +15,10 @@ from hull_mt import ROOT, T, sig
 from bot.config.loader import load_yaml
 from bot.hull.config import BATCH_ENTRY_POLICY, LADDER, HullConfig, Indicator
 from bot.hull.orders import Grid
-from bot.hull.replay import Account
-from bot.hull.signal import Hull
+from bot.hull.v4.replay import Account
+from bot.hull.v4.signal import Hull
+from bot.hull.v4.config import Indicator as V4Indicator
+from hull_cases import v4_sig
 from bot.hull.terminal import dispatch
 from bot.zones.engine import Bar
 from bot.zones.feed import Minute
@@ -89,7 +91,7 @@ def test_either_matches_independent_whole_series_strict_crosses_and_same_source_
     tf,
 ):
     bars = tape(tf)
-    h = Hull(tf, Indicator(), 0.01)
+    h = Hull(tf, V4Indicator(), 0.01)
     lo, hi, b, lc, hc = reference(bars)
     rows = [h.update(v) for v in bars]
     seen = []
@@ -228,7 +230,7 @@ def test_ordered_replay_flat_at_cross_not_flat_after_processing_later_tick(side,
         10000,
         exit_opposite=True,
     )
-    r = sig(sl=1999 if side == 1 else 2001, side=side)
+    r = v4_sig(sl=1999 if side == 1 else 2001, side=side)
 
     def minute(t, prices):
         bid = np.array(prices, dtype=float)
@@ -276,9 +278,9 @@ def test_versioned_defaults_only_indicator_input_changes_and_legacy_opt_in():
     h = HullConfig.model_validate(load_yaml(ROOT / "config.yaml")["hull"])
     p = h.indicator
     assert p == Indicator() and (p.hull_len, p.source, p.signal_policy) == (
-        16,
-        "either",
-        "fc_hull_either_v2",
+        24,
+        "dynamic",
+        "fc_dynamic_source_internal_v1",
     )
     assert (
         p.exit_opposite,
@@ -291,7 +293,7 @@ def test_versioned_defaults_only_indicator_input_changes_and_legacy_opt_in():
     ) == (True, "local_pullback", 7, 14, 0.1, 0, LADDER)
     assert BATCH_ENTRY_POLICY == "first_eligible_while_flat_v1"
     old = Indicator(hull_len=24, source="hl2")
-    assert old.signal_policy == "fc_hull_single_v1"
+    assert old.signal_policy == "fc_dynamic_source_internal_v1"
 
 
 def test_a_waiting_quote_cannot_revive_a_repeat_when_history_catches_up(hull_desk):

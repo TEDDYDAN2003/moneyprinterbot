@@ -5,8 +5,8 @@ from dataclasses import replace
 import pytest
 from hull_cases import PATH, sequence
 
-from bot.hull.orders import select_labels
-from bot.hull.structure import Structure
+from bot.hull.v4.orders import select_labels
+from bot.hull.v4.structure import Structure
 
 
 @pytest.mark.parametrize("tf", [1, 2, 5])

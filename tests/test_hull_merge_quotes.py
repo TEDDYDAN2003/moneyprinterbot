@@ -34,12 +34,9 @@ def test_final_price_can_move_one_tick_but_exact_sent_request_was_checked(
 
     mt.order_check = check
     if live:
-        assert (
-            desk.batch(NAME, r) == "closed_cross_required"
-            and not checks
-            and not mt.requests
-        )
-        return
+        desk.verify_signal = lambda name, r, q: (
+            True
+        )  # confirmed by fake native projection
     assert desk.batch(NAME, r) == "demo_batch_sent"
     assert len(mt.requests) == len(mt.positions) == 4
     assert len(checks) == 5 and checks[1:] == mt.requests
@@ -63,7 +60,7 @@ def test_final_price_can_move_one_tick_but_exact_sent_request_was_checked(
         ("orders", "pending_orders_present"),
         ("funding", "insufficient_free_margin"),
         ("broker", "broker_precheck_rejected"),
-        ("projection", "closed_cross_required"),
+        ("projection", "live_cross_or_trend_no_longer_verified"),
         ("two_ticks", "final_quote_or_safety_changed"),
         ("moved_again", "final_quote_or_safety_changed"),
     ],
@@ -117,9 +114,7 @@ def test_one_tick_is_not_a_safety_bypass_or_a_reprice_loop(hull_desk, case, outc
         and not desk.waiting
         and not desk.state.get("manual_hold")
     )
-    assert desk.batch(NAME, r) == (
-        "closed_cross_required" if case == "projection" else "already_consumed"
-    )
+    assert desk.batch(NAME, r) == "already_consumed"
 
 
 @pytest.mark.parametrize("side", [1, -1])

@@ -164,7 +164,7 @@ def target(grid, side, lots, entry, usd, cash, *, cash_per_price=None):
 
 
 def protected_prices(d, p, grid, bid, ask):
-    """Validate signal, spread, volume, frozen band and initial stop on THIS quote."""
+    """Validate signal, spread, volume and initial stop on THIS quote."""
     if not d.entry_side or d.raw_sl is None:
         raise Block(d.entry_reason)
     if not all(math.isfinite(v) for v in (bid, ask, d.raw_sl)) or not 0 < bid <= ask:
@@ -174,9 +174,6 @@ def protected_prices(d, p, grid, bid, ask):
     grid.volume(p.lots)
     side = d.side
     entry, mark = (ask, bid) if side == 1 else (bid, ask)
-    # Same frozen band at the trigger and at each executable ask/bid.
-    if why := d.structure.veto(side, entry):
-        raise Block("quote_" + why)
     # Use the actual chart-derived price; never replace with a cash stop or add a hidden spread buffer.
     sl = grid.price(grid.index(d.raw_sl, side == -1))
     dist = max(grid.gap, grid.tick)
@@ -229,38 +226,3 @@ def count_for(rate, lim, e, p, more=None):
         if not why:
             return n
     raise Block(why)
-
-
-def choose(ds):
-    """One non-overlapping batch per symbol; never multiply a shared timestamp."""
-    ready = [d for d in ds if d.side]
-    if not ready:
-        return None, "no_executable_label"
-    t = max(d.signal_msc for d in ready)
-    same = [d for d in ready if d.signal_msc == t]
-    if len({d.side for d in same}) > 1:
-        return None, "opposite_labels_same_trigger" if any(
-            d.trigger for d in same
-        ) else "opposite_labels_same_close"
-    return max(same, key=lambda d: d.tf), "ready"
-
-
-def select_labels(ds):
-    """Independent picks: existing exit arbitration, and structure-qualified entry.
-
-    Keep the original opportunity timestamp. An older valid signal must not be
-    revived by a newer veto. Only qualified lanes vote on a NEW position.
-    """
-    original, why = choose(ds)
-    latest = max((d.signal_msc for d in ds if d.side), default=None)
-    if latest is None:
-        return original, None, why
-    valid = [d for d in ds if d.signal_msc == latest and d.entry_side]
-    if not valid:
-        return (
-            original,
-            None,
-            (original.entry_reason if original else "no_structure_qualified_label"),
-        )
-    entry, entry_why = choose(valid)
-    return original, entry, entry_why

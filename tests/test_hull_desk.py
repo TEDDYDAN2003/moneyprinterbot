@@ -5,8 +5,7 @@ from dataclasses import replace
 from types import SimpleNamespace as NS
 
 import pytest
-from hull_cases import PATH, sequence
-from hull_mt import MT, ROOT, T, scanner_clock, sig
+from hull_mt import MT, ROOT, T, sig
 
 from bot.config.loader import load_yaml
 from bot.execution.demo_runner import DemoSafetyError
@@ -142,7 +141,7 @@ def test_conflicting_broker_aliases_bad_lots_or_real_account_fail_closed(hull_de
     mt.a.trade_mode = 2
     with pytest.raises(DemoSafetyError):
         identity_check(mt, "demo", True)
-    with pytest.raises(DemoSafetyError):
+    with pytest.raises(ValueError, match="No eligible"):
         run(cfg, h, p, armed=True)
 
 
@@ -182,6 +181,7 @@ def test_stream_ignores_forming_bar_and_never_replays_startup_labels():
     ref = fix["sets"][0]
     s = Stream(2, Indicator(hull_len=ref["len"], source=ref["source"]), 0.01)
     assert s.refresh(mt, "S", T + j * dt + 0.2) == (None, "warmup_only")
+    s.baseline_due = False  # verified first live snapshot already sampled
     end[0] = j + 2
     r, _ = s.refresh(mt, "S", T + (j + 1) * dt + 0.2)
     assert r.label == fix["sets"][0]["rows"][j][2] and r.close_s == T + (j + 1) * dt
@@ -237,6 +237,7 @@ def test_preflight_resolves_only_requested_symbols_and_never_sends(
             max_orders_minute=40,
         )
     h = HullConfig.model_validate(cfg["hull"])
+    h = h.model_copy(update={"eligible_timeframes": ("M1", "M5")})
     mt.copy_rates_from_pos = lambda *args: []
     mt.initialize = lambda: True
     mt.shutdown = lambda: None
@@ -244,10 +245,10 @@ def test_preflight_resolves_only_requested_symbols_and_never_sends(
     monkeypatch.chdir(tmp_path)
     answer = run(cfg, h, selection(h), preflight=True)
     assert (
-        answer["timeframes"] == [1, 2, 5]
-        and answer["signal_policy"] == "fc_hull_either_v2"
-        and answer["entry_timing"] == "confirmed_close_only"
-        and answer["entry_quote_policy"] == "first_fresh_post_close_tick_v1"
+        answer["timeframes"] == ["M1", "M5"]
+        and answer["signal_policy"] == "fc_dynamic_source_internal_v1"
+        and answer["entry_timing"] == "live_hull_cross"
+        and answer["entry_quote_policy"] == "current_live_tick_or_confirmed_close_v1"
         and answer["specs"]["XAUUSDm"]["bid_chart_verified"]
         and answer["batch_entry_policy"] == "first_eligible_while_flat_v1"
         and list(answer["specs"]) == ["XAUUSDm"]
@@ -306,252 +307,3 @@ def test_legacy_saved_halt_and_full_send_window_do_not_block_or_reset_state(
             restarted.batch("XAUUSDm", sig()) == "already_consumed"
             and len(mt.requests) == 10
         )
-
-
-@pytest.mark.parametrize(
-    "eligible,exit_opposite", [(True, True), (False, True), (False, False)]
-)
-def test_cli_native_m2_entry_filter_and_independent_exit(
-    tmp_path, monkeypatch, eligible, exit_opposite
-):
-    """Through the real CLI/coordinator, not by submitting our own decision to Desk."""
-    import sys
-
-    import yaml
-
-    from bot.cli import main
-    from bot.hull.signal import Hull
-    from bot.zones.engine import Bar
-
-    cfg = load_yaml(ROOT / "config.yaml")
-    cfg["run"]["mode"] = "demo"
-    cfg["hull"]["entry_timing"] = "confirmed_close_only"  # explicit current clock
-    cfg["hull"]["indicator"]["exit_opposite"] = exit_opposite
-    h = HullConfig.model_validate(cfg["hull"])
-    mt = MT()
-    step = 120
-    raw = json.loads((ROOT / "research/hull_labels/reference.json").read_text())["bars"]
-    engine = Hull(2, h.indicator, 0.01)
-    idx = None
-    for i, r in enumerate(raw[:-1]):
-        d = engine.update(Bar(i * step, r["open"], r["high"], r["low"], r["close"]))
-        if (
-            i > 60
-            and d.side
-            and bool(d.entry_side) == eligible
-            and (
-                not eligible
-                or not d.structure.veto(
-                    d.side, r["close"] + (0.01 if d.side == 1 else 0)
-                )
-            )
-            and d.raw_sl is not None
-            and 0.1 < d.side * (r["close"] - d.raw_sl) < 14
-        ):
-            idx = i
-            break
-    assert idx is not None
-    if not eligible:
-        mt.positions.append(
-            NS(
-                ticket=91,
-                magic=h.magic,
-                symbol="XAUUSDm",
-                type=mt.ORDER_TYPE_SELL if d.side == 1 else mt.ORDER_TYPE_BUY,
-                sl=d.close + 10 * d.side,
-                tp=d.close - 10 * d.side,
-                volume=0.01,
-                price_open=d.close,
-                profit=0.0,
-            )
-        )
-    end = [idx]
-    now = [T - step + 0.3]
-    origin = T - (idx + 1) * step
-    calls = []
-
-    def rates(name, tf, shift, count):
-        assert tf == mt.TIMEFRAME_M2 and shift == 1
-        calls.append(tf)
-        return [
-            dict(time=origin + k * step, **raw[k])
-            for k in range(max(0, end[0] - count), end[0])
-        ]
-
-    def advance(seconds):
-        end[0] += 1
-        now[0] += step
-
-    mt.copy_rates_from_pos = rates
-    mt.initialize = lambda: True
-    mt.shutdown = lambda: None
-    mt.history_deals_get = lambda *args: []
-    mt.q = NS(
-        time_msc=T * 1000 + 100, bid=raw[idx]["close"], ask=raw[idx]["close"] + 0.01
-    )
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    scanner_clock(monkeypatch, lambda: now[0], advance)
-    monkeypatch.setitem(sys.modules, "MetaTrader5", mt)
-    local = tmp_path / "cfg.yaml"
-    local.write_text(yaml.safe_dump(cfg))
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "bot",
-            "trade-all",
-            "--config",
-            str(local),
-            "--timeframe",
-            "M2",
-            "--max-iterations",
-            "2",
-            "--arm-demo",
-            "--profile",
-            "XAUUSD:0.01:10:slow",
-        ],
-    )
-    assert main() == 0 and calls == [2, 2]
-    ledger = [
-        json.loads(l)
-        for l in next(tmp_path.glob("reports/hull_runtime/*/demo.jsonl"))
-        .read_text()
-        .splitlines()
-    ]
-    (record,) = [r for r in ledger if r["event"] == "closed_label"]
-    assert record["label"] == d.label and record["entry_side"] == d.entry_side
-    if eligible:
-        assert len(mt.positions) == len(mt.requests) == 10
-        assert all(p.sl > 0 and p.tp > 0 and p.volume == 0.01 for p in mt.positions)
-        assert ledger[-1]["outcome"] == "demo_batch_sent"
-    else:
-        assert ledger[-1]["outcome"] == d.entry_reason and not ledger[-1]["tf"]
-        assert not [r for r in mt.requests if "position" not in r]
-        assert len(mt.positions) == int(not exit_opposite)
-        assert [r.get("position") for r in mt.requests] == (
-            [91] if exit_opposite else []
-        )
-
-
-@pytest.mark.parametrize("bias", [1, -1])
-def test_actual_countertrend_label_beyond_confirmed_bos_cannot_open(hull_desk, bias):
-    mt, desk, _ = hull_desk()
-    row = sequence(bias, closes=PATH[:21], end_s=T)[-1]
-    assert row.label == row.side == -bias and row.structure.event == "bos"
-    assert (
-        row.entry_side == 0
-        and desk.batch("XAUUSDm", row) == "countertrend_not_an_entry"
-    )
-    assert not mt.requests and not mt.positions and not desk.waiting
-
-
-@pytest.mark.parametrize("bad_close", [False, True])
-@pytest.mark.parametrize("bias", [1, -1])
-def test_bos_close_and_executable_quote_both_must_pass(hull_desk, bias, bad_close):
-    row = sequence(bias, closes=PATH[:18] + [118.35], end_s=T)[-1]
-    edge = row.structure.origin.price
-    mt, desk, _ = hull_desk()
-    ask_offset = 0.1 if row.side == 1 else 0.0
-    # Close valid but executable quote exactly on BOS; or close invalid but
-    # quote comes back inside. Neither case may result in a single ticket.
-    at = row.close if bad_close else edge
-    mt.q.bid, mt.q.ask = at - ask_offset, at + 0.1 - ask_offset
-    if bad_close:
-        row = replace(row, close=edge)
-    why = desk.batch("XAUUSDm", row)
-    assert (
-        why
-        == ("" if bad_close else "quote_")
-        + "outside_"
-        + row.structure.band(row.side).name
-    )
-    assert not mt.requests and desk.batch("XAUUSDm", row) == "already_consumed"
-
-
-def test_each_batch_leg_rechecks_frozen_zone_and_does_not_top_up(hull_desk):
-    mt, desk, _ = hull_desk("medium")
-    d = sig()
-    # The close and first ask are above the frozen structural HL. The next ask
-    # touches it exactly, so keep the protected partial and never top it up.
-    s = replace(
-        d.structure,
-        origin=replace(d.structure.origin, price=1999.999),
-    )
-    d = replace(d, structure=s)
-    send = mt.order_send
-
-    def drift(request):
-        ack = send(request)
-        mt.q.bid, mt.q.ask = 1999.899, 1999.999
-        return ack
-
-    mt.order_send = drift
-    assert (
-        desk.batch("XAUUSDm", d)
-        == "protected_partial_no_topup:quote_outside_bull_bos_discount_buy"
-    )
-    assert (
-        len(mt.positions) == len(mt.requests) == 1
-        and mt.positions[0].sl > 0
-        and mt.positions[0].tp > 0
-    )
-    assert desk.batch("XAUUSDm", d) == "already_consumed"
-
-
-@pytest.mark.parametrize("held", [False, True])
-def test_flat_may_use_only_qualified_lane_but_raw_conflict_never_exits(
-    tmp_path, monkeypatch, held
-):
-    """Exercise coordinator when the old exit selector and new entry selector differ."""
-    import sys
-
-    from bot.hull.structure import Structure
-
-    cfg = load_yaml(ROOT / "config.yaml")
-    cfg["run"]["mode"] = "demo"
-    h = HullConfig.model_validate(cfg["hull"])
-    mt = MT()
-    mt.initialize = lambda: True
-    mt.shutdown = lambda: None
-    mt.history_deals_get = lambda *args: []
-    good = sig()
-    noise = replace(sig(sl=2000.5, side=-1), tf=5, structure=Structure())
-    if held:
-        mt.positions = [
-            NS(
-                ticket=55,
-                symbol="XAUUSDm",
-                magic=h.magic,
-                type=mt.ORDER_TYPE_SELL,
-                sl=2000.5,
-                tp=1999.0,
-                volume=0.09,
-                price_open=2000.0,
-                profit=0.0,
-            )
-        ]
-    monkeypatch.setattr(
-        Stream, "refresh", lambda lane, *_: (good if lane.tf == 1 else noise, "updated")
-    )
-    monkeypatch.setattr("bot.hull.terminal.time.time", lambda: T + 0.3)
-    monkeypatch.setitem(sys.modules, "MetaTrader5", mt)
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    monkeypatch.chdir(tmp_path)
-    run(cfg, h, selection(h), (1, 5), armed=True, iterations=1)
-    ledger = [
-        json.loads(row)
-        for row in next(tmp_path.glob("reports/hull_runtime/*/demo.jsonl"))
-        .read_text()
-        .splitlines()
-    ]
-    last = ledger[-1]
-    assert last["raw_selected_tf"] is None and last["tf"] == 1
-    if held:
-        assert last["outcome"] == "symbol_busy_or_batch_changed" and not mt.requests
-        assert mt.positions[0].ticket == 55
-    else:
-        assert last["outcome"] == "demo_batch_sent" and len(mt.requests) == 10
-        assert mt.positions[0].type == mt.ORDER_TYPE_BUY

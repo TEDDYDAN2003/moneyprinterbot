@@ -302,16 +302,17 @@ zones:
 
 # ACTIVE demo entry path. Indicator source = the user's Hull BUY/SELL labels.
 hull:
-  entry_timing: confirmed_close_only  # closed cross in the BOS-proven half-range; no CHoCH entry or retest
-  exit_policy: profit_ladder_70_30_v1  # new tickets only; every rung uses that leg’s frozen base + entry spread
-  enabled: [XAUUSD]  # opt in other keys via --symbols or repeated --profile
+  eligible_timeframes: []  # pending operator selection; no implicit M1/M2/M5 and no CLI bypass
+  entry_timing: live_hull_cross  # raw chart cross on observed ticks; structure uses confirmed closes
+  exit_policy: profit_ladder_70_30_v1  # unchanged: each leg's frozen base + entry spread
+  enabled: [XAUUSD]
   magic: 26111825
   indicator:
-    hull_len: 16
-    source: either            # independent High/Low Hull A curves; strict cross against the previous completed bar
-    signal: labels        # raw Hull crosses; completed structure gates new entries
-    exit_opposite: true   # original opposite-label exit, independent of entry eligibility
-    ema_length: 200
+    hull_len: 24
+    source: dynamic         # bullish: Low; bearish: High. B always uses close.
+    neutral_mode: high      # Pine default; still no neutral entries
+    structure_timeframe: null  # Pine 'Chart': each signal lane's own native timeframe
+    exit_opposite: true     # mandatory raw opposite exit, before entry gates
     stop: local_pullback  # recent preceding wicks, not a market-structure HH/HL
     pullback_bars: 7      # capped at the preceding opposite crossover; excludes signal bar
     swing_len: 3          # closed bars on each side for structure and optional pivot SL

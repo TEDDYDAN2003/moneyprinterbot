@@ -1,3 +1,5 @@
+> This MT5 chart study is historical v4. Use the [Dynamic Hull reference](../indicators/FC-Hull-Dynamic-Source.pine) for the current Python bot.
+
 # Install FC Hull BOS Half-Range v4
 
 This is a **custom indicator**, not an Expert Advisor or a connection to the Python scanner. It displays the same closed-bar entry rules, but its fills and P/L are chart simulations.
@@ -6,7 +8,7 @@ This is a **custom indicator**, not an Expert Advisor or a connection to the Pyt
 2. Open **that file** in MetaEditor (F4) and press **F7 / Compile**. Check the Errors pane; no precompiled `.ex5` is supplied. Return to MT5, refresh **Navigator → Indicators**, remove the old chart attachment and add **FC Hull BOS Half-Range v4**. No DLL, account permission or Algo Trading is needed to calculate on loaded candles.
 3. Use **Valid suggestions only** to see fresh trend crosses that pass the structure, chart-stop and slot checks. Enable the BUY/SELL bands to see the eligible half-range. Use **Simulated fills only** for next-open chart executions, or **Structure-qualified crosses** to inspect the band gate alone. **All Hull crosses (debug)** is for reference: a green **×** (up) or red **×** (down) sits on Hull B on the candle that confirms the cross. There are no text captions in that view, even with captions enabled; an amber **×** above a candle means opposing sources, not a directional signal. Diagnostic popups remain separate from entries.
 
-**What was removed:** the old watch dots, staged-limit marker/line, limit-ready alerts and retest fills. A strict close through the old protected swing updates structure only. Neither a matching cross on that close nor a later touch of the broken level qualifies. A new BOS with its confirmed swing range and a fresh completed **trend-side** cross are required. [Exact BUY/SELL inequalities, an example, and scanner differences](../docs/HULL_STRUCTURE.md).
+**What was removed:** the old watch dots, staged-limit marker/line, limit-ready alerts and retest fills. A strict close through the old protected swing updates structure only. Neither a matching cross on that close nor a later touch of the broken level qualifies. A new BOS with its confirmed swing range and a fresh completed **trend-side** cross are required. [Exact BUY/SELL inequalities, an example, and scanner differences](../docs/archive/HULL_STRUCTURE_v4.md).
 
 ### Data Window / CopyBuffer
 

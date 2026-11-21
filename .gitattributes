@@ -20,3 +20,6 @@ WicklessDesk/** text eol=lf
 src/bot/wickless/** text eol=lf
 research/wickless_m15/** text eol=lf
 indicators/Wickless-M15-Rejection.pine text eol=lf
+
+indicators/FC-Hull-Dynamic-Source.pine text eol=lf
+src/bot/hull/v4/*.py text eol=lf

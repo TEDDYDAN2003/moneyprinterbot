@@ -1,0 +1,344 @@
+# Offline benchmark inputs at 6707c17. NOT a Dynamic Hull scanner configuration.
+run:
+  mode: paper                 # no orders; Hull scanner requires explicit demo mode AND arming
+  symbol: XAUUSD
+  broker_symbol_suffix: "m"   # read-only MT5 check found XAUUSDm on the current account
+  timezone_broker: "Etc/GMT-2"   # broker server tz; verify in Phase 1
+  market_close_timezone: "Etc/GMT-2" # broker server timezone used for scheduled flattening
+  seed: 42
+  log_level: INFO
+
+mt5:
+  terminal_path: ""           # blank = auto-detect
+  magic_number: 20260101
+  deviation_points: 100       # 0.10 price units on current 0.001-point XAUUSDm symbol
+  filling_mode: auto          # auto | ioc | fok | return
+
+data:
+  history_years: 3
+  base_timeframe: M1
+  timeframes: [M1, M2, M5]
+  store_ticks: true
+  tick_retention_days: 120
+  quality:
+    max_gap_minutes: 5
+    drop_weekend_gaps: true
+    outlier_zscore: 12
+
+sessions:                      # all times UTC; DST handled by tz-aware definitions below
+  asia:        {start: "00:00", end: "07:00", tz: UTC}
+  london:      {start: "08:00", end: "16:00", tz: Europe/London}
+  new_york:    {start: "08:00", end: "17:00", tz: America/New_York}
+  killzones:
+    london_open:   {start: "07:00", end: "10:00", tz: Europe/London}
+    ny_open:       {start: "07:00", end: "10:00", tz: America/New_York}
+    london_ny_overlap: {start: "13:00", end: "16:00", tz: Europe/London}
+  trade_only_in: []            # all sessions allowed; confluence and risk gates still apply
+  allow_asia: true              # session whitelist is disabled; all open-market sessions are considered
+  rollover_blackout: {start: "21:55", end: "23:05", tz: UTC}
+
+timeframe_roles:
+  entry_tf: [M1, M2, M5]            # historical feature config; active scanner only M1/M2/M5
+  small_tf: [M1, M3, M5]           # internal structure
+  medium_tf: [M10, M15]
+  large_tf: [H1, H4, D1]       # external trend and major levels
+
+modes:
+  active: auto                 # fast | medium | slow | auto (engine picks)
+  fast:
+    batch_size: [5, 5]         # M1 test batch; pilot execution uses pilot.batch_size directly
+    batch_spacing_seconds: [1, 4]
+    tp_atr_mult: 0.35
+    sl_atr_mult: 0.70
+    max_hold_seconds: 180
+    min_entry_prob: 0.60
+    min_momentum_score: 0.70
+  medium:
+    batch_size: [3, 4]
+    batch_spacing_seconds: [3, 10]
+    tp_atr_mult: 0.80
+    sl_atr_mult: 1.00
+    max_hold_seconds: 600
+    min_entry_prob: 0.64
+    min_momentum_score: 0.55
+  slow:
+    batch_size: [1, 1]
+    batch_spacing_seconds: [0, 0]
+    tp_atr_mult: 1.80
+    sl_atr_mult: 1.20
+    max_hold_seconds: 3600
+    min_entry_prob: 0.68
+    min_momentum_score: 0.40
+  auto_selector:
+    fast_if:   {session_in: [london_open, ny_open], momentum_score_gte: 0.75, spread_pctile_lte: 0.6, atr_pctile_gte: 0.4}
+    slow_if:   {near_major_level: true, or_atr_pctile_lte: 0.25}
+    else: medium
+
+lots:                           # YOU ADJUST THESE
+  mode: fixed                   # fixed | risk_pct
+  fixed:
+    fast_lot_per_trade: 0.05
+    medium_lot_per_trade: 0.05
+    slow_lot_per_trade: 0.05
+  risk_pct:
+    per_batch_risk_pct: 0.5     # total risk of a whole batch as % equity
+  min_lot: 0.01
+  max_lot_per_trade: 0.50
+  max_total_lots_open: 0.35    # five M1 entries plus one M5 and one M15 position at 0.05 each
+  lot_step: 0.01
+  streak_scaling:
+    enabled: false             # hold the requested 0.05 lot fixed during this experiment
+    win_step_multiplier: 1.15   # per consecutive winning batch
+    max_multiplier: 1.75        # hard cap on reward scaling
+    loss_step_multiplier: 0.75  # per consecutive losing batch (penalty)
+    min_multiplier: 0.40
+    reset_after_minutes_flat: 30
+
+risk:  # no daily, weekly, or equity drawdown halt; stop manually or use KILL
+  max_open_trades: 7
+  max_open_trades_per_direction: 8
+  max_spread_points: 300      # current MT5 sample median 240 points; 480-point outliers remain blocked
+  max_slippage_points: 25
+  min_free_margin_pct: 60
+
+# Shared multi-timeframe pilot settings; MT5 account type selects the environment.
+pilot:
+  fixed_lot_size: {M1: 0.05, M5: 0.05, M15: 0.05} # requested M1 size; fallback_lot_size is tried on broker rejection
+  fallback_lot_size: {M1: 0.04, M5: 0.04, M15: 0.04}
+  max_lot_per_trade: 0.05
+  min_confluence_score: 0.56
+  target_r_multiple: {M1: 2.0, M5: 1.50, M15: 1.50}
+  minimum_target_price_units: {M1: 0.01, M5: 1.50, M15: 1.50}
+  minimum_net_reward_risk: {M1: 2.0, M5: 0.25, M15: 0.25}
+  max_friction_to_stop_fraction: {M1: 0.25, M5: 0.20, M15: 0.20}
+  batch_size: {M1: 5, M5: 1, M15: 1}
+  per_entry_stop_loss_usd: {M1: 2.5, M5: 2.5, M15: 2.5} # cash SL on each timeframe's entry
+  batch_target_profit_usd: {M1: 25.0, M5: 5.0, M15: 5.0} # $5 initial TP per entry; M5/M15 may extend while trend holds
+  confluence_weights:
+    structure_M1: 0.10
+    structure_M5: 0.10
+    structure_M15: 0.10
+    momentum_5bar: 0.10
+    ema_alignment: 0.05
+    candle_pressure: 0.03
+    body_pressure_3: 0.06
+    body_pressure_5: 0.06
+    wickless_quality: 0.05
+    wick_rejection: 0.04
+    price_vs_ema21_atr: 0.06
+    range_position_20: 0.04
+    protected_level_reaction: 0.05
+    m1_level_location: 0.02
+    m1_pullback_zone: 0.02
+    local_level_location: 0.12
+    local_pullback_zone: 0.17
+    trendline_proximity: 0.08
+    liquidity_sweep: 0.04
+    fvg_direction: 0.02
+    directional_volume: 0.02
+  round_trip_cost_ex_spread_price_units: 0.0  # spread only in this experiment
+  assumed_slippage_price_units_per_side: 0.0
+  commission_round_turn_per_lot: 0.0
+  max_spread_points: 300
+  max_hold_m1_bars: {M1: 15, M5: 30, M15: 60}
+  profit_management: {trail_start_r: 0.80, atr_trail_multiple: 1.20, trail_gap_r: 0.50, target_extension_atr: 1.50}
+  history_m1_bars: 2400
+  state_file: reports/demo_pilot_state.json
+  log_file: reports/demo_pilot_{timeframe}.jsonl
+  daily_flatten_time: "23:45"
+  daily_reopen_time: "01:05"
+
+cooldown:
+  enabled: true
+  trigger_consecutive_losing_batches: 2
+  seconds: 30
+  during_cooldown: reorganize        # recompute levels, features, recalibrate thresholds
+  escalate: {after_cooldowns_in_hour: 3, seconds: 180}
+
+levels:
+  swing_lookback: {small: 5, medium: 8, large: 12}   # fractal pivot strength per TF group
+  cluster_tolerance_atr: 0.25
+  min_touches: 2
+  fib_pullbacks: [0.382, 0.5, 0.618, 0.786]
+  round_numbers: {step: 5.0, major_step: 25.0}       # gold $5 / $25 levels
+  proximity_atr: 0.35                                # "at level" definition
+  minimum_opposing_level_room_atr: 0.30              # avoid entering directly into nearby M1 support/resistance
+  minimum_pullback_rejection: 0.12                    # require price response at a pullback level
+  pullback_proximity_by_timeframe: {M1: 0.35, M5: 0.50, M15: 0.60} # higher TF pullbacks have a wider ATR zone
+  recency_decay_hours: 72
+  decision:                                          # break-vs-reject weighing
+    min_reject_prob: 0.62
+    min_break_prob: 0.62
+    min_reward_to_risk: 1.5
+    allow_hold_for_day_extreme: true
+
+momentum:
+  windows_seconds: [5, 15, 30, 60]
+  windows_bars: [3, 5, 10]
+  score_weights: {body_ratio: 0.2, consecutive: 0.15, roc: 0.2, tick_velocity: 0.2, range_expansion: 0.15, volume_surge: 0.1}
+  decay_exit_threshold: 0.35        # momentum below this while in profit => harvest
+  burst_zscore: 2.5                 # "irregular momentum" detector
+
+trade_management:
+  breakeven: {enabled: true, trigger_r: 0.5, offset_points: 3}
+  partial_close: {enabled: true, at_r: [0.6, 1.0], fractions: [0.5, 0.25]}
+  trailing: {enabled: true, type: atr_chandelier, atr_mult: 1.0, start_r: 0.8}
+  profit_giveback_pct_max: 35       # close if open profit retraces this % from peak
+  harvest_instantly_in_killzone: true
+  harvest_min_r: 0.35
+  early_exit:
+    enabled: true
+    loss_guard_prob_threshold: 0.70   # P(trade ends at SL | state) above this => close now
+    check_interval_seconds: 1
+    min_age_seconds: 4
+    max_adverse_r_without_progress: 0.45
+    stale_trade_seconds: {fast: 90, medium: 300, slow: 1800}
+  hold_for_extension:
+    enabled: true
+    require: [trend_aligned_large_tf, momentum_score_gte_0.6, break_prob_gte_0.65]
+
+models:
+  entry:
+    algo: lightgbm
+    objective: binary
+    calibration: isotonic
+    params: {num_leaves: 31, learning_rate: 0.03, n_estimators: 800, min_child_samples: 200, subsample: 0.8, colsample_bytree: 0.7, reg_lambda: 5.0}
+  level_reaction:
+    algo: lightgbm
+    classes: [reject, break, chop]
+  exit_hold_vs_close:
+    algo: lightgbm
+  loss_guard:
+    algo: lightgbm
+    horizon_seconds: [10, 30, 60]
+  baseline_logreg: true
+  regime: {algo: hmm, n_states: 3}
+  explain: {shap: true, top_k: 25}
+
+labeling:
+  triple_barrier: {use_mode_tp_sl: true, vertical_barrier_from_mode: true}
+  sample_weighting: uniqueness_and_return
+  min_samples_per_session: 3000
+
+training:
+  initial_years: 3
+  validation: purged_walk_forward
+  train_window_days: 180
+  test_window_days: 30
+  embargo_minutes: 60
+  optuna: {n_trials: 150, direction: maximize, objective: calmar_after_costs, pruner: median}
+  param_stability_check: true
+  online:
+    enabled: true
+    ingest: tick_to_bar_stream
+    micro_update_every_minutes: 15     # river online learner adjusts, bounded
+    full_retrain: {schedule: "sat 08:00 UTC", trigger_on_drift: true}
+    drift_detectors: [adwin, psi]
+    promotion: {champion_challenger: true, min_oos_days: 10, must_beat_pf_by: 0.05, must_not_worsen_dd: true}
+    max_model_age_days: 14
+
+backtest:
+  initial_balance: 10000
+  commission_per_lot: 0.0
+  spread_model: empirical_by_hour     # learned from data
+  slippage_model: {type: proportional_to_atr, factor: 0.0}
+  latency_ms: 150
+  intrabar_resolution: tick_if_available_else_m1_conservative
+
+safety:
+  stale_tick_seconds: 5
+  disconnect_action: halt_new_and_manage
+  max_orders_per_minute: 40
+  heartbeat_seconds: 2
+  require_sl_on_every_order: true
+  emergency_flatten_hotkey_file: "KILL"   # creating this file flattens and halts
+
+reporting:
+  telegram: {enabled: false, token_env: TG_TOKEN, chat_id_env: TG_CHAT}
+  daily_report: true
+
+# New default strategy: ONE scanner, one M1 clock, three sources of levels.
+# Values below are independent of the legacy pilot settings above.
+zones:
+  enabled: false  # archived replay profiles only; trading commands now route exclusively to Hull
+  price_action:
+    policy: reaction_managed  # SHADOW: sweep pocket, otherwise band; candles inform exits. baseline = v1.
+    ttl_seconds: 180         # second return must occur after the reaction close
+    buffer_ticks: 1          # beyond the reaction wick AND frozen invalidation
+    adverse_momentum: 0.30
+    giveback_fraction: 0.40  # only after executable per-leg profit reached tp_usd
+    poll_seconds: 2.0        # simulator samples first observed tick per UTC bucket
+    demo_opt_in: false       # do not promote based on the public replay
+  rules:
+    pivot_bars: 2             # left AND right completed bars, never backdated
+    width_atr: 0.15          # half-width, frozen when the zone forms
+    momentum_min: 0.25       # signed body + close location + displacement; not P(win)
+    recency_bars: 60         # measured on the source timeframe
+    retest_minutes: 20
+    max_chase_atr: 0.65
+    reset_gap_minutes: 30
+    require_structural_stop: false  # cash-stop experiment; logs whether SL clears wick
+    exit_mode: fixed_cash    # next_zone: hold to known next zone or adverse BOS + momentum
+  limits:
+    max_legs: 3
+    max_risk_usd: 15.0       # TOTAL modeled stop exposure, not per instrument
+    max_total_lots: 0.27
+    daily_loss_usd: 30.0     # block new entries; UTC equity baseline
+    drawdown_usd: 75.0      # block new entries; persistent equity high-water mark
+    magic: 26011808
+    entry_age_seconds: 8
+  symbols:
+    XAUUSD:
+      {enabled: true, broker_symbol: XAUUSDm, lots: 0.09, tp_usd: 10.0, sl_usd: 5.0,
+       legs: 1, contract_size: 100, conversion: quote_usd, point: 0.001, tick_size: 0.001,
+       max_spread: 0.300, assumed_spread: 0.240, slippage: 0.0, commission: 0.0, round_step: 5}
+    EURUSD:                  # example only; verify broker specifications before enabling
+      {enabled: false, broker_symbol: EURUSDm, lots: 0.01, tp_usd: 10.0, sl_usd: 5.0,
+       legs: 1, contract_size: 100000, conversion: quote_usd, point: 0.00001, tick_size: 0.00001,
+       max_spread: 0.00020, assumed_spread: 0.00010, slippage: 0.0, commission: 0.0, round_step: 0.005}
+    USDJPY:
+      {enabled: false, broker_symbol: USDJPYm, lots: 0.01, tp_usd: 10.0, sl_usd: 5.0,
+       legs: 1, contract_size: 100000, conversion: base_usd, point: 0.001, tick_size: 0.001,
+       max_spread: 0.020, assumed_spread: 0.010, slippage: 0.0, commission: 0.0, round_step: 0.5}
+
+# ACTIVE demo entry path. Indicator source = the user's Hull BUY/SELL labels.
+hull:
+  entry_timing: confirmed_close_only  # closed cross in the BOS-proven half-range; no CHoCH entry or retest
+  exit_policy: profit_ladder_70_30_v1  # new tickets only; every rung uses that leg’s frozen base + entry spread
+  enabled: [XAUUSD]  # opt in other keys via --symbols or repeated --profile
+  magic: 26111825
+  indicator:
+    hull_len: 16
+    source: either            # independent High/Low Hull A curves; strict cross against the previous completed bar
+    signal: labels        # raw Hull crosses; completed structure gates new entries
+    exit_opposite: true   # original opposite-label exit, independent of entry eligibility
+    ema_length: 200
+    stop: local_pullback  # recent preceding wicks, not a market-structure HH/HL
+    pullback_bars: 7      # capped at the preceding opposite crossover; excludes signal bar
+    swing_len: 3          # closed bars on each side for structure and optional pivot SL
+    atr_length: 14
+    atr_buffer: 0.1
+    extra_pips: 0
+  limits:
+    # null disables only these bot-imposed caps; a positive local value opts back in.
+    max_positions: null
+    max_total_lots: null
+    max_open_risk_usd: null
+    daily_loss_usd: 0
+    min_free_margin_pct: 0  # no extra equity reserve; full batch must still fit estimated free margin
+    max_quote_age_s: 4
+    max_entry_age_s: 8
+  symbols:                # target_usd = base per ticket before adding its entry spread in USD; invalid lots are refused
+    XAUUSD:   {aliases: [XAUUSDm, XAUUSD, GOLD], lots: 0.10, target_usd: 10, rate: slow, pip_size: 0.01, max_spread: 0.300}
+    EURUSD:   {aliases: [EURUSDm, EURUSD], lots: 1.0, target_usd: 10, rate: slow, pip_size: 0.0001, max_spread: 0.00020}
+    AUDUSD:   {aliases: [AUDUSDm], lots: 1.0, target_usd: 10, rate: slow, pip_size: 0.0001, max_spread: 0.00020}
+    GBPJPY:   {aliases: [GBPJPYm], lots: 1.0, target_usd: 10, rate: slow, pip_size: 0.01, max_spread: 0.08}
+    GBPUSD:   {aliases: [GBPUSDm, GBPUSD], lots: 1.0, target_usd: 10, rate: slow, pip_size: 0.0001, max_spread: 0.00030}
+    USDJPY:   {aliases: [USDJPYm, USDJPY], lots: 1.3, target_usd: 10, rate: slow, pip_size: 0.01, max_spread: 0.025}
+    NAS100USD: {broker_symbol: USTEC_x100m, aliases: [NAS100USD, NAS100, US100, USTEC, USTECm, USTEC_x100m], lots: 1, target_usd: 10, rate: slow, pip_size: 1, max_spread: 3.0}
+    US30:     {broker_symbol: US30m, aliases: [US30, US30m, 'Wall Street 30', 'US Wall Street 30'], lots: 1, target_usd: 10, rate: slow, pip_size: 1, max_spread: 3.0}
+    US500:    {broker_symbol: US500m, aliases: [US500, US500m, SPX500, 'US SPX 500', 'US 500'], lots: 1, target_usd: 10, rate: slow, pip_size: 1, max_spread: 1.0}
+    DE40:     {broker_symbol: DE30m, aliases: [DE40, DE40m, DE30, DE30m, GER40, GER30, 'Germany 40', 'Germany 30'], lots: 1, target_usd: 10, rate: slow, pip_size: 1, max_spread: 2.0}
+    DE30:     {broker_symbol: DE30m, aliases: [DE30, DE30m, DE40, DE40m, GER40, GER30, 'Germany 40', 'Germany 30'], lots: 1, target_usd: 10, rate: slow, pip_size: 1, max_spread: 2.0}
+    JP225:    {broker_symbol: JP225m, aliases: [JP225, JP225m, NIKKEI, 'Japan 225', 'JP 225'], lots: 3, target_usd: 10, rate: slow, pip_size: 1, max_spread: 6.0}
+    1HZ100V:   {aliases: [1HZ100V, 'Volatility 100 (1s) Index'], session: continuous, lots: 0.01, target_usd: 10, rate: slow, pip_size: 0.01}

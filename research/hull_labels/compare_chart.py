@@ -7,8 +7,8 @@ from pathlib import Path
 import pandas as pd
 
 from bot.config.loader import load_yaml
-from bot.hull.config import HullConfig
-from bot.hull.signal import Hull
+from bot.hull.v4.config import HullConfig
+from bot.hull.v4.signal import Hull
 from bot.zones.engine import Bar
 
 
@@ -82,7 +82,7 @@ def compare(path, config, key, tf, out, last_live):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--bars", required=True)
-    ap.add_argument("--config", default="config.yaml")
+    ap.add_argument("--config", default="research/hull_labels/v4-config.yaml")
     ap.add_argument("--symbol", default="XAUUSD")
     ap.add_argument("--tf", type=int, choices=[1, 2, 5], required=True)
     ap.add_argument("--out", type=Path, required=True)

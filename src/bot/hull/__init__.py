@@ -1,1 +1,1 @@
-"""Closed-bar Hull-label scanner for M1/M2/M5, protected USD demo positions only."""
+"""Dynamic-source Hull companion. Historical closed-only studies live in v4/."""

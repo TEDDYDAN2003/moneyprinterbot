@@ -12,8 +12,8 @@
 <noscript><p>To use the three slow profiles without JavaScript, send <strong>HULL START trio-slow</strong> to the desktop agent with the updated repository. For other profiles, use <code>HULL START SYMBOL:LOT:TP_USD:RATE</code>.</p></noscript>
 <section class="panel" aria-labelledby="pick-title">
 <h2 id="pick-title">1 · Choose profiles</h2>
-<p><span class="chip">M1</span> <span class="chip">M2</span> <span class="chip">M5</span> One observer. Only checked rows will be copied.</p>
-<p>Hull v4 entries: <strong>fresh closed trend crosses in a BOS-confirmed half-range only</strong>. CHoCH changes the bias, not permission to trade. No reversal or retest orders. The raw Hull signal remains Either source, length 16. One normal batch on a qualified cross while flat; repeats while any same-side ticket remains do not add or close trades. A fresh cross after flat can reuse the same region. Existing SL and 70/30 ladder stay in place. An older local demo config must explicitly use <code>source: either</code> and <code>hull_len: 16</code>. <a href="HULL_DEMO.md#what-triggers-an-entry">Signal and migration details</a>.</p>
+<p><span class="chip">Timeframes pending</span> The symbol presets do not authorize any timeframe. Only checked profiles will be copied.</p>
+<p><strong>FC Dynamic Hull · 24</strong>: buy a raw BUY only in bullish structure; sell a raw SELL only in bearish structure. An opposite raw signal requests an immediate close of owned opposite tickets. No premium/discount test. Existing stops and per-ticket 70/30 ladder remain in place. <a href="HULL_STRUCTURE.md">Rules and local configuration</a>.</p>
 <button class="secondary preset" type="button" id="trio">trio-slow · gold 0.09, EUR/GBP 0.01 lot per ticket</button>
 <button class="secondary preset" type="button" id="trio-config">Configured trio · gold 0.10, EUR/GBP 1.00 lot per ticket</button>
 <div class="scroll"><table id="profile-table"><thead><tr><th>Use / symbol</th><th>Lot per ticket</th><th>Base USD / ticket</th><th>Rate</th><th>Batch if all fill</th></tr></thead><tbody id="profiles"></tbody></table></div>
@@ -33,7 +33,7 @@
 </section>
 <section class="panel" aria-labelledby="agent-title">
 <h2 id="agent-title">3 · What the agent does next</h2>
-<p><strong>Desktop agent:</strong> always consult this page and the root <code>README.md</code> for a Hull startup. Use the operator’s pasted profiles, not this page’s defaults. Check the pulled commit and the observer’s startup version as described in the README. Verify the USD hedging demo terminal, then launch one M1/M2/M5 <strong>observer only</strong> with those exact profiles. Report its log path. On ambiguous rows or failed checks, stop and ask.</p>
+<p><strong>Desktop agent:</strong> always consult this page and the root <code>README.md</code> for a Hull startup. Use the operator’s pasted profiles, not this page’s defaults. Check the pulled commit and the observer’s startup version as described in the README. Verify the USD hedging demo terminal, then, only with explicitly approved timeframes, launch one <strong>observer only</strong> with those exact profiles. Report its log path. On ambiguous rows or failed checks, stop and ask.</p>
 <details><summary>Read-only preflight command for these profiles</summary><pre id="cmd">Select at least one valid profile.</pre></details>
 <p class="note">Only a separate, explicit <strong>ARM DEMO</strong> from the operator can authorize demo orders after rechecking the account and profiles. A table, a start line or this page is not authorization.</p>
 </section>

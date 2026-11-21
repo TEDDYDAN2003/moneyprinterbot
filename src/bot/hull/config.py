@@ -13,35 +13,56 @@ class Strict(BaseModel):
 
 Rate = Literal["slow", "medium", "fast"]
 COUNTS = {"slow": (10,), "medium": (4, 3), "fast": (7, 6)}
-FRAMES = (1, 2, 5)
+# Technical MT5 capabilities, NOT an approval to scan/trade any of these frames.
+NATIVE_TF = {
+    **{f"M{v}": v for v in (1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30)},
+    **{f"H{v}": v * 60 for v in (1, 2, 3, 4, 6, 8, 12)},
+    "D1": 1440,
+}
+TF_NAME = {v: k for k, v in NATIVE_TF.items()}
 LADDER = "profit_ladder_70_30_v1"
 FIXED = "fixed_tp"
 TARGET_POLICY = "base_plus_entry_spread_v1"  # all newly opened Hull tickets, never retrofit saved goals
-RETIRED_LIVE_TIMING = "live_continuation_v1"
-CLOSE_ONLY = "confirmed_close_only"
+LIVE_TIMING = "live_hull_cross"
+ENTRY_POLICY = "fc_dynamic_trend_cross_v1"
 BATCH_ENTRY_POLICY = "first_eligible_while_flat_v1"
 # Removed in Hull only. Older full-file demo configs may still contain the keys.
 RETIRED_LIMITS = ("drawdown_usd", "max_orders_minute")
 
 
 class Indicator(Strict):
-    hull_len: int = Field(16, ge=2, le=500)
+    hull_len: int = Field(24, ge=2, le=500)
     source: Literal[
-        "either", "open", "high", "low", "close", "hl2", "hlc3", "ohlc4"
-    ] = "either"
-    signal: Literal["labels", "ema_plan"] = "labels"
-    exit_opposite: bool = True
-    ema_length: int = Field(200, ge=1, le=2000)
+        "dynamic", "open", "high", "low", "close", "hl2", "hlc3", "ohlc4", "custom"
+    ] = "dynamic"
+    neutral_mode: Literal["high", "wait"] = "high"
+    custom_source: Literal["open", "high", "low", "close", "hl2", "hlc3", "ohlc4"] = (
+        "hl2"
+    )
+    # None is Pine's blank “Chart” input. Overrides supply bias only, not an entry lane.
+    structure_timeframe: str | None = None
+    exit_opposite: Literal[True] = True
     stop: Literal["local_pullback", "confirmed_pivot"] = "local_pullback"
     pullback_bars: int = Field(7, ge=1, le=100)
-    swing_len: int = Field(3, ge=1, le=100)
+    swing_len: int = Field(3, ge=1, le=50)
     atr_length: int = Field(14, ge=1, le=500)
     atr_buffer: float = Field(0.1, ge=0, le=100)
     extra_pips: float = Field(0.0, ge=0, le=100000)
 
     @property
     def signal_policy(self) -> str:
-        return "fc_hull_either_v2" if self.source == "either" else "fc_hull_single_v1"
+        return "fc_dynamic_source_internal_v1"
+
+    @field_validator("structure_timeframe")
+    @classmethod
+    def valid_structure_tf(cls, v):
+        if v in (None, "", "Chart"):
+            return None
+        if v not in NATIVE_TF:
+            raise ValueError(
+                "Expected a native MT5 structure timeframe, or null for Chart"
+            )
+        return v
 
 
 class Profile(Strict):
@@ -79,7 +100,8 @@ class Limits(Strict):
 
 
 class HullConfig(Strict):
-    entry_timing: Literal["confirmed_close_only"] = CLOSE_ONLY
+    entry_timing: Literal["live_hull_cross"] = LIVE_TIMING
+    eligible_timeframes: tuple[str, ...] = ()  # no default trading authorization
     exit_policy: Literal["profit_ladder_70_30_v1", "fixed_tp"] = LADDER
     indicator: Indicator = Indicator()
     limits: Limits = Limits()
@@ -87,12 +109,23 @@ class HullConfig(Strict):
     enabled: tuple[str, ...] = ("XAUUSD",)
     symbols: dict[str, Profile] = Field(min_length=1)
 
-    @field_validator("entry_timing", mode="before")
+    @field_validator("eligible_timeframes")
     @classmethod
-    def migrate_retired_live_clock(cls, value):
-        # Old full-file private configs must not reactivate pre-close execution.
-        # Preflight/startup report the migration. No private YAML or ticket state is edited.
-        return CLOSE_ONLY if value == RETIRED_LIVE_TIMING else value
+    def valid_frames(cls, v):
+        if len(set(v)) != len(v) or any(f not in NATIVE_TF for f in v):
+            raise ValueError("Use unique native MT5 timeframe names, e.g. M15 or H1")
+        return v
+
+    def lanes(self, requested=None):
+        approved = tuple(NATIVE_TF[f] for f in self.eligible_timeframes)
+        if not approved:
+            raise ValueError(
+                "No eligible Hull timeframes configured; waiting for the operator's timeframe list. Scanner is disabled."
+            )
+        lanes = approved if requested is None else tuple(requested)
+        if not lanes or len(set(lanes)) != len(lanes) or set(lanes) - set(approved):
+            raise ValueError("Requested timeframe is not in hull.eligible_timeframes")
+        return lanes
 
     @model_validator(mode="after")
     def valid(self):
@@ -102,6 +135,13 @@ class HullConfig(Strict):
             or set(self.enabled) - set(self.symbols)
         ):
             raise ValueError("Select unique, configured Hull symbol keys")
+        st = NATIVE_TF.get(self.indicator.structure_timeframe)
+        if st and any(
+            NATIVE_TF[f] > st and NATIVE_TF[f] % st for f in self.eligible_timeframes
+        ):
+            raise ValueError(
+                "Lower structure timeframe must nest inside each signal timeframe"
+            )
         return self
 
 

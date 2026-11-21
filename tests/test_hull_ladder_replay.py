@@ -4,19 +4,21 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
-from hull_mt import ROOT, T, sig
+from hull_mt import ROOT, T
+from hull_cases import v4_sig as sig
 
 from bot.config.loader import load_yaml
-from bot.hull.config import FIXED, LADDER, HullConfig
+from bot.hull.config import FIXED, LADDER
+from bot.hull.v4.config import HullConfig
 from bot.hull.orders import Grid
-from bot.hull.replay import Account
+from bot.hull.v4.replay import Account
 from bot.zones.engine import Bar
 from bot.zones.feed import Minute
 from bot.zones.hours import Hours
 
 
 def tape(side, pnls, policy=LADDER):
-    cfg = load_yaml(ROOT / "config.yaml")
+    cfg = load_yaml(ROOT / "research/hull_labels/v4-config.yaml")
     cfg["hull"]["limits"].update(
         drawdown_usd=75, max_orders_minute=40
     )  # old full-file config

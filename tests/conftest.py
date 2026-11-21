@@ -12,6 +12,7 @@ from bot.hull.desk import Desk, resolve
 def hull_desk(tmp_path, monkeypatch):
     cfg = load_yaml(ROOT / "config.yaml")
     cfg["run"]["mode"] = "demo"
+    cfg["hull"]["eligible_timeframes"] = ["M1", "M2", "M5"]  # fake desk fixture ONLY
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("bot.hull.desk.time.time", lambda: T + 0.3)
 

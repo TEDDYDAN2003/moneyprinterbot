@@ -1,0 +1,303 @@
+//@version=6
+indicator("FC Hull — Dynamic Source + Internal Structure", shorttitle="FC DynHull", overlay=false, dynamic_requests=true, max_bars_back=500, max_labels_count=500, max_lines_count=500)
+
+const string G = "Hull · chart timeframe"
+int length = input.int(24, "Hull length", minval=2, maxval=500, group=G)
+string sourceMode = input.string("Dynamic", "Hull A source", options=["Dynamic", "Low", "High", "HL2", "Open", "Close", "HLC3", "OHLC4", "Custom"], group=G, tooltip="Dynamic uses the Low Hull in bullish structure and the High Hull in bearish structure. Hull B always uses close.")
+string neutralMode = input.string("High", "Dynamic: before the first trend", options=["High", "Wait"], group=G, active=sourceMode == "Dynamic")
+float customSrc = input.source(hl2, "Custom source", group=G, active=sourceMode == "Custom")
+
+string tfIn = input.timeframe("", "Structure timeframe", group="Internal structure", tooltip="Defaults to 'Chart' so it automatically follows your current global chart timeframe without editing. Only change this if you want structure from another timeframe.")
+int n = input.int(3, "Swing bars on each side", minval=1, maxval=50, group="Internal structure", tooltip="How many candles must appear on both the left and right of a candle to confirm a swing point (e.g., 3 = higher than 3 candles before and 3 candles after for a swing high). Smaller = more frequent swings; larger = only major swings.")
+bool swings = input.bool(true, "Mark swing highs and lows", group="Display")
+bool breaks = input.bool(true, "Mark BOS and MSS", group="Display")
+int stripWidth = input.int(10, "Bottom line thickness", minval=1, maxval=20, group="Display")
+
+color bull = #4CAF50
+color bear = #F23645
+color neutral = #9299A4
+
+type Frame
+    int closedAt
+    int bias
+    int eventCode  // Signed: 1 = BOS, 2 = MSS, 3 = initial direction
+    int levelAt
+    float level
+    float guard
+    int pivotAt
+    float ph
+    int hiClass
+    bool replaceHi
+    float pl
+    int loClass
+    bool replaceLo
+
+// ── Market structure on native bars of the selected timeframe ──
+f_structure(simple int depth) =>
+    float ph = ta.pivothigh(high, depth, depth)
+    float pl = ta.pivotlow(low, depth, depth)
+    int pt = time[depth]
+
+    var float lastH = na
+    var int lastHt = na
+    var float lastL = na
+    var int lastLt = na
+
+    var int dir = 0
+    var float hi = na
+    var int ht = na
+    var float lo = na
+    var int lt = na
+    var float pullL = na
+    var int pullLt = na
+    var float pullH = na
+    var int pullHt = na
+    var float guard = na
+    var int gt = na
+    var float legTip = na
+    var int tipAt = na
+    var float lastBreak = na
+    var int legStart = na
+    var int legOrigin = na
+    var int breakWindow = na
+    var bool hasLegHi = false
+    var bool hasLegLo = false
+    var bool hasLegPullH = false
+    var bool hasLegPullL = false
+
+    int ev = 0
+    int origin = na
+    float level = na
+
+    // Test levels known before this candle. A wick or an equal close is not a break.
+    if dir != 0 and not na(guard) and dir * (close - guard) < 0
+        ev := -2 * dir
+        origin := gt
+        level := guard
+        guard := legTip
+        gt := tipAt
+    else if dir >= 0 and not na(hi) and close > hi and (dir == 1 or (not na(lastL) and lastL < close))
+        ev := dir == 0 ? 3 : 1
+        origin := ht
+        level := hi
+        if dir == 0 or (not na(pullL) and (na(guard) or pullL > guard))
+            guard := na(pullL) ? lastL : pullL
+            gt := na(pullL) ? lastLt : pullLt
+    else if dir <= 0 and not na(lo) and close < lo and (dir == -1 or (not na(lastH) and lastH > close))
+        ev := dir == 0 ? -3 : -1
+        origin := lt
+        level := lo
+        if dir == 0 or (not na(pullH) and (na(guard) or pullH < guard))
+            guard := na(pullH) ? lastH : pullH
+            gt := na(pullH) ? lastHt : pullHt
+
+    if ev != 0
+        dir := ev > 0 ? 1 : -1
+        lastBreak := level
+        legStart := time
+        legOrigin := origin
+        breakWindow := time[depth]
+        hi := na
+        lo := na
+        pullL := na
+        pullH := na
+        hasLegHi := false
+        hasLegLo := false
+        hasLegPullH := false
+        hasLegPullL := false
+        legTip := dir == 1 ? high : low
+        tipAt := time
+    else if dir != 0
+        float x = dir == 1 ? high : low
+        if na(legTip) or dir * (x - legTip) >= 0
+            legTip := x
+            tipAt := time
+
+    // Trend-aware swing classification + guard promotion after confirmed failed counter-swings.
+    int hc = 0
+    int lc = 0
+    bool replaceHi = false
+    bool replaceLo = false
+
+    bool inLeg = na(legStart) or pt >= legStart
+    if not na(ph)
+        lastH := ph
+        lastHt := pt
+        if dir > 0 and not na(pullL) and pt > pullLt and (na(guard) or pullL > guard)
+            guard := pullL
+            gt := pullLt
+        bool inBreakHi = dir > 0 and na(hi) and not na(lastBreak) and ph > lastBreak and not na(breakWindow) and pt >= breakWindow and (na(legOrigin) or pt > legOrigin)
+        if (inLeg or inBreakHi) and dir >= 0 and (na(lastBreak) or ph > lastBreak) and (na(hi) or ph >= hi)
+            hc := dir == 0 ? 3 : 1
+            replaceHi := hasLegHi
+            hasLegHi := true
+            hi := ph
+            ht := pt
+            pullL := na
+            hasLegPullL := false
+        if inLeg and dir <= 0 and not na(lo) and pt > lt and (na(pullH) or ph >= pullH)
+            if dir < 0
+                hc := -1
+                replaceHi := hasLegPullH
+                hasLegPullH := true
+                hasLegLo := false
+            pullH := ph
+            pullHt := pt
+    if not na(pl)
+        lastL := pl
+        lastLt := pt
+        if dir < 0 and not na(pullH) and pt > pullHt and (na(guard) or pullH < guard)
+            guard := pullH
+            gt := pullHt
+        bool inBreakLo = dir < 0 and na(lo) and not na(lastBreak) and pl < lastBreak and not na(breakWindow) and pt >= breakWindow and (na(legOrigin) or pt > legOrigin)
+        if (inLeg or inBreakLo) and dir <= 0 and (na(lastBreak) or pl < lastBreak) and (na(lo) or pl <= lo)
+            lc := dir == 0 ? 3 : -1
+            replaceLo := hasLegLo
+            hasLegLo := true
+            lo := pl
+            lt := pt
+            pullH := na
+            hasLegPullH := false
+        if inLeg and dir >= 0 and not na(hi) and pt > ht and (na(pullL) or pl <= pullL)
+            if dir > 0
+                lc := 1
+                replaceLo := hasLegPullL
+                hasLegPullL := true
+                hasLegHi := false
+            pullL := pl
+            pullLt := pt
+
+    Frame.new(time_close, dir, ev, origin, level, guard, pt, ph, hc, replaceHi, pl, lc, replaceLo)
+
+// The offset is inside the requested timeframe: never use a forming higher-TF bar.
+f_previous(simple int depth) =>
+    Frame current = f_structure(depth)
+    current[1]
+
+f_draw(Frame s, label activeHiLbl, label activeLoLbl) =>
+    label nextHi = activeHiLbl
+    label nextLo = activeLoLbl
+    if s.eventCode != 0
+        nextHi := na
+        nextLo := na
+    if swings and s.hiClass != 0
+        if s.replaceHi and not na(nextHi)
+            label.delete(nextHi)
+        string tagH = s.hiClass == 3 ? "H" : s.hiClass == 1 ? "HH" : "LH"
+        nextHi := label.new(s.pivotAt, s.ph, tagH, xloc=xloc.bar_time, style=label.style_label_down, color=color.new(color.white, 100), textcolor=s.hiClass == 1 ? bull : s.hiClass == -1 ? bear : neutral, size=size.tiny, tooltip="Swing high. Confirmed later, on the close of its final right-hand bar.", force_overlay=true)
+    if swings and s.loClass != 0
+        if s.replaceLo and not na(nextLo)
+            label.delete(nextLo)
+        string tagL = s.loClass == 3 ? "L" : s.loClass == 1 ? "HL" : "LL"
+        nextLo := label.new(s.pivotAt, s.pl, tagL, xloc=xloc.bar_time, style=label.style_label_up, color=color.new(color.white, 100), textcolor=s.loClass == 1 ? bull : s.loClass == -1 ? bear : neutral, size=size.tiny, tooltip="Swing low. Confirmed later, on the close of its final right-hand bar.", force_overlay=true)
+    if breaks and s.eventCode != 0
+        int k = math.abs(s.eventCode)
+        color c = s.eventCode > 0 ? bull : bear
+        string name = (k == 2 ? "MSS" : k == 1 ? "BOS" : "INIT") + (s.eventCode > 0 ? " ↑" : " ↓")
+        line.new(s.levelAt, s.level, s.closedAt, s.level, xloc=xloc.bar_time, color=c, style=line.style_solid, width=k == 2 ? 2 : 1, force_overlay=true)
+        label.new(s.closedAt, s.level, name, xloc=xloc.bar_time, style=s.eventCode > 0 ? label.style_label_down : label.style_label_up, color=color.new(color.white, 100), textcolor=c, size=size.tiny, tooltip="Confirmed structure-timeframe close, not a Hull entry.", force_overlay=true)
+    [nextHi, nextLo]
+
+// ── Publish only confirmed structure updates ──
+string tf = tfIn == "" ? timeframe.period : tfIn
+bool same = tf == timeframe.period
+bool lower = timeframe.in_seconds(tf) < timeframe.in_seconds()
+
+if barstate.isfirst and not chart.is_standard
+    runtime.error("Use a standard time-based chart so structure uses real candle highs, lows and closes.")
+if barstate.isfirst and lower and timeframe.isintraday and timeframe.in_seconds() % timeframe.in_seconds(tf) != 0
+    runtime.error("For lower-timeframe structure, choose an interval that nests in the chart (e.g. 5m inside 15m), or switch the chart to the structure timeframe.")
+
+Frame here = f_structure(n)
+array<Frame> updates = array.new<Frame>()
+
+if tfIn != "" and not same
+    Frame finished = request.security(syminfo.tickerid, lower ? timeframe.period : tf, f_previous(n), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+    array<Frame> intrabars = request.security_lower_tf(syminfo.tickerid, lower ? tf : timeframe.period, f_structure(n))
+    if lower
+        updates := intrabars
+    else if not na(finished) and finished.closedAt <= time
+        updates.push(finished)
+
+if same and barstate.isconfirmed
+    updates.push(here)
+
+var int seen = na
+var int trend = 0
+var label activeHiLbl = na
+var label activeLoLbl = na
+
+for s in updates
+    bool finishedNow = not lower or (s.closedAt <= time_close and (not barstate.isrealtime or s.closedAt <= timenow))
+    if finishedNow and (na(seen) or s.closedAt > seen)
+        [nh, nl] = f_draw(s, activeHiLbl, activeLoLbl)
+        activeHiLbl := nh
+        activeLoLbl := nl
+        trend := s.bias
+        seen := s.closedAt
+
+// ── Dynamic Hull on the chart timeframe ──
+int halfLen = math.max(1, math.floor(length / 2.0))
+int rootLen = math.max(1, math.round(math.sqrt(length)))
+int fastLen = math.max(1, math.floor(halfLen / 3.0))
+int midLen = math.max(1, math.floor(halfLen / 2.0))
+
+f_a(float x) =>
+    ta.wma(2.0 * ta.wma(x, halfLen) - ta.wma(x, length), rootLen)
+
+float fixedSrc = switch sourceMode
+    "Open"   => open
+    "Close"  => close
+    "HLC3"   => hlc3
+    "OHLC4"  => ohlc4
+    "Custom" => customSrc
+    => hl2
+
+// Each curve has its own complete history, even when it isn't selected.
+float aLow = f_a(low)
+float aHigh = f_a(high)
+float aFixed = f_a(fixedSrc)
+float b = ta.wma(3.0 * ta.wma(close, fastLen) - ta.wma(close, midLen) - ta.wma(close, halfLen), halfLen)
+
+// 1 = Low, -1 = High, 2 = other fixed source, 0 = wait.
+int activeSource = switch sourceMode
+    "Dynamic" => trend == 1 ? 1 : (trend == -1 or neutralMode == "High") ? -1 : 0
+    "Low"     => 1
+    "High"    => -1
+    => 2
+
+float a = activeSource == 1 ? aLow : activeSource == -1 ? aHigh : activeSource == 2 ? aFixed : na
+
+// Intentionally NOT a[1]. Compare both bars against the currently selected
+// source's own history, including on the bar where structure changes.
+float prevA = activeSource == 1 ? aLow[1] : activeSource == -1 ? aHigh[1] : activeSource == 2 ? aFixed[1] : na
+bool buy = b > a and b[1] < prevA
+bool sell = b < a and b[1] > prevA
+
+color ink = na(a) ? neutral : b > a ? color.green : color.red
+color shade = color.new(ink, 80)
+
+pB = plot(b, "Hull B · close", color=ink, force_overlay=true)
+
+// Separate segments avoid drawing a diagonal from the old source to the new one.
+pLo = plot(activeSource == 1 ? aLow : na, "Hull A · Low", color=ink, style=plot.style_linebr, force_overlay=true)
+pHi = plot(activeSource == -1 ? aHigh : na, "Hull A · High", color=ink, style=plot.style_linebr, force_overlay=true)
+pFx = plot(activeSource == 2 ? aFixed : na, "Hull A · fixed", color=ink, style=plot.style_linebr, force_overlay=true)
+
+fill(pLo, pB, color=activeSource == 1 ? shade : na, title="Low ribbon", fillgaps=false)
+fill(pHi, pB, color=activeSource == -1 ? shade : na, title="High ribbon", fillgaps=false)
+fill(pFx, pB, color=activeSource == 2 ? shade : na, title="Fixed ribbon", fillgaps=false)
+
+// No candle-close gate on Hull suggestions.
+plotshape(buy, "BUY", shape.labelup, location.belowbar, color.green, text="BUY", textcolor=color.white, size=size.tiny, force_overlay=true)
+plotshape(sell, "SELL", shape.labeldown, location.abovebar, color.red, text="SELL", textcolor=color.white, size=size.tiny, force_overlay=true)
+alertcondition(buy, "Hull BUY", "Hull BUY | {{ticker}} | {{interval}} | {{close}}")
+alertcondition(sell, "Hull SELL", "Hull SELL | {{ticker}} | {{interval}} | {{close}}")
+
+plot(activeSource, "Source: 1 Low / -1 High / 2 fixed / 0 waiting", display=display.data_window)
+
+// ── Internal structure trend at the bottom ──
+color bandColor = trend == 1 ? bull : trend == -1 ? bear : neutral
+plot(0, "Internal structure · bottom line", color=bandColor, linewidth=stripWidth, style=plot.style_line, display=display.pane)
+bgcolor(trend == 1 ? color.new(bull, 88) : trend == -1 ? color.new(bear, 88) : na, title="Internal structure · pane tint")
+plot(trend, "Internal bias (+1 / 0 / −1)", color=bandColor, display=display.status_line + display.data_window)

@@ -6,8 +6,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from bot.config.loader import load_yaml
-from bot.hull.config import FRAMES, HullConfig
-from bot.hull.replay import study
+from bot.hull.v4.config import FRAMES, HullConfig
+from bot.hull.v4.replay import study
 from bot.zones.feed import tick_minutes
 from bot.zones.replay import file_hash
 
@@ -22,7 +22,7 @@ if __name__ == "__main__":
     hashes = {p.name: file_hash(p) for p in paths}
     if any(hashes[n] != manifest["sha256"][n] for n in names):
         raise ValueError("Bad quote hash")
-    cfg = load_yaml("config.yaml")
+    cfg = load_yaml("research/hull_labels/v4-config.yaml")
     h = HullConfig.model_validate(cfg["hull"])
     ts = lambda s: int(datetime.fromisoformat(s).replace(tzinfo=UTC).timestamp())
     res = study(

@@ -1,4 +1,4 @@
-"""Compare the production closed-cross lane to the current v4 Pine source on identical OHLC.
+"""Compare the archived v4 closed-cross lane to the current v4 Pine source on identical OHLC.
 
 Run from a full checkout with bot dependencies installed; the MQ5 shim is checked by check_port.py.
 A chart's one-position fills are deliberately NOT used as broker executions.
@@ -11,8 +11,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
-from bot.hull.config import Indicator
-from bot.hull.signal import Hull
+from bot.hull.v4.config import Indicator
+from bot.hull.v4.signal import Hull
 from bot.zones.engine import Bar
 
 

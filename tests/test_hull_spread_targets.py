@@ -6,7 +6,7 @@ from dataclasses import replace
 from types import SimpleNamespace as NS
 
 import pytest
-from hull_cases import known_range
+from bot.hull.structure import Structure
 from hull_mt import ROOT, T, sig
 
 from bot.config.loader import load_yaml
@@ -40,7 +40,7 @@ def us30(hull_desk, side, *, cap=15, base=10, rate="slow", policy=LADDER, armed=
     r = replace(
         sig(sl=48_980 if side == 1 else 49_033, side=side),
         close=mt.q.bid,
-        structure=known_range(side, mt.q.bid, T, scale=20),
+        structure=Structure(closed_s=T, bias=side),
     )
     return mt, desk, log, r
 
@@ -184,7 +184,7 @@ def test_nonlinear_account_cash_values_instead_of_contract_or_pip_guess(
         r,
         close=bid,
         raw_sl=bid - 0.2 if side == 1 else ask + 0.2,
-        structure=known_range(side, bid, T),
+        structure=Structure(closed_s=T, bias=side),
     )
     g = Grid(0.005, 0.001, 3, 0, 0.01, 100, 0.01)
     plan = make_plan(r, p, g, bid, ask, cash)

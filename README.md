@@ -4,7 +4,11 @@
 
 **[Wickless Desk: configure brokers and copy pairs](WicklessDesk/index.html)** · [Setup and exact retest rules](docs/WICKLESS.md) · [TradingView strategy](indicators/Wickless-M15-Rejection.pine) · [Test results](research/wickless_m15/README.md). This is an independent rejection-close / 1:1 demo bot. Use `python -m bot.wickless`, not the Hull commands below.
 
-## Start with just your profiles
+## Dynamic Hull bot
+
+**Timeframes pending:** the active bot uses the [operator’s Dynamic Hull Pine](indicators/FC-Hull-Dynamic-Source.pine), not Either/16. No timeframe is eligible until explicitly listed in `hull.eligible_timeframes`; profile selection alone cannot start it. [Entry/exit rules and local YAML changes](docs/HULL_STRUCTURE.md).
+
+## Start with just your profiles (after timeframe selection)
 
 Open **[Hull demo start](docs/Hull-demo-start.html)**, tick the symbols you want, set lot, base USD per ticket and rate, and click **Copy start line**. Paste that line into the AI agent that has this repository and MT5 Desktop on your Windows machine. It means **run the checks and start one read-only observer**, not “send orders.” You do not need to repeat the setup prompt.
 
@@ -21,15 +25,15 @@ HULL START XAUUSD:0.09:10:slow EURUSD:0.01:10:slow GBPUSD:0.01:10:slow
 
 ## Trade journal and chart indicators
 
-**[Download both v4 chart indicators](downloads/Hull-Chart-Indicators-v4.zip)** · [Shared scanner/chart rules and example](docs/HULL_STRUCTURE.md). The default view is **Valid suggestions only**. For reference, **All Hull crosses (debug)** marks upward/downward crosses on Hull B with green/red × symbols instead of text. Only a fresh closed trend cross in a confirmed BOS half-range can qualify. CHoCH changes bias only: no entry, watch or retest order.
+**Historical charts:** [download the v4 indicators](downloads/Hull-Chart-Indicators-v4.zip). They do **not** represent the current scanner.
 
 **[Download the Windows journal and MT5 indicator kit](downloads/Hull-Ledger-Analytics-and-MT5.zip).** Neither tool places orders or changes how the scanner trades.
 
 | Tool | Start here | What it shows |
 |---|---|---|
 | Hull Ledger | [Windows setup and upgrade guide](HullJournal/START-HERE.md) · [Offline dashboard](HullJournal/Hull-Journal.html) | Actual closed MT5 demo tickets and completed setups. Filter by symbol, timeframe, trading session, entry reason or exit reason; compare gross P/L, costs and net. The HTML sample is synthetic. |
-| MT5 chart indicator | [MQL5 source](MT5/FC-Hull-Either-16-Structure.mq5) · [Install and compile in MetaEditor](MT5/INSTALL-MT5.md) | Structure-filtered Either 16 suggestions and **simulated** chart fills. Install under `MQL5/Indicators`, not `Experts`. |
-| TradingView chart indicator | [Pine v6 source](indicators/FC-Hull-Either-16-Structure.pine) | Defaults to **Valid suggestions only**. The separate [raw-cross indicator](indicators/FC-Hull-Either-16-v2.pine) is still available for comparison. |
+| Archived v4 MT5 chart indicator | [MQL5 source](MT5/FC-Hull-Either-16-Structure.mq5) · [Install and compile in MetaEditor](MT5/INSTALL-MT5.md) | Structure-filtered Either 16 suggestions and **simulated** chart fills. Install under `MQL5/Indicators`, not `Experts`. |
+| Current TradingView chart indicator | [FC DynHull source](indicators/FC-Hull-Dynamic-Source.pine) | Raw live Hull crosses and confirmed internal structure. Bot entry and exit handling is separate. |
 
 Upgrading the journal? Preserve its existing `data` folder or point the new reporter at it with `--out`. You do **not** need to restart or arm the trading bot.
 
@@ -47,9 +51,9 @@ git pull --ff-only origin main
 git rev-parse HEAD
 ```
 
-Stop if the checkout is dirty, on another branch, diverged or the pull fails. Do not reset, force, or discard local work. After preflight, match the **latest** observer `started.summary.checkout_head_at_start` against `git rev-parse HEAD`, check `source_module` points into this checkout, and verify `entry_policy: bos_half_range_close_v4`, `entry_timing: confirmed_close_only`, `entry_quote_policy: first_fresh_post_close_tick_v1` and the default `new_ticket_exit_policy: profit_ladder_70_30_v1`. For a non-Git install the SHA may be null: verify the source/version before reuse. An older `started` record or `git status` alone does not prove the running version.
+Stop if the checkout is dirty, on another branch, diverged or the pull fails. Do not reset, force, or discard local work. After preflight, match the **latest** observer `started.summary.checkout_head_at_start` against `git rev-parse HEAD`, check `source_module` points into this checkout, and verify `entry_policy: fc_dynamic_trend_cross_v1`, `entry_timing: live_hull_cross`, `entry_quote_policy: current_live_tick_or_confirmed_close_v1` and the default `new_ticket_exit_policy: profit_ladder_70_30_v1`. For a non-Git install the SHA may be null: verify the source/version before reuse. An older `started` record or `git status` alone does not prove the running version.
 
-**Raw Hull formula (unchanged):** the shipped signal default is **Either-source 16**, native M1/M2/M5. Verify `signal_policy: fc_hull_either_v2`, `indicator.source: either`, `indicator.hull_len: 16`, and `batch_entry_policy: first_eligible_while_flat_v1`. A same-side cross while even one ticket remains never adds a batch or moves a stop; once fully flat, a **fresh** eligible cross may trade the same zone again. The pre-structure opposite exit, initial local-wick stop and per-ticket 70/30 ladder remain in place. An older full `config.demo.local.yaml` can still explicitly select 24/hl2: change only those two indicator keys to opt in. [Rules and migration](docs/HULL_DEMO.md#what-triggers-an-entry) · [v2 Pine raw-label indicator](indicators/FC-Hull-Either-16-v2.pine).
+**Current signal:** verify `signal_policy: fc_dynamic_source_internal_v1`, `indicator.source: dynamic`, `indicator.hull_len: 24`, the approved timeframe list, and `batch_entry_policy: first_eligible_while_flat_v1`. The same-side no-stacking rule, local-wick initial stop and per-ticket 70/30 ladder remain in place. [Configuration migration](docs/HULL_STRUCTURE.md#upgrade-the-local-configuration).
 
 ### 1. Read the request
 
@@ -74,16 +78,16 @@ Stop if the checkout is dirty, on another branch, diverged or the pull fails. Do
    python -m bot.cli hull-preflight @profiles
    ```
 
-   Verify a dedicated **USD hedging DEMO** terminal, not a live, contest or netting account. Report resolved broker names, M1/M2/M5 history, latest historical label and stop anchor, permissions, per-ticket settings, min/max total batch lots and target, current positions/orders and risk limits. Read `review_before_demo`; do not treat a zero exit status as clearance to ignore a warning. Stop on account/spec/history mismatch or ambiguous exposure. A historical label is never an order.
+   Verify a dedicated **USD hedging DEMO** terminal, not a live, contest or netting account. Report resolved broker names, history on the approved timeframes, latest historical label and stop anchor, permissions, per-ticket settings, min/max total batch lots and target, current positions/orders and risk limits. Read `review_before_demo`; do not treat a zero exit status as clearance to ignore a warning. Stop on account/spec/history mismatch or ambiguous exposure. A historical label is never an order.
 4. When the request is clear and checks pass, **start the observer without asking for another start prompt**:
 
    ```powershell
    python -m bot.cli trade-all @profiles
    ```
 
-   No `--arm-demo`, no `--arm-orders`, no `--timeframe` override. One scanner watches **M1, M2 and M5 together**. Verify it is running and report its process ID and actual `reports/hull_runtime/<account-hash>/shadow.jsonl` path. If you lack desktop access or launch fails, say so; do not claim it started.
+   No `--arm-demo`, no `--arm-orders`, no `--timeframe` override. One scanner watches **only the explicitly approved timeframes**. Verify it is running and report its process ID and actual `reports/hull_runtime/<account-hash>/shadow.jsonl` path. If you lack desktop access or launch fails, say so; do not claim it started.
 
-**What the scanner will do:** log confirmed Hull labels, but only allow a [trend-side BOS half-range entry](docs/HULL_STRUCTURE.md) on that symbol and timeframe. A CHoCH close is context only, even with a fresh matching cross. No watch, no retest limit, and no entry when price returns to the guard. Recheck the frozen half-range at each executable broker quote. A brief wait for an unavailable first quote is never a wait for a better price. See [the quote timeline](docs/HULL_DEMO.md#how-to-read-an-entry-timeline). The existing `exit_opposite` setting remains independent of these entry checks. The previous local wick still supplies the initial SL. With the [default profit ladder](docs/HULL_DEMO.md#profit-ladder-for-new-tickets), each **new** ticket uses its configured USD base **plus its own entry spread in USD**, frozen at send. With a $10 base and a $13 cash spread, the initial goal is +$23 gross; at +$16.10 the first move requests SL +$13.80 / TP +$27.60. Use fresh exit-side quotes, not batch P&L. A broker TP can fill first and a stop can slip. Older tickets are not migrated. No M15. **Never** raise limits, move the stop or change lots to force a fill. See [the operating guide](docs/HULL_DEMO.md) for rates, protections and demo checks.
+**What the scanner will do:** read live crosses on the selected instruments. Open only BUY in bullish or SELL in bearish structure, never neutral. A raw opposite cross requests closure of owned opposing tickets first; no premium/discount gate or required BOS. Keep the local-wick initial SL and [original per-ticket profit ladder](docs/HULL_DEMO.md#profit-ladder-for-new-tickets). Never change lots, stops or limits to force a fill.
 
 ### 3. Demo orders require a separate instruction
 

@@ -1,11 +1,10 @@
 import json
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from bot.hull.config import Indicator
-from bot.hull.orders import choose
+from pydantic import ValidationError
 from bot.hull.signal import Hull
 from bot.zones.engine import Bar
 
@@ -68,21 +67,14 @@ def test_pullback_uses_previous_counterleg_local_extreme_not_future_or_signal(tf
     assert seen == {1, -1}
 
 
-def test_raw_label_and_ema_plan_different_by_design_no_alias_or_m15():
-    a, b = (Hull(1, Indicator(signal=mode), 0.01) for mode in ("labels", "ema_plan"))
-    v = [(a.update(c), b.update(c)) for c in tape()]
-    assert all(x.label == y.label for x, y in v)
-    assert any(x.side and y.reason == "ema_filter" for x, y in v)
-    d = next(x for x, _ in v if x.side)
-    assert choose([d, replace(d, tf=5)])[0].tf == 5
-    assert (
-        choose([d, replace(d, tf=5, side=-d.side)])[1] == "opposite_labels_same_close"
-    )
-    assert choose([replace(d, side=0), d])[0] == d
+def test_retired_either_and_ema_filters_cannot_be_applied_to_new_signals():
+    for options in ({"source": "either"}, {"signal": "ema_plan"}):
+        with pytest.raises(ValidationError):
+            Indicator(**options)
+    a = Hull(15, Indicator(), 0.01)  # supported technically, not automatically eligible
+    a.update(tape(15)[-1])
     with pytest.raises(ValueError):
-        Hull(15, Indicator(), 0.01)
-    with pytest.raises(ValueError):
-        a.update(tape()[-1])
+        a.update(tape(15)[-1])
 
 
 def test_exact_pivot_mode_is_optional_and_atr_sma_seed_is_wilder():
