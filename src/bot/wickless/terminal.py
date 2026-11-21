@@ -11,6 +11,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
+from bot.config.entry_sessions import EntrySessionVeto, sessions_for_runner
 from bot.execution.demo_runner import DemoSafetyError, _account_order_lock
 from bot.hull.orders import Block, Grid
 from bot.zones.monitor import fresh, snapshot
@@ -155,6 +156,7 @@ def run(cfg, action, *, arm=False, terminal_path="", review_flat=False):
                     raise DemoSafetyError(
                         "Unresolved submission. Review MT5 and see the reconcile procedure in docs/WICKLESS.md"
                     )
+            sessions = sessions_for_runner()  # one immutable snapshot for this process
             lines = [Stream(mt, p, cfg.rules) for p in cfg.pairs]
             ps, os = snapshot(mt)
             emit(
@@ -169,12 +171,16 @@ def run(cfg, action, *, arm=False, terminal_path="", review_flat=False):
                 existing_orders=len(os),
                 timeframe="M15",
                 entry="rejection close",
+                entry_sessions=sessions.identity(),
                 target="1:1 price distance",
                 sends_orders=armed,
             )
             issues = []
             for lane in lines:
                 name = lane.pair.symbol
+                gate = sessions.bind(name)
+                if gate.issue:
+                    issues.append(f"{name}: {gate.issue}; no new entries")
                 _, status = lane.refresh(time.time())
                 q = mt.symbol_info_tick(name)
                 quote_ok = fresh(q, time.time(), 4)
@@ -202,6 +208,7 @@ def run(cfg, action, *, arm=False, terminal_path="", review_flat=False):
                     "symbol_check",
                     symbol=name,
                     history=status,
+                    entry_session=gate.report(time.time()),
                     last_closed_utc_s=last_close,
                     trend=lane.eng.structure.bias,
                     lots=lane.pair.lots,
@@ -261,7 +268,10 @@ def run(cfg, action, *, arm=False, terminal_path="", review_flat=False):
                                 armed=armed,
                                 book=book,
                                 now=time.time,
+                                sessions=sessions,
                             )
+                        except EntrySessionVeto as exc:
+                            result = {"status": str(exc), **exc.fields}
                         except Block as exc:
                             if (
                                 str(exc) == "waiting_post_close_quote"
@@ -274,6 +284,9 @@ def run(cfg, action, *, arm=False, terminal_path="", review_flat=False):
                             symbol=p.symbol,
                             close_s=lane.wait.close_s,
                             setup_open_s=lane.wait.zone.born,
+                            signal_session=sessions.bind(p.symbol).report(
+                                lane.wait.close_s
+                            ),
                             side="BUY" if lane.wait.zone.side == 1 else "SELL",
                             rejection_close=lane.grid.price(lane.wait.entry),
                             **result,

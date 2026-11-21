@@ -298,9 +298,18 @@ def test_eight_slow_batches_can_send_80_protected_entries_in_one_window(hull_des
     # The fixture freezes wall time and supplies funded, broker-accepted quotes.
     mt, d, _ = hull_desk()
     _, profile = d.syms[NAME]
-    names = [NAME, *(f"TEST{i}" for i in range(2, 9))]
-    for name in names:
-        d.syms[name] = (name, profile)
+    names = {
+        NAME: "XAUUSD",
+        "EURUSDm": "EURUSD",
+        "AUDUSDm": "AUDUSD",
+        "GBPUSDm": "GBPUSD",
+        "USDJPYm": "USDJPY",
+        "GBPJPYm": "GBPJPY",
+        "US30m": "US30",
+        "US500m": "US500",
+    }
+    for name, key in names.items():
+        d.syms[name] = (key, profile)  # exact market keys, identical synthetic specs
         assert d.batch(name, sig()) == "demo_batch_sent"
     assert len(mt.requests) == len(mt.positions) == len(d.ladders.book) == 80
     assert all(p.sl > 0 and p.tp > p.price_open for p in mt.positions)

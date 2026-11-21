@@ -131,10 +131,7 @@ def test_lost_inventory_restart_stale_quotes_uncertain_ack_new_and_untagged_neve
     template = mt.positions[0]
     foreign = NS(**(vars(template) | {"magic": 0, "ticket": 70, "identifier": 70}))
     legacy = NS(
-        **(
-            vars(template)
-            | {"ticket": 71, "identifier": 71, "comment": "h15_1794312000_1"}
-        )
+        **(vars(template) | {"ticket": 71, "identifier": 71, "comment": f"h15_{T}_1"})
     )
     newer = NS(
         **(vars(template) | {"ticket": 72, "identifier": 72, "time_msc": T * 1000 + 1})

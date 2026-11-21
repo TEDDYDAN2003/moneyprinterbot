@@ -251,6 +251,9 @@ def test_preflight_resolves_only_requested_symbols_and_never_sends(
         and answer["signal_policy"] == "fc_dynamic_source_internal_v1"
         and answer["entry_timing"] == "live_hull_cross"
         and answer["entry_quote_policy"] == "current_live_tick_or_confirmed_close_v1"
+        and answer["entry_sessions"]["version"] == "symbol-entry-sessions/v1"
+        and answer["specs"]["XAUUSDm"]["entry_session"]["windows"]
+        == ["london_ny_overlap"]
         and answer["specs"]["XAUUSDm"]["bid_chart_verified"]
         and answer["batch_entry_policy"] == "first_eligible_while_lane_flat_v2"
         and list(answer["specs"]) == ["XAUUSDm"]

@@ -2,6 +2,7 @@
 
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace as NS
 
@@ -9,6 +10,7 @@ import pytest
 from hull_mt import MT
 from wickless_qa.fixture import fixture
 
+from bot.config import entry_sessions as es
 from bot.execution.demo_runner import DemoSafetyError
 from bot.hull.orders import Block, Grid
 from bot.wickless import terminal
@@ -16,7 +18,7 @@ from bot.wickless.config import Config, Pair
 from bot.wickless.engine import TF, Signal, Zone
 from bot.wickless.execution import MAGIC, Intents, execute
 
-B = 1704067200
+B = 1704204000  # Tue 2 Jan 2024 14:00 UTC, inside the gold overlap
 
 
 class Fake(MT):
@@ -63,18 +65,20 @@ def rig(tmp_path, monkeypatch):
     g = Grid.from_info(m.i)
     b = Intents(tmp_path / "state.db")
 
-    def go(d=1, armed=True, now=None, config=None):
+    def go(d=1, armed=True, now=None, config=None, stamp=B):
         c = config or cfg
+        sig = signal(d)
+        sig = replace(sig, close_s=stamp, zone=replace(sig.zone, born=stamp - 2 * TF))
         return execute(
             m,
             c,
             c.pairs[0],
             g,
-            signal(d),
+            sig,
             (1, "t"),
             armed=armed,
             book=b,
-            now=now or (lambda: B + 0.2),
+            now=now or (lambda: stamp + 0.2),
         )
 
     yield m, b, go
@@ -203,8 +207,11 @@ def test_paper_arm_real_account_and_bad_server_refused(rig):
     assert not m.requests
 
 
+@pytest.mark.parametrize(
+    "rejection,expected", [(B - 3600, "observer_plan"), (B + 3 * 3600, es.OUTSIDE)]
+)
 def test_stream_and_full_loop_with_closed_synthetic_history(
-    monkeypatch, tmp_path, capsys
+    monkeypatch, tmp_path, capsys, rejection, expected
 ):
     # Warm only the prefix; a subsequent, live rejection must reach the actual observer loop.
     from bot.wickless.engine import Bar, Engine
@@ -226,6 +233,9 @@ def test_stream_and_full_loop_with_closed_synthetic_history(
         and eng.last - r[0] == 0
         and eng.structure.i > 100
     )
+    # Same exact price path: only change whether its rejection closes at OPEN or END.
+    offset = rejection - (bars[at][0] + TF)
+    bars = [[t + offset, *prices] for t, *prices in bars]
     start = at - 25
     # Use exactly the prefix as warm-up so the indicator has the same initial structure.
     monkeypatch.setattr(terminal, "HISTORY", start)
@@ -261,9 +271,28 @@ def test_stream_and_full_loop_with_closed_synthetic_history(
     with pytest.raises(KeyboardInterrupt):
         terminal.run(cfg, "observe")
     log = [json.loads(x) for x in capsys.readouterr().out.splitlines()]
-    assert any(x["event"] == "m15_close" for x in log) and any(
-        x.get("status") == "observer_plan" for x in log
+    (target,) = [
+        x for x in log if x["event"] == "entry_decision" and x["close_s"] == rejection
+    ]
+    assert target["status"] == expected and target["setup_open_s"] < rejection
+    assert target["signal_session"]["market"] == "XAUUSD"
+    assert any(
+        x["event"] == "m15_close" and x["close_s"] == rejection and x["signal"]
+        for x in log
     )
+    assert target["signal_session"]["active"] == (
+        ["london_ny_overlap"] if expected == "observer_plan" else []
+    )
+    if expected == es.OUTSIDE:
+        assert (
+            target["session_clock"] == "rejection_close"
+        )  # no waiting for the next open
+    else:
+        assert (
+            not es.load_entry_sessions()
+            .bind("XAUUSDm")
+            .report(target["setup_open_s"])["active"]
+        )
     assert (
         not m.requests
         and m.mtclosed
@@ -344,7 +373,7 @@ def test_explicit_selection_and_foreign_account_lock(rig, tmp_path, monkeypatch)
 
 
 def test_preflight_never_sends_and_unresolved_blocks_next_armed_start(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, capsys
 ):
     import hashlib
 
@@ -365,6 +394,14 @@ def test_preflight_never_sends_and_unresolved_blocks_next_armed_start(
     ]
     monkeypatch.setattr(terminal, "time", NS(time=lambda: B + 0.2))
     terminal.run(conf(), "preflight")
+    events = [json.loads(row) for row in capsys.readouterr().out.splitlines()]
+    assert (
+        next(v for v in events if v["event"] == "startup")["entry_sessions"]["version"]
+        == es.VERSION
+    )
+    assert next(v for v in events if v["event"] == "symbol_check")["entry_session"][
+        "active"
+    ] == ["london_ny_overlap"]
     assert not m.requests and not (tmp_path / ".moneyprinterbot").exists()
     key = hashlib.sha256(repr((1, "t")).encode()).hexdigest()[:16]
     book = Intents(tmp_path / ".moneyprinterbot/wickless" / key / "intents.sqlite3")
@@ -383,3 +420,127 @@ def test_preflight_never_sends_and_unresolved_blocks_next_armed_start(
     assert not book.unresolved()
     book.close()
     assert not m.requests
+
+
+@pytest.mark.parametrize("armed", [False, True])
+@pytest.mark.parametrize(
+    "name,hour,expected",
+    [
+        ("USDJPYm", 0, ""),
+        ("USDJPYm", 8, es.OUTSIDE),
+        ("GBPJPYm", 8, ""),
+        ("EURUSDm", 8, es.OUTSIDE),
+        ("DE30m", 8, ""),
+        ("JP225m", 15, es.OUTSIDE),
+        ("AUDUSDm", 15, ""),
+        ("USTEC_x100m", 16, es.OUTSIDE),
+        ("US500m", 15, ""),
+        ("XAUUSD.pro", 15, es.UNMAPPED),
+        ("1HZ100V", 15, es.UNMAPPED),
+    ],
+)
+def test_selected_broker_pair_uses_shared_exact_schedule(
+    rig, armed, name, hour, expected
+):
+    m, book, go = rig
+    stamp = B + (hour - 14) * 3600
+    c = conf("demo" if armed else "paper")
+    c = c.model_copy(update={"pairs": [c.pairs[0].model_copy(update={"symbol": name})]})
+    m.i.name = name
+    m.q.ask = (
+        m.q.bid + m.i.trade_tick_size
+    )  # valid one-tick spread on the shared fake grid
+    m.q.time_msc = stamp * 1000 + 50
+    if expected:
+        with pytest.raises(es.EntrySessionVeto, match=expected) as e:
+            go(config=c, armed=armed, stamp=stamp)
+        assert e.value.fields["session_clock"] == "rejection_close"
+        assert not book.db.execute("SELECT * FROM intents").fetchall()
+    else:
+        v = go(config=c, armed=armed, stamp=stamp)
+        assert v["status"] == ("demo_fill_verified" if armed else "observer_plan")
+        assert v["entry_session"]["active"]
+        if name == "US500m":
+            assert v["entry_session"]["active"] == [
+                "overlap_killzone",
+                "ny_cash_first_hour",
+            ]
+    assert len(m.requests) == int(armed and not expected)
+
+
+@pytest.mark.parametrize("stage", ["observer_plan", "post_precheck", "final_send"])
+def test_time_edge_while_pricing_checking_or_reserving(rig, stage):
+    m, book, go = rig
+    end = B + 3 * 3600
+    # Inject an off-grid signal 2s before close to distinguish this gate from
+    # the independent 8s age limit. Real M15 bar times are grid-checked upstream.
+    stamp = end - 2
+    clock = [stamp + 0.2]
+    m.q.time_msc = stamp * 1000 + 100
+    if stage == "observer_plan":
+        obj, method = m, "order_calc_profit"
+    elif stage == "post_precheck":
+        obj, method = m, "order_check"
+    else:
+        obj, method = book, "reserve"
+    real = getattr(obj, method)
+
+    def slow(*args):
+        result = real(*args)
+        clock[0] = end
+        return result
+
+    setattr(obj, method, slow)
+    with pytest.raises(es.EntrySessionVeto, match=es.OUTSIDE) as e:
+        go(stamp=stamp, armed=stage != "observer_plan", now=lambda: clock[0])
+    assert (
+        e.value.fields["stage"] == stage
+        and e.value.fields["session_clock"] == "decision"
+    )
+    assert not m.requests and not book.unresolved()
+    rows = book.db.execute("SELECT state,detail FROM intents").fetchall()
+    assert rows == ([("not_sent", es.OUTSIDE)] if stage == "final_send" else [])
+    if rows:
+        with pytest.raises(Block, match="already_consumed"):
+            book.reserve("XAUUSDm", stamp)
+
+
+def test_fill_slippage_tp_correction_is_not_an_entry_after_hours(rig):
+    m, book, go = rig
+    end = B + 3 * 3600
+    stamp = end - 2
+    clock = [stamp + 0.2]
+    m.q.time_msc = stamp * 1000 + 100
+    m.retprice = 2000.12
+    send = m.order_send
+
+    def fill(req):
+        res = send(req)
+        if "position" not in req:
+            clock[0] = end + 0.25
+            m.q.time_msc = end * 1000 + 100
+        return res
+
+    m.order_send = fill
+    result = go(stamp=stamp, now=lambda: clock[0])
+    assert result["status"] == "demo_fill_verified" and not book.unresolved()
+    assert len(m.requests) == 2 and m.requests[1]["action"] == m.TRADE_ACTION_SLTP
+    assert (
+        m.requests[1]["position"] == result["ticket"]
+        and m.requests[0]["sl"] == m.requests[1]["sl"]
+    )
+    assert result["tp"] - result["entry"] == pytest.approx(
+        result["entry"] - result["sl"]
+    )
+
+
+def test_invalid_shared_policy_cannot_send_or_reserve_even_with_good_quote(
+    rig, monkeypatch, tmp_path
+):
+    m, book, go = rig
+    f = tmp_path / "broken.yaml"
+    f.write_text("wrong: true")
+    monkeypatch.setattr(es, "POLICY_FILE", f)
+    with pytest.raises(es.EntrySessionVeto, match=es.UNAVAILABLE):
+        go()
+    assert not m.requests and not book.db.execute("SELECT * FROM intents").fetchall()

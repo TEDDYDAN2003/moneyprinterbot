@@ -12,6 +12,7 @@ dependencies = [
   "pandas",
   "pydantic>=2",
   "pyyaml",
+  "tzdata; platform_system == 'Windows'",
 ]
 
 [project.optional-dependencies]
@@ -27,3 +28,6 @@ testpaths = ["tests"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"bot.config" = ["entry_sessions.yaml"]

@@ -6,6 +6,7 @@ import math
 import sqlite3
 from pathlib import Path
 
+from bot.config.entry_sessions import EntrySessionVeto, sessions_for_runner
 from bot.execution.demo_runner import DemoSafetyError, _side_is_allowed
 from bot.hull.desk import identity_check
 from bot.hull.orders import Block, Grid
@@ -172,6 +173,7 @@ def execute(
     book,
     now,
     kill=Path("KILL"),
+    sessions=None,
 ):
     """Poll only on a pre-close/stale quote; all other vetoes consume this signal."""
     identity(mt, cfg, armed, ident)
@@ -189,7 +191,13 @@ def execute(
     if not _side_is_allowed(mt, info, "BUY" if d == 1 else "SELL"):
         raise Block("symbol_side_disabled")
     exposure(mt, cfg, sym)
-    q = tick_at(mt, sym, sig.close_s, now())
+    sessions = sessions if sessions is not None else sessions_for_runner()
+    gate = sessions.bind(sym)
+    checked = now()
+    # A retest may start out of hours. Only its rejection CLOSE is an entry signal.
+    gate.require("first_quote", rejection_close=sig.close_s, decision=checked)
+    q = tick_at(mt, sym, sig.close_s, checked)
+    gate.require("first_quote", quote=q.time_msc / 1000)
     try:
         bid, ask = ticks(q.bid, g.tick), ticks(q.ask, g.tick)
     except ValueError as e:
@@ -228,8 +236,15 @@ def execute(
         "lots": pair.lots,
     }
     if not armed:
+        checked = now()
+        gate.require("observer_plan", decision=checked)
+        if not sig.close_s <= checked <= sig.close_s + ENTRY_SECONDS or not fresh(
+            q, checked, QUOTE_SECONDS
+        ):
+            raise Block("send_window_closed")
         return {
             "status": "observer_plan",
+            "entry_session": gate.report(checked),
             **fields,
         }  # never invoke order_send, even for SL/TP
     if book is None or cfg.mode != "demo":
@@ -237,21 +252,35 @@ def execute(
     legal_check(mt, req)
     identity(mt, cfg, True, ident)
     exposure(mt, cfg, sym)
-    latest = mt.symbol_info_tick(sym)
-    clock = now()
-    if (
-        kill.exists()
-        or not sig.close_s <= clock <= sig.close_s + ENTRY_SECONDS
-        or not fresh(q, clock, QUOTE_SECONDS)
-    ):
-        raise Block("send_window_closed")
-    if (
-        not fresh(latest, clock, QUOTE_SECONDS)
-        or latest.time_msc < q.time_msc
-        or (latest.bid, latest.ask) != (q.bid, q.ask)
-    ):
-        raise Block("quote_changed_during_precheck_no_chase")
+
+    def final_quote(stage):
+        latest = mt.symbol_info_tick(sym)
+        killed = kill.exists()
+        clock = now()
+        gate.require(stage, decision=clock)
+        if (
+            killed
+            or not sig.close_s <= clock <= sig.close_s + ENTRY_SECONDS
+            or not fresh(q, clock, QUOTE_SECONDS)
+        ):
+            raise Block("send_window_closed")
+        if (
+            not fresh(latest, clock, QUOTE_SECONDS)
+            or latest.time_msc < q.time_msc
+            or (latest.bid, latest.ask) != (q.bid, q.ask)
+        ):
+            raise Block("quote_changed_during_precheck_no_chase")
+        gate.require(stage, quote=latest.time_msc / 1000)
+        return clock
+
+    final_quote("post_precheck")
     book.reserve(sym, sig.close_s)
+    try:
+        # SQLite acquisition/fsync may itself have crossed a session boundary.
+        checked = final_quote("final_send")
+    except (EntrySessionVeto, Block) as exc:
+        book.mark(sym, sig.close_s, "not_sent", str(exc))
+        raise
     try:
         res = mt.order_send(req)  # exactly one entry attempt
         if res is None or res.retcode != mt.TRADE_RETCODE_DONE:
@@ -301,6 +330,7 @@ def execute(
         book.mark(sym, sig.close_s, "verified", str(p.ticket))
         return {
             "status": "demo_fill_verified",
+            "entry_session": gate.report(checked),
             "ticket": p.ticket,
             **fields,
             "quoted_entry": fields["entry"],

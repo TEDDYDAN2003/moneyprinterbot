@@ -4,6 +4,8 @@
 
 **[Wickless Desk: configure brokers and copy pairs](WicklessDesk/index.html)** · [Setup and exact retest rules](docs/WICKLESS.md) · [TradingView strategy](indicators/Wickless-M15-Rejection.pine) · [Test results](research/wickless_m15/README.md). This is an independent rejection-close / 1:1 demo bot. Use `python -m bot.wickless`, not the Hull commands below.
 
+**Shared entry hours:** [Instrument schedule, Nairobi times and offline check](docs/ENTRY_SESSIONS.md). Both Python bots always check the selected broker symbol before a new entry; stops, exits and signal tracking keep running outside its window. No per-broker on/off switch.
+
 ## Dynamic Hull bot
 
 **Dynamic Hull 16:** the approved bot lanes are **M15, M30 and M45**, independent per broker symbol. A confirmed MSS flattens only that lane, even without a Hull cross. [Bot rules / upgrade](docs/HULL_STRUCTURE.md) · [Read-only MT5 indicator](MT5/DYNAMIC-LANES.md). The checked-in mode remains paper.

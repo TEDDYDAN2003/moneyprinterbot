@@ -4,6 +4,8 @@
 
 **Dynamic Hull:** M15/M30/M45 authorized as independent lanes in `hull.eligible_timeframes`, not authorization to start a scanner or send orders. `structure_timeframe: null`. A confirmed MSS closes only the originating symbol/timeframe; M45 is three aligned M15 candles. [Rules and private YAML migration](docs/HULL_STRUCTURE.md).
 
+**Mandatory entry hours (both Python bots):** use the [shared instrument schedule](docs/ENTRY_SESSIONS.md), not the chart statistics buckets or a global killzone. Validate exact broker names; check `entry_sessions.version`, `sha256` and each symbol’s `entry_session` in preflight. A normally closed window is not a reason to widen hours. An unmapped symbol cannot enter. Never disable protection, arm a scanner or change selections to test this filter.
+
 For **MT5 only**, open **PowerShell in the bot folder** on your Windows MT5 PC (usually `$HOME\Downloads\xauusdm-directional-research`). You should see `config.yaml` and `HullJournal`. No environment activation is needed.
 
 | What do you want to do? | Start here |

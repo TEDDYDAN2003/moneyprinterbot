@@ -8,7 +8,7 @@ from bot.hull.structure import Structure
 
 from bot.hull.signal import Reading
 
-T = 1794312000  # Tue 12:00 UTC
+T = 1794322800  # Tue 15:00 UTC, inside gold/FX overlap and US index killzone
 ROOT = Path(__file__).resolve().parents[1]
 
 

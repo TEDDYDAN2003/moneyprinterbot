@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from bot.config.entry_sessions import EntrySessionVeto, sessions_for_runner
 from bot.execution.demo_runner import DemoSafetyError, _filling_mode, _side_is_allowed
 from bot.zones.hours import Hours
 from bot.zones.monitor import account_check, fresh, save, snapshot
@@ -84,7 +85,9 @@ class FirstQuoteWindow:
 
 
 class Desk:
-    def __init__(self, mt, cfg, h, symbols, identity, state, path, emit, armed):
+    def __init__(
+        self, mt, cfg, h, symbols, identity, state, path, emit, armed, *, sessions=None
+    ):
         self.mt = mt
         self.h = h
         self.lim = h.limits
@@ -98,6 +101,7 @@ class Desk:
         self.kill = Path(
             cfg.get("safety", {}).get("emergency_flatten_hotkey_file", "KILL")
         )
+        self.sessions = sessions if sessions is not None else sessions_for_runner()
         self.hours = Hours(cfg)
         self.ladders = TicketLadders(self)
         self.last_service = time.monotonic()
@@ -143,13 +147,15 @@ class Desk:
             )
         return Exposure(len(ps), sum(p.volume for p in ps), risk)
 
-    def _entry_quote(self, name, window, stage):
-        q = self.mt.symbol_info_tick(name)
-        now = time.time()  # timestamp this actual read, not the start of the scan loop
+    def session_gate(self, name):
+        return self.sessions.bind(name, self.syms[name][0])
+
+    def _quote_clock(self, gate, window, q, stage):
+        # Timestamp this actual check, never the start of the scanner iteration.
         d = window.reading
         check = check_quote(
             d.signal_s,
-            now,
+            time.time(),
             self.lim,
             getattr(q, "time_msc", None),
             getattr(q, "bid", None),
@@ -158,23 +164,25 @@ class Desk:
             live_bar_end=d.close_s if d.trigger else None,
         )
         if check.reason != "ready":
+            # Even a missing quote cannot park a signal across the closing edge.
+            gate.require(stage, decision=check.checked)
             raise TimingBlock(check, stage)
+        return check
+
+    def _entry_quote(self, name, window, stage):
+        d = window.reading
+        gate = self.session_gate(name)
+        q = self.mt.symbol_info_tick(name)
+        check = self._quote_clock(gate, window, q, stage)
         if self.verify_signal is not None or d.trigger is not None:
-            if self.verify_signal is None or not self.verify_signal(name, d, q):
+            # Verification can service a *protective* raw opposite / MSS between
+            # legs. Never discard a usable closing-edge tick before it does so.
+            verified = self.verify_signal is not None and self.verify_signal(name, d, q)
+            gate.require(stage, decision=check.checked, quote=check.tick_msc / 1000)
+            if not verified:
                 raise Block("live_cross_or_trend_no_longer_verified")
-            now = time.time()
-            check = check_quote(
-                d.signal_s,
-                now,
-                self.lim,
-                q.time_msc,
-                q.bid,
-                q.ask,
-                monotonic_expired=time.monotonic() > window.end_mono,
-                live_bar_end=d.close_s if d.trigger else None,
-            )
-            if check.reason != "ready":
-                raise TimingBlock(check, stage)
+            check = self._quote_clock(gate, window, q, stage)
+        gate.require(stage, decision=check.checked, quote=check.tick_msc / 1000)
         if stage == "first_plan":
             self.emit(
                 "entry_quote_check",
@@ -187,7 +195,7 @@ class Desk:
                 previous_wait=window.last_wait_reason,
                 **check.audit(d.tf),
             )
-        return q, now
+        return q, check.checked
 
     def _margin_check(
         self, name, d, account, stage, legs, projected, *, per_leg=None, report=True
@@ -279,7 +287,11 @@ class Desk:
         mt = self.mt
         p = self.syms[name][1]
         a = self.account()
-        if p.session == "configured" and (why := self.hours.status(time.time())[0]):
+        now = time.time()
+        # signal_s = the observed live cross tick OR the confirmed candle close,
+        # never the projected end of a forming candle. Independent of p.session.
+        self.session_gate(name).require(stage, signal=d.signal_s)
+        if p.session == "configured" and (why := self.hours.status(now)[0]):
             raise Block(why)
         if self.kill.exists():
             raise Block("kill")
@@ -766,6 +778,7 @@ class Desk:
                 close_s=w.reading.close_s,
                 **w.reading.clock_fields(),
                 outcome=reason,
+                signal_session=self.session_gate(name).report(w.reading.signal_s),
                 polls=w.polls,
                 previous_wait=w.last_wait_reason,
             )
@@ -780,6 +793,8 @@ class Desk:
         return last == [d.close_s, d.side]
 
     def batch(self, name, d, *, raw_tf=None):
+        if name not in self.syms:
+            return "symbol_not_selected"
         if not isinstance(d, Reading):
             return "not_dynamic_hull_signal"
         if TF_NAME.get(d.tf) not in self.h.eligible_timeframes:
@@ -845,6 +860,8 @@ class Desk:
                     raise Block("final_quote_or_safety_changed")
                 if n is None:
                     n = left
+                    preview_s = time.time()
+                    self.session_gate(name).require("batch_preview", decision=preview_s)
                     self.emit(
                         "batch_preview",
                         symbol=name,
@@ -852,6 +869,7 @@ class Desk:
                         signal=d.signal_s,
                         rate=self.syms[name][1].rate,
                         legs=n,
+                        entry_session=self.session_gate(name).report(preview_s),
                         exit_policy=self.h.exit_policy,
                         target_policy=TARGET_POLICY,
                         goal_per_leg=plan.goal_usd,  # indicative first leg, not a promise for siblings
@@ -938,7 +956,7 @@ class Desk:
                 self.persist()
                 self.account()
                 try:
-                    q3, checked = self._entry_quote(name, window, "final_send")
+                    q3, _ = self._entry_quote(name, window, "final_send")
                     final_prices = (q3.bid, q3.ask)
                     if (
                         self.kill.exists()
@@ -947,7 +965,10 @@ class Desk:
                         or (recheck is not None and final_prices != checked_prices)
                     ):
                         raise Block("final_quote_or_safety_changed")
-                except Block:
+                    gate = self.session_gate(name)
+                    checked = self._quote_clock(gate, window, q3, "final_send").checked
+                    gate.require("final_send", decision=checked)
+                except (Block, EntrySessionVeto):
                     # No send has happened on this leg. Do not requeue after a veto.
                     self.state.pop("manual_hold")
                     self.persist()
@@ -970,6 +991,7 @@ class Desk:
                     request=req,
                     **d.clock_fields(),
                     send_check_utc=utc(checked),
+                    entry_session=self.session_gate(name).report(checked),
                     send_tick_time_msc=int(q3.time_msc),
                     send_bid=q3.bid,
                     send_ask=q3.ask,
@@ -1015,6 +1037,18 @@ class Desk:
                 self.waiting[(name, d.tf)] = window
                 return WAITING
             why = check.reason
+        except EntrySessionVeto as exc:
+            why = str(exc)
+            self.emit(
+                "entry_session_veto",
+                symbol=name,
+                tf=d.tf,
+                signal=d.signal_s,
+                reason=why,
+                profile=self.syms[name][0],
+                legs_already_sent=sent,
+                **exc.fields,
+            )
         except Block as exc:
             why = str(exc)
         if why == "manual_reconciliation_required":

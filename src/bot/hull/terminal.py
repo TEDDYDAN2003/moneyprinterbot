@@ -11,6 +11,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
+from bot.config.entry_sessions import sessions_for_runner
 from bot.execution.demo_runner import DemoSafetyError, _account_order_lock
 
 from .config import (
@@ -168,6 +169,7 @@ def dispatch(d, name, labels, *, data_ok, history_ok, rewarmed, shifts=()):
                     symbol=name,
                     tf=tf,
                     outcome=why,
+                    signal_session=d.session_gate(name).report(rows[-1].signal_s),
                     **rows[-1].clock_fields(),
                 )
             continue
@@ -205,6 +207,7 @@ def dispatch(d, name, labels, *, data_ok, history_ok, rewarmed, shifts=()):
                 raw_selected_tf=tf,
                 close_s=r.close_s,
                 **r.clock_fields(),
+                signal_session=d.session_gate(name).report(r.signal_s),
                 outcome=why,
             )
 
@@ -294,16 +297,22 @@ def run(
         key = hashlib.sha256(repr(identity).encode()).hexdigest()[:16]
         syms = resolve(mt, profiles)
         limits = h.limits
+        sessions = sessions_for_runner()
+        session_issues = []
         specs = {}
         for name, (code, p) in syms.items():
             i = mt.symbol_info(name)
             g = Grid.from_info(i)
             q = LiveTick.read(mt.symbol_info_tick(name))
+            gate = sessions.bind(name, code)
+            if gate.issue:
+                session_issues.append(f"{name} ({code}): {gate.issue}; no new entries")
             specs[name] = {
                 "key": code,
                 "bid_chart_verified": getattr(i, "chart_mode", None)
                 == getattr(mt, "SYMBOL_CHART_MODE_BID", 0),
                 **p.model_dump(),
+                "entry_session": gate.report(time.time()),
                 **asdict(g),
                 "contract_size": i.trade_contract_size,
                 "profit_currency": i.currency_profit,
@@ -333,6 +342,7 @@ def run(
             "new_ticket_exit_policy": h.exit_policy,
             "new_ticket_target_policy": TARGET_POLICY,
             "entry_policy": ENTRY_POLICY,
+            "entry_sessions": sessions.identity(),
             "signal_policy": h.indicator.signal_policy,
             "batch_entry_policy": BATCH_ENTRY_POLICY,
             "entry_timing": h.entry_timing,
@@ -357,7 +367,7 @@ def run(
             summary["open_positions"] = len(ps)
             summary["pending_orders"] = len(os)
             summary["history_check"] = {}
-            issues = []
+            issues = list(session_issues)
             legacy = [k for k in RETIRED_LIMITS if k in cfg["hull"].get("limits", {})]
             if legacy:
                 issues.append(
@@ -426,6 +436,8 @@ def run(
             summary["review_before_demo"] = issues
         print(json.dumps(summary, indent=2, allow_nan=False), flush=True)
         if preflight:
+            if session_issues:
+                raise DemoSafetyError("; ".join(session_issues))
             return summary
         root = Path("reports/hull_runtime") / key
         root.mkdir(parents=True, exist_ok=True)
@@ -454,7 +466,9 @@ def run(
                     )
                 )  # coexistence with old checkout in this directory
             state = json.loads(path.read_text()) if armed and path.exists() else {}
-            d = Desk(mt, cfg, h, syms, identity, state, path, emit, armed)
+            d = Desk(
+                mt, cfg, h, syms, identity, state, path, emit, armed, sessions=sessions
+            )
             locks.callback(d.cancel_all_waits)
             bundles = {name: make_lanes(h, frames, p) for name, (_, p) in syms.items()}
 

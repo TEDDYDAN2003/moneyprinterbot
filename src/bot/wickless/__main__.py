@@ -3,6 +3,9 @@
 import argparse
 import json
 import sys
+from time import time
+
+from bot.config.entry_sessions import load_entry_sessions
 
 from .config import load
 
@@ -35,7 +38,22 @@ def main(argv=None):
     try:
         cfg = load(a.config)
         if a.cmd == "validate":
-            print(cfg.model_dump_json(indent=2))
+            sessions = load_entry_sessions()
+            selected = {p.symbol: sessions.bind(p.symbol) for p in cfg.pairs}
+            print(
+                json.dumps(
+                    {
+                        "config": cfg.model_dump(),
+                        "entry_sessions": sessions.identity(),
+                        "symbols": {k: g.report(time()) for k, g in selected.items()},
+                    },
+                    indent=2,
+                )
+            )
+            if any(g.issue for g in selected.values()):
+                raise ValueError(
+                    "Unmapped session symbol: add its verified exact broker name to entry_sessions.yaml"
+                )
         elif a.cmd == "replay":
             from .replay import replay, rows
 

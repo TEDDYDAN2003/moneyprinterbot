@@ -23,3 +23,6 @@ indicators/Wickless-M15-Rejection.pine text eol=lf
 
 indicators/FC-Hull-Dynamic-Source.pine text eol=lf
 src/bot/hull/v4/*.py text eol=lf
+
+# The execution policy SHA-256 identifies the same shipped bytes on Windows and Unix.
+src/bot/config/entry_sessions.yaml text eol=lf

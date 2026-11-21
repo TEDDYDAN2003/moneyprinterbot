@@ -275,13 +275,22 @@ def test_only_quote_availability_can_be_revisited(
 
 
 def test_waiting_symbol_does_not_hold_up_another_symbol(hull_desk):
-    mt, d, _ = hull_desk(armed=False)
-    a, b = "XAUUSDm", "SECOND"
-    d.syms[b] = d.syms[a]
+    mt, d, log = hull_desk(armed=False)
+    a, b = "XAUUSDm", "EURUSDm"
+    d.syms[b] = (
+        "EURUSD",
+        d.syms[a][1],
+    )  # identical synthetic grid for the independent lane
     ok = {"data_ok": True, "history_ok": True, "rewarmed": False}
     mt.symbol_info_tick = lambda n: None if n == a else mt.q
     dispatch(d, a, [sig()], **ok)
     dispatch(d, b, [sig()], **ok)
+    assert any(
+        e == "label_decision"
+        and x["symbol"] == b
+        and x["outcome"] == "shadow_plan_only"
+        for e, x in log
+    )
     assert list(d.waiting) == [(a, 1)] and d.state["lane_consumed"] == {
         a: {"1": T},
         b: {"1": T},

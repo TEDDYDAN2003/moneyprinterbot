@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from time import time
 
 import numpy as np
 import pandas as pd
@@ -138,7 +139,24 @@ def main() -> int:
         return handle(args)
     if args.command == "validate-config":
         config = validate_config(load_yaml(Path(args.config)))
-        print(json.dumps(config.model_dump(), indent=2, default=str))
+        result = config.model_dump()
+        if config.hull:
+            from bot.config.entry_sessions import load_entry_sessions
+
+            sessions = load_entry_sessions()
+            # When broker_symbol is not pinned, the terminal preflight checks its
+            # actual resolved spelling. Offline we can only check the enabled key.
+            selected = {
+                k: sessions.bind(config.hull.symbols[k].broker_symbol or k, k)
+                for k in config.hull.enabled
+            }
+            result["entry_sessions"] = sessions.identity() | {
+                "enabled": {k: g.report(time()) for k, g in selected.items()}
+            }
+            if any(g.issue for g in selected.values()):
+                print(json.dumps(result["entry_sessions"], indent=2))
+                return 2
+        print(json.dumps(result, indent=2, default=str))
         return 0
     if args.command == "features":
         bars = load_ohlcv(args.csv)

@@ -12,7 +12,7 @@
 <noscript><p>To use the three slow profiles without JavaScript, send <strong>HULL START trio-slow</strong> to the desktop agent with the updated repository. For other profiles, use <code>HULL START SYMBOL:LOT:TP_USD:RATE</code>.</p></noscript>
 <section class="panel" aria-labelledby="pick-title">
 <h2 id="pick-title">1 · Choose profiles</h2>
-<p><span class="chip">M15 · M30 · M45</span> Each checked symbol can have one independent batch per configured timeframe. Only checked profiles will be copied.</p>
+<p><span class="chip">M15 · M30 · M45</span> Each checked symbol can have one independent batch per configured timeframe. Only checked profiles will be copied. New entries always require an approved <a href="ENTRY_SESSIONS.md">symbol session</a>; exits stay active.</p>
 <p><strong>FC Dynamic Hull · 16</strong>: buy a raw BUY only in bullish structure; sell a raw SELL only in bearish structure. A confirmed MSS closes only its symbol/timeframe; a raw opposite cross closes opposite tickets only on that lane. No premium/discount test. Existing stops and per-ticket 70/30 ladder remain in place. <a href="HULL_STRUCTURE.md">Rules and local configuration</a>.</p>
 <button class="secondary preset" type="button" id="trio">trio-slow · gold 0.09, EUR/GBP 0.01 lot per ticket</button>
 <button class="secondary preset" type="button" id="trio-config">Configured trio · gold 0.10, EUR/GBP 1.00 lot per ticket</button>
@@ -42,7 +42,7 @@
 <script>
 'use strict';
 const counts = {slow: [10, 10], medium: [3, 4], fast: [6, 7]};
-const presets = [ ['XAUUSD','0.10'], ['EURUSD','1'], ['AUDUSD','1'], ['GBPJPY','1'], ['GBPUSD','1'], ['USDJPY','1.3'], ['USTEC100','1'], ['US30','1'], ['1HZ100V','0.01'] ];
+const presets = [ ['XAUUSD','0.10'], ['EURUSD','1'], ['AUDUSD','1'], ['GBPJPY','1'], ['GBPUSD','1'], ['USDJPY','1.3'], ['USTEC100','1'], ['US30','1'], ['US500','1'], ['DE40','1'], ['JP225','3'] ];
 const presetKeys = {USTEC100:'NAS100USD', US30:'US30'};
 const trio = new Set(['XAUUSD', 'EURUSD', 'GBPUSD']);
 const id = name => document.getElementById(name);

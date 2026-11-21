@@ -1,0 +1,37 @@
+# ONE mandatory new-entry schedule for Dynamic Hull and Wickless M15 (No Wick).
+# Local weekdays, start inclusive, end exclusive. IANA zones handle DST independently.
+# Changes take effect at restart; validate with: python -m bot.config.entry_sessions
+version: symbol-entry-sessions/v1
+clocks:
+  tokyo_open:       {tz: Asia/Tokyo,       start: '09:00', end: '10:00'}
+  frankfurt_open:   {tz: Europe/Berlin,    start: '09:00', end: '10:00'}
+  london_day:       {tz: Europe/London,    start: '08:00', end: '17:00'}
+  new_york_day:     {tz: America/New_York, start: '08:00', end: '17:00'}
+  ny_before_open:   {tz: America/New_York, start: '00:00', end: '08:00'}
+  london_kill_band: {tz: Europe/London,    start: '13:00', end: '16:00'}
+  ny_cash_open:     {tz: America/New_York, start: '09:30', end: '10:30'}
+
+# A window requires ALL its clocks (intersection).
+windows:
+  tokyo_first_hour:       {all_of: [tokyo_open]}
+  frankfurt_first_hour:   {all_of: [frankfurt_open]}
+  london_before_new_york: {all_of: [london_day, ny_before_open]}
+  london_ny_overlap:      {all_of: [london_day, new_york_day]}
+  overlap_killzone:       {all_of: [london_day, new_york_day, london_kill_band]}
+  ny_cash_first_hour:     {all_of: [ny_cash_open]}
+
+# ANY listed window admits the market, subject to every other bot safeguard.
+# Exact broker spellings only; canonical names are accepted automatically.
+# Add a broker suffix to the correct aliases list; never use a wildcard or fallback.
+markets:
+  JP225:    {windows: [tokyo_first_hour], aliases: [JP225m, NIKKEI, 'Japan 225', 'JP 225']}
+  USDJPY:   {windows: [tokyo_first_hour, london_ny_overlap], aliases: [USDJPYm]}
+  DE40:     {windows: [frankfurt_first_hour], aliases: [DE30, DE30m, DE40m, GER40, GER30, 'Germany 40', 'Germany 30']}
+  GBPJPY:   {windows: [london_before_new_york, london_ny_overlap], aliases: [GBPJPYm]}
+  XAUUSD:   {windows: [london_ny_overlap], aliases: [XAUUSDm, GOLD]}
+  EURUSD:   {windows: [london_ny_overlap], aliases: [EURUSDm]}
+  AUDUSD:   {windows: [london_ny_overlap], aliases: [AUDUSDm]}
+  GBPUSD:   {windows: [london_ny_overlap], aliases: [GBPUSDm]}
+  NAS100USD: {windows: [overlap_killzone, ny_cash_first_hour], aliases: [USTEC_x100m, NAS100, US100, USTEC, USTECm]}
+  US30:      {windows: [overlap_killzone, ny_cash_first_hour], aliases: [US30m, 'Wall Street 30', 'US Wall Street 30']}
+  US500:     {windows: [overlap_killzone, ny_cash_first_hour], aliases: [US500m, SPX500, 'US SPX 500', 'US 500']}
