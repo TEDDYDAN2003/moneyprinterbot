@@ -1,0 +1,11 @@
+{
+  "version": "wickless-m15/v1",
+  "mode": "paper",
+  "broker": "My demo broker",
+  "server": "",
+  "max_positions": 2,
+  "rules": {"tolerance_ticks": 0, "min_body_ticks": 0, "zone_pips": 3, "retest_bars": 10, "stop_buffer_ticks": 0},
+  "pairs": [
+    {"symbol": "EURUSDm", "lots": 0.01, "pip_size": 0.0001, "max_spread_pips": 3, "max_risk_usd": 25}
+  ]
+}

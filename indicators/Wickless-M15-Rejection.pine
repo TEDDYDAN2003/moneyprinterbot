@@ -1,0 +1,311 @@
+//@version=6
+strategy("Wickless M15 · Respected zone", shorttitle="Wickless 15", overlay=true, pyramiding=0, process_orders_on_close=true, calc_on_every_tick=false, initial_capital=10000, default_qty_type=strategy.percent_of_equity, default_qty_value=10, max_bars_back=5000, max_lines_count=480, max_labels_count=480, max_boxes_count=200)
+// A close-only companion of the separate Wickless bot, not a webhook/order router.
+if not (timeframe.isminutes and timeframe.multiplier == 15 and chart.is_standard)
+    runtime.error("Use a standard 15-minute candlestick or bar chart.")
+int tol = input.int(0,"Wick tolerance (ticks)",minval=0,maxval=100,group="Setup")
+int minBody = input.int(0,"Minimum body (ticks)",minval=0,maxval=10000,group="Setup")
+float zonePips = input.float(3,"Zone width (pips)",minval=0,maxval=1000,group="Setup")
+float pipIn = input.float(0,"Pip size in price units (0 = auto)",minval=0,group="Setup")
+int ttl = input.int(10,"Retest window (M15 bars)",minval=1,maxval=100,group="Setup")
+int buf = input.int(0,"Structural stop buffer (ticks)",minval=0,maxval=1000,group="Setup")
+bool drawZones = input.bool(true,"Retest zones",group="Chart")
+bool showRaw = input.bool(true,"Faded ignored wickless candles",group="Chart")
+bool showInt = input.bool(true,"Internal structure marks",group="Chart")
+bool showExt = input.bool(false,"External context marks and tint",group="Chart")
+bool showSw = input.bool(false,"HH / HL / LH / LL",group="Chart")
+bool showTL = input.bool(false,"External swing trend lines",group="Chart")
+bool showProt = input.bool(false,"Internal protected level",group="Chart")
+bool showConsol = input.bool(false,"Consolidation tint (context only)",group="Chart")
+bool showPlan = input.bool(true,"Rejection-close entry, SL and TP",group="Chart")
+bool showStats = input.bool(true,"Strategy summary",group="Chart")
+bool simulate = input.bool(true,"Chart simulation (off = suggestions only)",group="Chart")
+color up = #137C63
+color dn = #BC5154
+float unit = syminfo.mintick
+float O = math.round(open/unit)
+float H = math.round(high/unit)
+float L = math.round(low/unit)
+float C = math.round(close/unit)
+float pip = pipIn > 0 ? pipIn : str.contains(str.upper(syminfo.ticker),"XAU") ? 0.1 : 10*unit
+float width = math.floor(zonePips*pip/unit+0.000000001)
+
+// Supplied internal/external BOS and protected-level MSS engine, in tick units.
+// New pivots become known len bars later. The high/low on a break bar is never
+// included in the earlier pullback used to establish its new protection.
+f_struct(int len, bool internal) =>
+    float ph = ta.pivothigh(H,len,len)
+    float pl = ta.pivotlow(L,len,len)
+    var int trend = 0
+    var float lastH = na
+    var float lastL = na
+    var int hiBar = na
+    var int loBar = na
+    var float lh = na
+    var float hl = na
+    var int hiType = 0
+    var int loType = 0
+    var float bh = na
+    var float bl = na
+    var int bhi = na
+    var int bli = na
+    var bool hx = true
+    var bool lx = true
+    var float rl = na
+    var float rh = na
+    var int rli = na
+    var int rhi = na
+    var float prot = na
+    var int guardBar = na
+    var int eventBar = -1
+    var int shift = 0
+    var int shiftBar = -1
+    var float shiftLvl = na
+    var line trendH = na
+    var line trendL = na
+    bool marks = internal ? showInt : showExt
+    color pos = internal ? up : #406DB2
+    color neg = internal ? dn : #AF7728
+    int ev = 0
+    if barstate.isconfirmed
+        int pj = bar_index-len
+        if not na(ph)
+            if not na(lastH) and ph != lastH
+                hiType := ph>lastH ? 1 : -1
+                if hiType==-1
+                    lh := ph
+                if marks and showSw
+                    label.new(pj,ph*unit,hiType==1?"HH":"LH",style=label.style_label_down,color=color.new(color.white,100),textcolor=hiType==1?pos:neg,size=size.tiny)
+                if not internal and showTL
+                    line.delete(trendH)
+                    trendH := line.new(math.max(hiBar,bar_index-9900),lastH*unit,pj,ph*unit,extend=extend.right,color=hiType==1?pos:neg)
+            lastH := ph
+            hiBar := pj
+            if pj>=eventBar and (na(bh) or hx or ph>bh)
+                bh := ph
+                bhi := pj
+                hx := false
+                rl := na
+                rli := na
+                for k=1 to len-1
+                    if na(rl) or L[k]<rl
+                        rl := L[k]
+                        rli := bar_index-k
+        if not na(pl)
+            if not na(lastL) and pl != lastL
+                loType := pl>lastL ? 1 : -1
+                if loType==1
+                    hl := pl
+                if marks and showSw
+                    label.new(pj,pl*unit,loType==1?"HL":"LL",style=label.style_label_up,color=color.new(color.white,100),textcolor=loType==1?pos:neg,size=size.tiny)
+                if not internal and showTL
+                    line.delete(trendL)
+                    trendL := line.new(math.max(loBar,bar_index-9900),lastL*unit,pj,pl*unit,extend=extend.right,color=loType==1?pos:neg)
+            lastL := pl
+            loBar := pj
+            if pj>=eventBar and (na(bl) or lx or pl<bl)
+                bl := pl
+                bli := pj
+                lx := false
+                rh := na
+                rhi := na
+                for k=1 to len-1
+                    if na(rh) or H[k]>rh
+                        rh := H[k]
+                        rhi := bar_index-k
+        int start = na
+        float broken = na
+        if trend!=0 and not na(prot) and trend*(C-prot)<0
+            start := guardBar
+            broken := prot
+            trend := -trend
+            ev := 2*trend
+            shift := trend
+            shiftBar := bar_index
+            int n = math.min(1500,bar_index-1-guardBar)
+            prot := na
+            guardBar := na
+            if not na(n) and n>=1
+                for k=1 to n
+                    float w = trend==1 ? L[k] : H[k]
+                    if na(prot) or trend*(w-prot)<0
+                        prot := w
+                        guardBar := bar_index-k
+            shiftLvl := na(prot) ? (trend==1 ? lastL : lastH) : prot
+            if trend==1
+                lh := na
+            else
+                hl := na
+            hiType := 0
+            loType := 0
+            hx := true
+            lx := true
+            bh := na
+            bl := na
+            eventBar := bar_index
+        else if trend!=-1 and not na(bh) and not hx and C>bh
+            ev := 1
+            start := bhi
+            broken := bh
+            hx := true
+            trend := 1
+            if not na(rl)
+                prot := rl
+                guardBar := rli
+            else if na(prot) and lastL<C
+                prot := lastL
+                guardBar := loBar
+            if shift==trend
+                shift := 0
+            eventBar := bar_index
+        else if trend!=1 and not na(bl) and not lx and C<bl
+            ev := -1
+            start := bli
+            broken := bl
+            lx := true
+            trend := -1
+            if not na(rh)
+                prot := rh
+                guardBar := rhi
+            else if na(prot) and lastH>C
+                prot := lastH
+                guardBar := hiBar
+            if shift==trend
+                shift := 0
+            eventBar := bar_index
+        if marks and ev!=0 and not na(start)
+            color ink = trend==1?pos:neg
+            bool mss = math.abs(ev)==2
+            line.new(math.max(start,bar_index-9900),broken*unit,bar_index,broken*unit,color=color.new(ink,35),style=mss?line.style_solid:line.style_dashed)
+            label.new(bar_index,broken*unit,mss?"MSS":"BOS",style=trend==1?label.style_label_down:label.style_label_up,color=color.new(ink,85),textcolor=ink,size=size.tiny)
+        if not na(bh) and (na(rl) or L<rl)
+            rl := L
+            rli := bar_index
+        if not na(bl) and (na(rh) or H>rh)
+            rh := H
+            rhi := bar_index
+    [trend,ev,prot,shift,shiftLvl,shiftBar,lastH,hiBar,lastL,loBar,lh,hl,hiType,loType]
+
+[bias,event,guard,shift,shiftLvl,shiftBar,lastH,hiBar,lastL,loBar,lh,hl,hiType,loType] = f_struct(3,true)
+[ext,_,_,_,_,_,_,_,_,_,_,_,_,_] = f_struct(10,false)
+bool compress = ta.highest(high,20)-ta.lowest(low,20)<3.5*ta.atr(14) or hiType*loType==-1
+bgcolor(showConsol and compress?color.new(color.gray,89):showExt and ext!=0?color.new(ext==1?up:dn,94):na)
+plot(showProt?guard*unit:na,"Protected level",color=color.gray,style=plot.style_linebr)
+plotshape(bias!=0,"Internal trend",shape.square,location.bottom,bias==1?up:dn,size=size.tiny)
+
+bool bull = C>O and C-O>=minBody and O-L<=tol
+bool bear = C<O and O-C>=minBody and H-O<=tol
+int raw = barstate.isconfirmed ? (bull?1:bear?-1:0) : 0
+var array<int> bs = array.new_int()
+var array<int> ds = array.new_int()
+var array<float> lows = array.new_float()
+var array<float> highs = array.new_float()
+var array<float> stops = array.new_float()
+var array<box> zones = array.new_box()
+var int cancelled = 0
+int signal = 0
+int origin = na
+float stop = na
+float target = na
+int armed = 0
+float setupStop = na
+bool gap = not na(time[1]) and time-time[1]!=900000
+if barstate.isconfirmed
+    // Process older setups BEFORE creating today's; the setup candle cannot enter itself.
+    if ds.size()>0
+        for j=ds.size()-1 to 0
+            int d = ds.get(j)
+            int age = bar_index-bs.get(j)
+            float lo = lows.get(j)
+            float hi = highs.get(j)
+            float sl = stops.get(j)
+            bool dead = gap or bias!=d or (d==1 ? C<lo or L<=sl : C>hi or H>=sl)
+            bool confirmedRetest = not dead and age>=1 and age<=ttl and L<=hi and H>=lo and d*(C-O)>0
+            bool good = confirmedRetest and 2*C-sl>0
+            if dead or confirmedRetest or age>=ttl
+                if good and signal==0
+                    signal := d
+                    origin := bs.get(j)
+                    stop := sl
+                    target := 2*C-sl
+                if not good
+                    cancelled += 1
+                box bx = zones.get(j)
+                if not na(bx)
+                    box.set_right(bx,bar_index)
+                    box.set_bgcolor(bx,color.new(good?(d==1?up:dn):color.gray,88))
+                bs.remove(j)
+                ds.remove(j)
+                lows.remove(j)
+                highs.remove(j)
+                stops.remove(j)
+                zones.remove(j)
+    if raw!=0 and raw==bias
+        int d = raw
+        float base = d==1 ? L : H
+        float edge = O+d*width
+        float sl = na
+        if shift==d and bar_index-shiftBar<=15
+            sl := shiftLvl-d*buf
+        else
+            int n = math.min(300,bar_index-1-(d==1?loBar:hiBar))
+            float pv = na
+            if not na(n) and n>=1
+                for k=1 to n
+                    float w = d==1?L[k]:H[k]
+                    if na(pv) or d*(w-pv)<0
+                        pv := w
+            float inner = d==1?hl:lh
+            float last = d==1?lastL:lastH
+            float anchor = not na(pv) and d*(C-pv)>0 ? pv : not na(inner) and d*(C-inner)>0 ? inner : not na(last) and d*(C-last)>0 ? last : O
+            sl := anchor-d*buf
+        if not na(sl) and sl>0 and d*(edge-sl)>0
+            armed := d
+            setupStop := sl
+            float lo = math.min(base,edge)
+            float hi = math.max(base,edge)
+            bs.push(bar_index)
+            ds.push(d)
+            lows.push(lo)
+            highs.push(hi)
+            stops.push(sl)
+            box bx = na
+            if drawZones
+                color ink = d==1?up:dn
+                bx := box.new(bar_index,hi*unit,bar_index+ttl,lo*unit,bgcolor=color.new(ink,91),border_color=color.new(ink,69))
+            zones.push(bx)
+
+if signal!=0
+    string name = signal==1?"BUY":"SELL"
+    if showPlan
+        line.new(bar_index,close,bar_index+15,close,color=color.gray,style=line.style_dotted)
+        line.new(bar_index,stop*unit,bar_index+15,stop*unit,color=dn,style=line.style_dashed)
+        line.new(bar_index,target*unit,bar_index+15,target*unit,color=up,style=line.style_dashed)
+    alert("WICKLESS "+name+" | "+syminfo.ticker+" M15 | rejection close "+str.tostring(close,format.mintick)+" | SL "+str.tostring(stop*unit,format.mintick)+" | TP "+str.tostring(target*unit,format.mintick),alert.freq_once_per_bar_close)
+    if simulate and strategy.position_size==0
+        if signal==1
+            strategy.entry("Long",strategy.long)
+            strategy.exit("L bracket","Long",stop=stop*unit,limit=target*unit)
+        else
+            strategy.entry("Short",strategy.short)
+            strategy.exit("S bracket","Short",stop=stop*unit,limit=target*unit)
+plotshape(armed==1,"Bullish zone · waiting",shape.triangleup,location.belowbar,color.new(up,25),size=size.tiny)
+plotshape(armed==-1,"Bearish zone · waiting",shape.triangledown,location.abovebar,color.new(dn,25),size=size.tiny)
+plotshape(showRaw and raw==1 and armed==0,"Ignored bullish wickless",shape.triangleup,location.belowbar,color.new(color.gray,63),size=size.tiny)
+plotshape(showRaw and raw==-1 and armed==0,"Ignored bearish wickless",shape.triangledown,location.abovebar,color.new(color.gray,63),size=size.tiny)
+plotshape(signal==1,"BUY · respected",shape.labelup,location.belowbar,up,text="BUY",textcolor=color.white,size=size.tiny)
+plotshape(signal==-1,"SELL · respected",shape.labeldown,location.abovebar,dn,text="SELL",textcolor=color.white,size=size.tiny)
+plot(signal==0?na:stop*unit,"Rejection SL",display=display.data_window)
+plot(signal==0?na:target*unit,"Rejection TP",display=display.data_window)
+var table stats = table.new(position.top_right,2,5,bgcolor=color.new(#152C2A,10))
+if showStats and barstate.islast
+    table.cell(stats,0,0,"WICKLESS / M15",text_color=color.white)
+    table.cell(stats,1,0,"1 : 1",text_color=color.white)
+    table.cell(stats,0,1,"Internal trend",text_color=color.silver)
+    table.cell(stats,1,1,bias==1?"Bullish":bias==-1?"Bearish":"Neutral",text_color=color.white)
+    table.cell(stats,0,2,"Waiting / cancelled",text_color=color.silver)
+    table.cell(stats,1,2,str.tostring(ds.size())+" / "+str.tostring(cancelled),text_color=color.white)
+    table.cell(stats,0,3,"Simulator wins / losses",text_color=color.silver)
+    table.cell(stats,1,3,str.tostring(strategy.wintrades)+" / "+str.tostring(strategy.losstrades),text_color=color.white)
+    table.cell(stats,0,4,"Execution",text_color=color.silver)
+    table.cell(stats,1,4,"Chart only",text_color=color.white)

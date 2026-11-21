@@ -1,0 +1,8 @@
+{
+  "input": "Exness-EURUSDm-Oct2026-M1.csv",
+  "input_sha256": "e5bc32d566b74cba397391b2ab3fbed4041c849e26ec64596fad75d4b287e4b7",
+  "minutes": 31288,
+  "complete_quarters": 2007,
+  "omitted_incomplete_nonempty_quarters": 92,
+  "m15_sha256": "5390f9fb0da0928c0d678a1283788ecd45d0410c7200c06193d838ebb66d2080"
+}

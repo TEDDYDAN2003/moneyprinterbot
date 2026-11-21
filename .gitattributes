@@ -14,3 +14,9 @@ downloads/*.zip binary
 
 # Also shipped byte-for-byte in the portable kit.
 docs/HULL_STRUCTURE.md text eol=lf
+
+# Wickless study inputs, sources, and portable website are identical on Windows.
+WicklessDesk/** text eol=lf
+src/bot/wickless/** text eol=lf
+research/wickless_m15/** text eol=lf
+indicators/Wickless-M15-Rejection.pine text eol=lf

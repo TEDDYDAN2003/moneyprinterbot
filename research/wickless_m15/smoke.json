@@ -1,0 +1,22 @@
+{
+  "model": "M15 close-price simulation; no spread, fees or slippage except gaps on stops",
+  "symbol": "EURUSDm",
+  "bars": 2007,
+  "raw": 189,
+  "setups": 88,
+  "suggestions": 48,
+  "target": 10,
+  "occupied": 27,
+  "stop": 11,
+  "simulated_entries": 21,
+  "open_at_end": 0,
+  "unfilled_zones": 0,
+  "ended_zones": {
+    "respected": 48,
+    "disrespected": 23,
+    "expired": 9,
+    "data_gap": 5,
+    "stop_touched": 3
+  },
+  "gross_R": -1.0
+}

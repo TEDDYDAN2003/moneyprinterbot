@@ -1,5 +1,9 @@
 # Moneyprinterbot · Hull demo scanner
 
+## Separate strategy: Wickless M15
+
+**[Wickless Desk: configure brokers and copy pairs](WicklessDesk/index.html)** · [Setup and exact retest rules](docs/WICKLESS.md) · [TradingView strategy](indicators/Wickless-M15-Rejection.pine) · [Test results](research/wickless_m15/README.md). This is an independent rejection-close / 1:1 demo bot. Use `python -m bot.wickless`, not the Hull commands below.
+
 ## Start with just your profiles
 
 Open **[Hull demo start](docs/Hull-demo-start.html)**, tick the symbols you want, set lot, base USD per ticket and rate, and click **Copy start line**. Paste that line into the AI agent that has this repository and MT5 Desktop on your Windows machine. It means **run the checks and start one read-only observer**, not “send orders.” You do not need to repeat the setup prompt.

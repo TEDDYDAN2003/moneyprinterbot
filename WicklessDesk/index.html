@@ -1,0 +1,1903 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>Wickless Desk · Pair workspace</title>
+    <style>
+      :root {
+        --paper: #f5f6f0;
+        --ink: #172e29;
+        --muted: #53685f;
+        --line: #d8dfd4;
+        --card: #fffefa;
+        --green: #13634d;
+        --sage: #e1ebdf;
+        --lime: #ddf495;
+        --mono: ui-monospace, SFMono-Regular, Consolas, monospace;
+        --sans:
+          Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial,
+          sans-serif;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font: 15px/1.48 var(--sans);
+        color: var(--ink);
+        background: var(--paper);
+      }
+      button,
+      input,
+      select,
+      textarea {
+        font: inherit;
+        color: inherit;
+      }
+      button,
+      select,
+      input[type="checkbox"] {
+        cursor: pointer;
+      }
+      button {
+        transition:
+          background 0.14s,
+          border-color 0.14s,
+          box-shadow 0.14s;
+      }
+      button:focus-visible,
+      a:focus-visible,
+      select:focus-visible,
+      input:focus-visible,
+      textarea:focus-visible {
+        outline: 3px solid #429b7a;
+        outline-offset: 3px;
+      }
+      button:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+      a {
+        color: var(--green);
+      }
+      [hidden] {
+        display: none !important;
+      }
+      .wrap {
+        max-width: 1240px;
+        margin: 0 auto;
+        padding: 0 38px;
+      }
+      .top {
+        background: var(--card);
+        border-bottom: 1px solid var(--line);
+      }
+      .topin {
+        height: 65px;
+        display: flex;
+        gap: 32px;
+        align-items: center;
+      }
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 9px;
+        font-size: 20px;
+        letter-spacing: -0.06em;
+        font-weight: 750;
+        white-space: nowrap;
+      }
+      .logo {
+        display: grid;
+        place-items: center;
+        background: #1c4238;
+        width: 31px;
+        height: 31px;
+        border-radius: 8px;
+        color: var(--lime);
+      }
+      .brand em {
+        font: inherit;
+        font-weight: 440;
+        color: #496158;
+      }
+      .nav {
+        align-self: stretch;
+        display: flex;
+        gap: 19px;
+      }
+      .nav button {
+        border: 0;
+        border-bottom: 2px solid transparent;
+        background: transparent;
+        padding: 2px 2px 0;
+        font-size: 13px;
+        color: var(--muted);
+        font-weight: 600;
+      }
+      .nav button.active {
+        color: var(--green);
+        border-bottom-color: var(--green);
+      }
+      .local {
+        margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        font: 11px var(--mono);
+        color: var(--muted);
+      }
+      .dot {
+        width: 7px;
+        height: 7px;
+        background: #66a57a;
+        border-radius: 50%;
+        display: inline-block;
+      }
+      .hero {
+        position: relative;
+        overflow: hidden;
+        margin-top: 24px;
+        border-radius: 16px;
+        color: #f7f9f1;
+        background:
+          radial-gradient(ellipse at 85% 90%, #224e40 0, transparent 49%),
+          #14382e;
+        display: grid;
+        grid-template-columns: 1fr 38%;
+        min-height: 190px;
+        align-items: center;
+      }
+      .hero-text {
+        padding: 25px 32px;
+      }
+      .kicker,
+      .tag,
+      .micro {
+        font: 600 10px/1.4 var(--mono);
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+      .kicker {
+        color: #c7ddad;
+        display: flex;
+        gap: 9px;
+        align-items: center;
+      }
+      .kicker:before {
+        content: "";
+        width: 17px;
+        height: 2px;
+        background: var(--lime);
+      }
+      h1 {
+        font-size: clamp(30px, 4vw, 52px);
+        font-weight: 600;
+        letter-spacing: -0.058em;
+        line-height: 1.04;
+        margin: 10px 0;
+      }
+      .hero p {
+        font-size: 14px;
+        color: #d6e3d7;
+        max-width: 520px;
+        margin: 0;
+      }
+      .hero-art {
+        align-self: stretch;
+        display: grid;
+        align-items: center;
+        margin: 0 18px 0 0;
+      }
+      .hero-art svg {
+        width: 100%;
+        height: 179px;
+      }
+      .statusbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 11px 24px;
+        align-items: center;
+        padding: 12px 2px 16px;
+        color: #465d51;
+        font-size: 12px;
+      }
+      .statusbar span {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .statusbar b {
+        font-weight: 650;
+      }
+      .statusbar span + span:before {
+        content: "";
+        display: inline-block;
+        width: 1px;
+        height: 11px;
+        background: #c5d0c5;
+        margin-right: 10px;
+      }
+      .layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 310px;
+        gap: 18px;
+        align-items: start;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        box-shadow: 0 2px 5px #183b2c04;
+        min-width: 0;
+      }
+      .cap {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        justify-content: space-between;
+        padding: 20px 21px 14px;
+      }
+      .sub {
+        color: var(--muted);
+        font-size: 12px;
+        margin: 4px 0 0;
+      }
+      .tag {
+        color: #5d7163;
+        font-size: 9px;
+      }
+      .cap h2,
+      aside h2,
+      .head h2 {
+        margin: 3px 0 0;
+        font-size: 23px;
+        line-height: 1.2;
+        font-weight: 620;
+        letter-spacing: -0.045em;
+      }
+      .btn {
+        display: inline-flex;
+        gap: 7px;
+        align-items: center;
+        justify-content: center;
+        background: white;
+        border: 1px solid #c6d1c6;
+        border-radius: 7px;
+        font-size: 12px;
+        line-height: 1.2;
+        font-weight: 650;
+        padding: 10px 13px;
+        white-space: nowrap;
+      }
+      .btn:hover:not(:disabled) {
+        background: #eff4ec;
+        border-color: #9eb5a4;
+      }
+      .btn.primary {
+        background: var(--green);
+        color: #fff;
+        border-color: var(--green);
+      }
+      .btn.primary:hover:not(:disabled) {
+        background: #0c523f;
+      }
+      .btn.tiny {
+        padding: 6px 8px;
+        font-size: 11px;
+      }
+      .btn svg,
+      .icon {
+        width: 15px;
+        height: 15px;
+        stroke: currentColor;
+        fill: none;
+        stroke-width: 1.7;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+      .iconbtn {
+        border: 0;
+        background: transparent;
+        border-radius: 6px;
+        padding: 7px;
+        display: inline-grid;
+        place-items: center;
+        color: var(--muted);
+      }
+      .iconbtn:hover {
+        background: #edf2e8;
+      }
+      .counter {
+        font: 11px var(--mono);
+        padding: 4px 8px;
+        border-radius: 5px;
+        background: #eaf0e5;
+        color: #416647;
+      }
+      .tbl {
+        overflow: auto;
+      }
+      .pairtable {
+        width: 100%;
+        border-collapse: collapse;
+        text-align: left;
+        white-space: nowrap;
+      }
+      .pairtable th {
+        background: #f5f7f0;
+        color: #5b6d60;
+        font: 600 9px var(--mono);
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+        border-block: 1px solid var(--line);
+        height: 34px;
+        padding: 0 8px;
+      }
+      .pairtable td {
+        padding: 10px 8px;
+        border-bottom: 1px solid #e5e9df;
+        font-size: 12px;
+        height: 56px;
+      }
+      .pairtable tr:last-child td {
+        border-bottom: 0;
+      }
+      .pairtable th:first-child,
+      .pairtable td:first-child {
+        padding-left: 19px;
+        width: 36px;
+      }
+      .pairtable td:last-child {
+        padding-right: 12px;
+        text-align: right;
+      }
+      .ck {
+        width: 15px;
+        height: 15px;
+        accent-color: var(--green);
+        vertical-align: middle;
+      }
+      .sym {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+      }
+      .token {
+        width: 30px;
+        height: 30px;
+        display: grid;
+        place-items: center;
+        border-radius: 8px;
+        background: var(--bg, #e9eee2);
+        color: var(--fg, #466442);
+        font: 600 11px var(--mono);
+      }
+      .sym b {
+        font: 650 13px/1.3 var(--mono);
+        display: block;
+      }
+      .sym small {
+        display: block;
+        font-size: 10px;
+        color: #617266;
+      }
+      .lot {
+        font: 12px var(--mono);
+        width: 63px;
+        padding: 5px 6px;
+        background: #fff;
+        border: 1px solid #d8dfd2;
+        border-radius: 5px;
+      }
+      .num {
+        font: 12px var(--mono);
+      }
+      .off .sym {
+        opacity: 0.65;
+      }
+      .cardfoot {
+        border-top: 1px solid var(--line);
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        justify-content: space-between;
+        padding: 12px 20px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .actions {
+        display: flex;
+        gap: 7px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .side {
+        display: grid;
+        gap: 14px;
+      }
+      .side .card {
+        padding: 18px 19px;
+      }
+      .side h2 {
+        font-size: 18px;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .slabel,
+      .field {
+        display: block;
+        font-size: 12px;
+        font-weight: 650;
+      }
+      .slabel {
+        margin: 11px 0 4px;
+      }
+      .select,
+      .field input,
+      .field select,
+      .field textarea {
+        display: block;
+        width: 100%;
+        border: 1px solid #cbd6c8;
+        background: #fffefa;
+        border-radius: 7px;
+        padding: 9px 10px;
+        margin-top: 4px;
+        font-size: 13px;
+        line-height: 1.4;
+      }
+      .field textarea {
+        resize: vertical;
+        min-height: 82px;
+      }
+      .side .select {
+        margin: 8px 0;
+      }
+      .smallnote {
+        color: var(--muted);
+        font-size: 11px;
+        margin: 7px 0 0;
+      }
+      .side-info {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        border-top: 1px solid var(--line);
+        gap: 10px;
+        padding-top: 12px;
+        margin-top: 13px;
+      }
+      .side-info span {
+        display: block;
+        font: 9px var(--mono);
+        color: #627468;
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+      }
+      .side-info b {
+        font: 600 13px var(--mono);
+        display: block;
+        margin-top: 3px;
+      }
+      .exports {
+        background: #e9f0e0;
+      }
+      .exports .btn.primary {
+        margin-top: 13px;
+        width: 100%;
+      }
+      .exports .tag {
+        color: #446343;
+      }
+      .chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+        margin: 11px 0;
+      }
+      .chip {
+        border: 1px solid #c7d8bf;
+        padding: 3px 7px;
+        border-radius: 5px;
+        background: #f8fbf4;
+        color: #34563d;
+        font: 11px var(--mono);
+        max-width: 100%;
+        overflow-wrap: anywhere;
+      }
+      .linkbtn {
+        border: 0;
+        color: var(--green);
+        background: none;
+        padding: 4px 0;
+        text-decoration: underline;
+        text-underline-offset: 3px;
+        font-size: 12px;
+        font-weight: 650;
+      }
+      .handoff {
+        margin-top: 18px;
+        padding-bottom: 16px;
+      }
+      .switch {
+        display: flex;
+        gap: 3px;
+        padding: 3px;
+        border: 1px solid var(--line);
+        background: #eff2ea;
+        border-radius: 7px;
+      }
+      .switch button {
+        border: 0;
+        background: none;
+        color: #526559;
+        font-size: 11px;
+        padding: 5px 8px;
+        border-radius: 4px;
+        font-weight: 600;
+      }
+      .switch .active {
+        background: #fff;
+        box-shadow: 0 1px 4px #28473624;
+        color: var(--ink);
+      }
+      .codewrap {
+        margin: 0 20px;
+        background: #1c3029;
+        border-radius: 8px;
+        color: #d9e7d6;
+        padding: 12px 13px;
+      }
+      .codewrap pre {
+        font: 11px/1.65 var(--mono);
+        margin: 0;
+        max-height: 147px;
+        overflow: auto;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      .codebar {
+        margin: 9px 20px 0;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+        color: var(--muted);
+        font-size: 11px;
+      }
+      .footer {
+        display: flex;
+        gap: 10px;
+        justify-content: space-between;
+        padding: 22px 1px;
+        color: var(--muted);
+        font: 10px var(--mono);
+      }
+      .guide {
+        padding: 24px;
+      }
+      .guide h2 {
+        margin: 4px 0 12px;
+        font-size: 26px;
+        letter-spacing: -0.04em;
+      }
+      .steps {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 12px;
+      }
+      .step {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 14px;
+      }
+      .step i {
+        font: 11px var(--mono);
+        color: var(--green);
+      }
+      .step h3 {
+        margin: 8px 0 5px;
+        font-size: 16px;
+      }
+      .step p,
+      .guide p {
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .rulebox {
+        padding: 12px 14px;
+        background: #edf3e7;
+        border-radius: 7px;
+        margin-top: 15px;
+      }
+      .guide .btn {
+        margin-top: 12px;
+      }
+      dialog {
+        padding: 0;
+        border: 1px solid #bacbbd;
+        border-radius: 14px;
+        background: var(--card);
+        color: var(--ink);
+        box-shadow: 0 20px 80px #0b251f40;
+        width: min(480px, calc(100% - 26px));
+        max-height: 90vh;
+      }
+      dialog::backdrop {
+        background: #172e296e;
+      }
+      dialog form {
+        padding: 22px;
+      }
+      dialog h2 {
+        font-size: 22px;
+        letter-spacing: -0.04em;
+        margin: 0;
+      }
+      dialog .grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+      }
+      .span {
+        grid-column: 1/-1;
+      }
+      .dfields {
+        margin: 15px 0;
+      }
+      .dfoot {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 8px;
+        border-top: 1px solid var(--line);
+        padding-top: 13px;
+      }
+      .del {
+        margin-right: auto;
+        color: #913a35;
+      }
+      .err {
+        font-size: 12px;
+        color: #9d3438;
+        margin: 6px 0;
+      }
+      .toast {
+        position: fixed;
+        z-index: 10;
+        bottom: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: #18382f;
+        color: white;
+        border-radius: 8px;
+        padding: 10px 15px;
+        box-shadow: 0 4px 20px #152c2433;
+        font-size: 13px;
+        max-width: 94vw;
+      }
+      .empty {
+        text-align: center;
+        color: var(--muted);
+        padding: 30px;
+      }
+      .visuallyhidden {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+      }
+      @media (max-width: 1000px) {
+        .wrap {
+          padding: 0 21px;
+        }
+        .layout {
+          grid-template-columns: minmax(0, 1fr) 270px;
+          gap: 12px;
+        }
+        .cap {
+          padding: 17px 14px 12px;
+        }
+        .pairtable td,
+        .pairtable th {
+          padding-inline: 5px;
+        }
+        .pairtable td:first-child,
+        .pairtable th:first-child {
+          padding-left: 11px;
+        }
+        .token {
+          display: none;
+        }
+      }
+      @media (max-width: 760px) {
+        .layout {
+          grid-template-columns: 1fr;
+        }
+        .side {
+          grid-template-columns: 1fr 1fr;
+        }
+        .hero {
+          grid-template-columns: 1fr 35%;
+          min-height: 170px;
+        }
+        .hero-text {
+          padding: 20px;
+        }
+        .hero-art {
+          margin-right: 6px;
+        }
+        .hero-art svg {
+          height: auto;
+        }
+        .nav {
+          gap: 9px;
+        }
+        .topin {
+          gap: 18px;
+        }
+        .token {
+          display: grid;
+        }
+        .steps {
+          grid-template-columns: 1fr;
+        }
+        .guide {
+          padding: 18px;
+        }
+      }
+      @media (max-width: 540px) {
+        .wrap {
+          padding: 0 12px;
+        }
+        .topin {
+          height: 54px;
+          gap: 12px;
+        }
+        .brand {
+          font-size: 17px;
+          gap: 6px;
+        }
+        .logo {
+          width: 26px;
+          height: 26px;
+        }
+        .local {
+          font-size: 0;
+          gap: 0;
+        }
+        .nav button {
+          font-size: 12px;
+        }
+        .hero {
+          margin-top: 12px;
+          display: block;
+          min-height: 0;
+        }
+        .hero-text {
+          padding: 19px;
+        }
+        .hero-art {
+          display: none;
+        }
+        .statusbar {
+          gap: 4px 11px;
+          padding: 9px 0 12px;
+          font-size: 10px;
+        }
+        .statusbar span + span:before {
+          margin-right: 1px;
+        }
+        .side {
+          grid-template-columns: 1fr;
+        }
+        .cap h2 {
+          font-size: 20px;
+        }
+        .cap {
+          gap: 8px;
+        }
+        .sub {
+          font-size: 11px;
+        }
+        .token {
+          display: none;
+        }
+        .pairtable th,
+        .pairtable td {
+          padding-inline: 4px;
+        }
+        .pairtable th {
+          font-size: 8px;
+        }
+        .lot {
+          width: 53px;
+        }
+        .pairtable td {
+          height: 48px;
+        }
+        .sym b {
+          font-size: 11px;
+        }
+        .num {
+          font-size: 10px;
+        }
+        .cardfoot {
+          padding: 9px 12px;
+          gap: 5px;
+        }
+        .cardfoot .smallnote {
+          max-width: 140px;
+        }
+        .cardfoot .btn {
+          font-size: 10px;
+        }
+        .codewrap,
+        .codebar {
+          margin-inline: 12px;
+        }
+        .footer {
+          font-size: 9px;
+        }
+        .btn {
+          padding: 9px 10px;
+        }
+        .handoff .cap {
+          align-items: flex-start;
+        }
+        .steps {
+          gap: 8px;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        * {
+          transition: none !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <svg style="display: none" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <symbol id="i-logo" viewBox="0 0 24 24">
+          <path
+            d="M5 4v15m6-16v13m6-9v14"
+            stroke="currentColor"
+            stroke-width="1.6"
+          />
+          <path d="M3 6h4v8H3zm6-1h4v6H9zm6 5h4v8h-4z" fill="currentColor" />
+        </symbol>
+        <symbol id="i-copy" viewBox="0 0 24 24">
+          <rect x="8" y="8" width="12" height="13" rx="2" />
+          <path d="M15 5V3H4v13h2" />
+        </symbol>
+        <symbol id="i-plus" viewBox="0 0 24 24">
+          <path d="M12 5v14M5 12h14" />
+        </symbol>
+        <symbol id="i-pen" viewBox="0 0 24 24">
+          <path d="m4 20 4-1 12-12-3-3L5 16l-1 4ZM14 7l3 3" />
+        </symbol>
+        <symbol id="i-down" viewBox="0 0 24 24">
+          <path d="M12 3v12m-5-5 5 5 5-5M4 16v4h16v-4" />
+        </symbol>
+        <symbol id="i-sliders" viewBox="0 0 24 24">
+          <path d="M4 7h9m4 0h3M4 17h3m4 0h9" />
+          <circle cx="15" cy="7" r="2" />
+          <circle cx="9" cy="17" r="2" />
+        </symbol>
+      </defs>
+    </svg>
+    <header class="top">
+      <div class="wrap topin">
+        <div class="brand">
+          <span class="logo"
+            ><svg width="22" height="22"><use href="#i-logo" /></svg></span
+          >Wickless <em>Desk</em>
+        </div>
+        <nav class="nav" aria-label="Main navigation">
+          <button id="navW" class="active" aria-current="page">Workspace</button
+          ><button id="navR">Rulebook</button>
+        </nav>
+        <span class="local"><i class="dot"></i> LOCAL WORKSPACE</span>
+      </div>
+    </header>
+    <main class="wrap">
+      <section class="hero">
+        <div class="hero-text">
+          <div class="kicker">Strategy desk &nbsp;/&nbsp; No. 015</div>
+          <h1>Pair workspace</h1>
+          <p>
+            Choose your broker’s symbols and set the size of each trade. Export
+            only the pairs you want the M15 bot to watch.
+          </p>
+        </div>
+        <div class="hero-art">
+          <svg
+            viewBox="0 0 365 164"
+            role="img"
+            aria-label="Illustration: a wickless candle creates a zone. A later rejection closes higher."
+          >
+            <defs>
+              <pattern
+                id="grid"
+                width="24"
+                height="19"
+                patternUnits="userSpaceOnUse"
+              >
+                <path
+                  d="M24 0H0v19"
+                  fill="none"
+                  stroke="#b8d4b4"
+                  opacity=".13"
+                />
+              </pattern>
+            </defs>
+            <rect
+              x="0"
+              y="1"
+              width="365"
+              height="162"
+              rx="10"
+              fill="url(#grid)"
+            />
+            <g
+              font-family="monospace"
+              font-size="9"
+              letter-spacing="1.2"
+              fill="#c4dabd"
+            >
+              <text x="13" y="20">FIG 01 / BULLISH RETEST</text>
+            </g>
+            <rect
+              x="96"
+              y="95"
+              width="187"
+              height="17"
+              fill="#cfec91"
+              opacity=".14"
+            />
+            <path
+              d="M96 95h190m-190 17h190"
+              fill="none"
+              stroke="#b7d681"
+              stroke-dasharray="3 4"
+              opacity=".8"
+            />
+            <g stroke="#81af99" fill="#81af99">
+              <path d="M28 103v37m26-53v42m25-48v46" />
+              <path d="M24 109h8v22h-8zm26-14h8v24h-8zm25 5h8v17h-8z" />
+            </g>
+            <g fill="#d9f39a" stroke="#d9f39a">
+              <path d="M105 59v21m26-35v38" />
+              <path d="M100 77h10v35h-10zm26-17h10v18h-10z" />
+            </g>
+            <g stroke="#cca68a" fill="#cca68a">
+              <path d="M157 49v31m26-15v34" />
+              <path d="M152 54h10v16h-10zm26 19h10v15h-10z" />
+            </g>
+            <g fill="#d9f39a" stroke="#d9f39a">
+              <path d="M209 57v49m24-70v41m24-45v26" />
+              <path d="M204 68h10v22h-10zm24-20h10v20h-10zm24-7h10v11h-10z" />
+            </g>
+            <path
+              d="M105 118v13h-9m122-61h72"
+              fill="none"
+              stroke="#b6d69f"
+              stroke-width="1"
+            />
+            <circle cx="216" cy="70" r="2.5" fill="#d9f39a" />
+            <g fill="#d6e8c6" font-family="monospace" font-size="9">
+              <text x="62" y="145">01 / SETUP</text>
+              <text x="275" y="64">02 / CLOSE</text>
+              <text x="288" y="108">ZONE</text>
+            </g>
+          </svg>
+        </div>
+      </section>
+      <div class="statusbar">
+        <span><b>M15</b> timeframe</span><span><b>Internal</b> trend</span
+        ><span><b>1:1</b> reward / risk</span
+        ><span><b>Close</b> confirmation</span>
+      </div>
+      <div id="workspace">
+        <div class="layout">
+          <section class="card" aria-labelledby="pairsTitle">
+            <div class="cap">
+              <div>
+                <div class="tag">01 &nbsp;/&nbsp; Instruments</div>
+                <h2 id="pairsTitle">
+                  Trading pairs <span id="count" class="counter"></span>
+                </h2>
+                <p class="sub">
+                  Checked rows are included in this broker’s export.
+                </p>
+              </div>
+              <button class="btn" id="add">
+                <svg><use href="#i-plus" /></svg>Add pairs
+              </button>
+            </div>
+            <div class="tbl">
+              <table class="pairtable">
+                <thead>
+                  <tr>
+                    <th>
+                      <input
+                        class="ck"
+                        type="checkbox"
+                        id="checkAll"
+                        aria-label="Select all symbols"
+                      />
+                    </th>
+                    <th>Broker symbol</th>
+                    <th>Lots</th>
+                    <th title="Maximum spread in pips">Spread cap</th>
+                    <th title="Maximum modeled gross loss, USD per trade">
+                      Risk cap
+                    </th>
+                    <th><span class="visuallyhidden">Edit</span></th>
+                  </tr>
+                </thead>
+                <tbody id="pairs"></tbody>
+              </table>
+            </div>
+            <div class="cardfoot">
+              <span id="selectionNote"></span
+              ><button id="copyPairs" class="btn">
+                <svg><use href="#i-copy" /></svg>Copy pairs
+              </button>
+            </div>
+          </section>
+          <aside class="side">
+            <section class="card">
+              <div class="row">
+                <div>
+                  <div class="tag">02 &nbsp;/&nbsp; Profile</div>
+                  <h2>Broker settings</h2>
+                </div>
+                <button
+                  id="editBroker"
+                  class="iconbtn"
+                  title="Edit broker settings"
+                  aria-label="Edit broker settings"
+                >
+                  <svg class="icon"><use href="#i-sliders" /></svg>
+                </button>
+              </div>
+              <label class="slabel" for="brokerSelect">Active broker</label
+              ><select class="select" id="brokerSelect"></select>
+              <div class="row">
+                <button id="newBroker" class="linkbtn">+ New broker</button
+                ><button id="import" class="linkbtn">Import config</button
+                ><input
+                  id="importFile"
+                  type="file"
+                  accept=".json,application/json"
+                  hidden
+                />
+              </div>
+              <div class="side-info">
+                <div><span>Zone width</span><b id="zoneInfo"></b></div>
+                <div><span>Retest window</span><b id="windowInfo"></b></div>
+              </div>
+            </section>
+            <section class="card exports">
+              <div class="tag">03 &nbsp;/&nbsp; Handoff</div>
+              <h2>Selected for export</h2>
+              <div id="chips" class="chips"></div>
+              <p class="smallnote">
+                A paper-mode configuration. Exporting does not connect to MT5 or
+                place orders.
+              </p>
+              <button class="btn primary" id="download">
+                <svg><use href="#i-down" /></svg>Download bot config</button
+              ><button
+                class="linkbtn"
+                style="display: block; margin: 8px auto 0"
+                id="copySetup"
+              >
+                Copy setup for desktop agent
+              </button>
+            </section>
+          </aside>
+        </div>
+        <section class="card handoff">
+          <div class="cap">
+            <div>
+              <div class="tag">Operator handoff</div>
+              <h2>Desktop setup</h2>
+            </div>
+            <div class="switch">
+              <button id="tabCmd" class="active">Commands</button
+              ><button id="tabJson">Config JSON</button>
+            </div>
+          </div>
+          <div class="codewrap"><pre id="code"></pre></div>
+          <div class="codebar">
+            <span id="codeNote"></span
+            ><button id="copyCode" class="btn tiny">
+              <svg><use href="#i-copy" /></svg>Copy
+            </button>
+          </div>
+        </section>
+      </div>
+      <section class="card guide" id="rulebook" hidden>
+        <div class="tag">Field manual &nbsp;/&nbsp; Strategy 015</div>
+        <h2>What counts as a trade?</h2>
+        <div class="steps">
+          <article class="step">
+            <i>01 / IDENTIFY</i>
+            <h3>Find the wickless side.</h3>
+            <p>
+              On a completed M15 bar: bullish open at the low for BUY; bearish
+              open at the high for SELL. The opposite wick is allowed. A doji
+              never qualifies.
+            </p>
+          </article>
+          <article class="step">
+            <i>02 / WAIT</i>
+            <h3>Let price retest.</h3>
+            <p>
+              A later M15 candle must overlap the zone and close in the trade
+              direction. It may finish inside the zone. The 3-bar internal
+              structure trend must still agree.
+            </p>
+          </article>
+          <article class="step">
+            <i>03 / PRICE</i>
+            <h3>Measure one risk unit.</h3>
+            <p>
+              Freeze the structural stop at setup. Place the target the same
+              distance from entry: BUY at 102 with SL 98 gives TP 106. The MT5
+              fill can differ from the chart close.
+            </p>
+          </article>
+        </div>
+        <div class="rulebox">
+          <strong>Zone 100–103:</strong> a BUY is invalid below 100; a SELL is
+          invalid above 103. A wick through is not enough by itself, unless it
+          reaches the frozen stop. Invalidation wins over a touch on the same
+          candle.
+        </div>
+        <p>
+          No Hull crosses, resting limits, countertrend trades or trailing
+          ladder. Flat and retest-window checks govern the separate demo runner;
+          this desk configures it, not your broker account.
+        </p>
+        <button id="back" class="btn primary">Back to workspace</button>
+      </section>
+      <footer class="footer">
+        <span>WICKLESS / OPERATIONS DESK</span
+        ><span id="storeState">Browser storage · no credentials</span>
+      </footer>
+    </main>
+    <dialog id="dlg">
+      <form id="form">
+        <div class="row">
+          <h2 id="dtitle"></h2>
+          <button
+            type="button"
+            id="closeDlg"
+            class="iconbtn"
+            aria-label="Close dialog"
+          >
+            ✕
+          </button>
+        </div>
+        <p id="dnote" class="sub"></p>
+        <div id="dfields" class="dfields grid"></div>
+        <p id="derr" class="err" role="alert"></p>
+        <div class="dfoot">
+          <button type="button" class="linkbtn del" id="del" hidden></button
+          ><button type="button" class="btn" id="cancel">Cancel</button
+          ><button type="submit" class="btn primary" id="apply">Save</button>
+        </div>
+      </form>
+    </dialog>
+    <div class="toast" id="toast" role="status" hidden></div>
+    <script>
+      "use strict";
+      const $ = (id) => document.getElementById(id),
+        make = (t, cls, txt) => {
+          const e = document.createElement(t);
+          if (cls) e.className = cls;
+          if (txt != null) e.textContent = txt;
+          return e;
+        };
+      const version = "wickless-m15/v1",
+        storeKey = "wickless.desk.v1",
+        baseRules = {
+          tolerance_ticks: 0,
+          min_body_ticks: 0,
+          zone_pips: 3,
+          retest_bars: 10,
+          stop_buffer_ticks: 0,
+        };
+      const catalogue = [
+        ["EURUSDm", "Euro / US dollar", "EU", "#e0eae0", "#416542", 0.0001, 3],
+        ["GBPUSDm", "Pound / US dollar", "GB", "#e8e4f0", "#695086", 0.0001, 3],
+        ["USDJPYm", "US dollar / yen", "JP", "#f0e1db", "#875448", 0.01, 3],
+        ["XAUUSDm", "Gold / US dollar", "AU", "#f3eacb", "#8b6c2f", 0.1, 5],
+        [
+          "AUDUSDm",
+          "Australian dollar / US dollar",
+          "AU",
+          "#e0eaec",
+          "#466b74",
+          0.0001,
+          3,
+        ],
+        ["US30m", "Dow index CFD", "30", "#e4e6ec", "#586780", 1, 4],
+      ];
+      const icon = (i) =>
+        `<svg class="icon" aria-hidden="true"><use href="#i-${i}"/></svg>`;
+      const labelName = (s) =>
+        catalogue.find((x) => x[0] === s) || [
+          s,
+          "Custom instrument",
+          s.slice(0, 2).toUpperCase(),
+          "#e7ebe2",
+          "#516a59",
+          0,
+          3,
+        ];
+      const pair = (s, on = true) => ({
+        symbol: s,
+        lots: 0.01,
+        pip_size: labelName(s)[5],
+        max_spread_pips: labelName(s)[6],
+        max_risk_usd: 25,
+        on,
+      });
+      const newProf = (name, rows = []) => ({
+        broker: name,
+        server: "",
+        max_positions: 2,
+        rules: { ...baseRules },
+        rows,
+      });
+      let state = {
+        active: 0,
+        profiles: [
+          newProf(
+            "Demo workspace",
+            catalogue.map((x, i) => pair(x[0], i < 2)),
+          ),
+        ],
+      };
+      let commandTab = true,
+        toastTimer,
+        saveAction,
+        delAction;
+      const prof = () => state.profiles[state.active],
+        enabled = () => prof().rows.filter((p) => p.on),
+        names = () => enabled().map((p) => p.symbol),
+        exp = () => ({
+          version,
+          mode: "paper",
+          broker: prof().broker,
+          server: prof().server,
+          max_positions: prof().max_positions,
+          rules: { ...prof().rules },
+          pairs: enabled().map(({ on, ...p }) => p),
+        });
+      const cmd =
+        "& .\\.venv\\Scripts\\python.exe -m bot.wickless validate --config .\\wickless.local.json\nif ($LASTEXITCODE -ne 0) { throw 'Invalid Wickless config.' }\n& .\\.venv\\Scripts\\python.exe -m bot.wickless preflight --config .\\wickless.local.json\nif ($LASTEXITCODE -ne 0) { throw 'Preflight failed; stop here.' }\n# Read-only observer:\n& .\\.venv\\Scripts\\python.exe -m bot.wickless observe --config .\\wickless.local.json";
+      function msg(t) {
+        $("toast").textContent = t;
+        $("toast").hidden = false;
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => ($("toast").hidden = true), 4200);
+      }
+      function check(ok, t) {
+        if (!ok) throw Error(t);
+      }
+      function keys(obj, allowed) {
+        check(
+          obj &&
+            typeof obj === "object" &&
+            !Array.isArray(obj) &&
+            Object.keys(obj).every((k) => allowed.includes(k)),
+          "Unsupported or unexpected config fields.",
+        );
+      }
+      function text(s, len, empty = false) {
+        check(
+          typeof s === "string" &&
+            s === s.trim() &&
+            !/[\x00-\x1f]/.test(s) &&
+            s.length <= len &&
+            (empty || s.length > 0),
+          "Enter a valid broker name / server.",
+        );
+      }
+      function num(n, min, max, int = false, positive = false) {
+        check(
+          typeof n === "number" &&
+            Number.isFinite(n) &&
+            n >= min &&
+            n <= max &&
+            (!int || Number.isInteger(n)) &&
+            (!positive || n > 0),
+          "One or more numeric settings are outside the permitted range.",
+        );
+        return n;
+      }
+      function checkRule(r) {
+        keys(r, Object.keys(baseRules));
+        num(r.tolerance_ticks, 0, 100, true);
+        num(r.min_body_ticks, 0, 1e4, true);
+        num(r.zone_pips, 0, 1000);
+        num(r.retest_bars, 1, 100, true);
+        num(r.stop_buffer_ticks, 0, 1000, true);
+      }
+      function pairValid(p) {
+        keys(p, [
+          "symbol",
+          "lots",
+          "pip_size",
+          "max_spread_pips",
+          "max_risk_usd",
+          "on",
+        ]);
+        check(
+          typeof p.symbol === "string" &&
+            /^[A-Za-z0-9_#.+-]{1,64}$/.test(p.symbol),
+          "Symbol must be the exact broker name (letters, numbers, ., _, +, # or -).",
+        );
+        num(p.lots, 0, 1000, false, true);
+        num(p.pip_size, 0, 10000);
+        num(p.max_spread_pips, 0, 10000, false, true);
+        num(p.max_risk_usd, 0, 1e6, false, true);
+        check(typeof p.on === "boolean", "Invalid selection flag.");
+      }
+      function validateProfile(p) {
+        keys(p, ["broker", "server", "rules", "rows", "max_positions"]);
+        text(p.broker, 80);
+        text(p.server, 128, true);
+        num(p.max_positions, 1, 32, true);
+        checkRule(p.rules);
+        check(
+          Array.isArray(p.rows) && p.rows.length <= 48,
+          "Maximum 48 instruments per broker.",
+        );
+        p.rows.forEach(pairValid);
+        check(
+          new Set(p.rows.map((r) => r.symbol.toLowerCase())).size ===
+            p.rows.length,
+          "Duplicate broker symbol.",
+        );
+      }
+      function save() {
+        try {
+          localStorage.setItem(storeKey, JSON.stringify(state));
+          $("storeState").textContent =
+            "Saved in this browser · no credentials";
+        } catch {
+          $("storeState").textContent = "Session only · export before closing";
+        }
+      }
+      try {
+        const raw = localStorage.getItem(storeKey);
+        if (raw) {
+          const s = JSON.parse(raw);
+          check(
+            Array.isArray(s.profiles) &&
+              s.profiles.length > 0 &&
+              s.profiles.length <= 60 &&
+              Number.isInteger(s.active) &&
+              s.profiles[s.active],
+            "Invalid store",
+          );
+          s.profiles.forEach(validateProfile);
+          state = s;
+        }
+      } catch {
+        $("storeState").textContent = "Session only · export before closing";
+      }
+      function resetDialog(title, note, apply, saveFn) {
+        $("dtitle").textContent = title;
+        $("dnote").textContent = note;
+        $("dfields").replaceChildren();
+        $("derr").textContent = "";
+        $("apply").textContent = apply;
+        $("del").hidden = true;
+        delAction = null;
+        saveAction = saveFn;
+        if (!$("dlg").open) $("dlg").showModal();
+      }
+      let fid = 0;
+      function field(title, v, opts = {}) {
+        const label = make(
+            "label",
+            "field" + (opts.full ? " span" : ""),
+            title,
+          ),
+          el = make(opts.area ? "textarea" : "input");
+        el.id = "f" + ++fid;
+        label.htmlFor = el.id;
+        if (!opts.area) el.type = opts.num ? "number" : "text";
+        el.value = v ?? "";
+        el.required = opts.req !== false;
+        if (opts.maxlen) el.maxLength = opts.maxlen;
+        if (opts.num) {
+          el.min = opts.min ?? 0;
+          el.max = opts.max ?? 1000;
+          el.step = opts.int ? "1" : "any";
+        }
+        if (opts.placeholder) el.placeholder = opts.placeholder;
+        if (opts.read) el.readOnly = true;
+        label.append(el);
+        $("dfields").append(label);
+        return el;
+      }
+      function rmBtn(t, fn) {
+        $("del").hidden = false;
+        $("del").textContent = t;
+        delAction = fn;
+      }
+      $("form").onsubmit = (e) => {
+        e.preventDefault();
+        try {
+          saveAction();
+          $("dlg").close();
+          save();
+          render();
+        } catch (err) {
+          $("derr").textContent = err.message;
+        }
+      };
+      $("del").onclick = () => {
+        if (delAction) delAction();
+      };
+      $("closeDlg").onclick = $("cancel").onclick = () => $("dlg").close();
+      async function copy(s, label) {
+        try {
+          if (!navigator.clipboard?.writeText) throw Error();
+          await navigator.clipboard.writeText(s);
+          msg(label + " copied.");
+        } catch {
+          const tmp = make("textarea");
+          tmp.value = s;
+          tmp.setAttribute("aria-label", "Copy text");
+          tmp.style.cssText = "position:fixed;left:-9999px;top:0";
+          document.body.append(tmp);
+          tmp.select();
+          let ok = false;
+          try {
+            ok = document.execCommand("copy");
+          } catch {}
+          tmp.remove();
+          if (ok) {
+            msg(label + " copied.");
+            return;
+          }
+          resetDialog(
+            "Copy " + label.toLowerCase(),
+            "Select the text and copy it with your device.",
+            "Done",
+            () => {},
+          );
+          const input = field(label, s, { area: true, full: true, read: true });
+          input.focus();
+          input.select();
+        }
+      }
+      function change() {
+        save();
+        render();
+      }
+      function render() {
+        const p = prof(),
+          pick = enabled();
+        const sel = $("brokerSelect");
+        sel.replaceChildren(
+          ...state.profiles.map((p, i) => {
+            const op = make("option", "", p.broker);
+            op.value = i;
+            return op;
+          }),
+        );
+        sel.value = state.active;
+        $("pairs").replaceChildren();
+        p.rows.forEach((r, i) => {
+          const tr = make("tr", r.on ? "" : "off"),
+            cell = (cls) => {
+              const td = make("td", cls);
+              tr.append(td);
+              return td;
+            };
+          const cb = make("input", "ck");
+          cb.type = "checkbox";
+          cb.checked = r.on;
+          cb.setAttribute("aria-label", "Select " + r.symbol);
+          cb.onchange = () => {
+            r.on = cb.checked;
+            change();
+          };
+          cell().append(cb);
+          const sym = make("div", "sym"),
+            a = labelName(r.symbol),
+            token = make("span", "token", a[2]);
+          token.style.setProperty("--bg", a[3]);
+          token.style.setProperty("--fg", a[4]);
+          const title = make("div");
+          title.append(make("b", "", r.symbol), make("small", "", a[1]));
+          sym.append(token, title);
+          cell().append(sym);
+          const lots = make("input", "lot");
+          lots.type = "number";
+          lots.min = "0.00000001";
+          lots.max = "1000";
+          lots.step = "any";
+          lots.setAttribute("aria-label", "Lots for " + r.symbol);
+          lots.value = r.lots;
+          lots.onchange = () => {
+            try {
+              r.lots = num(lots.valueAsNumber, 0, 1000, false, true);
+              change();
+            } catch (e) {
+              lots.value = r.lots;
+              msg("Lots must be greater than zero and no more than 1,000.");
+            }
+          };
+          cell().append(lots);
+          cell().append(make("span", "num", r.max_spread_pips + " p"));
+          cell().append(make("span", "num", "$" + r.max_risk_usd));
+          const edit = make("button", "iconbtn");
+          edit.type = "button";
+          edit.title = "Edit " + r.symbol;
+          edit.setAttribute("aria-label", edit.title);
+          edit.innerHTML = icon("pen");
+          edit.onclick = () => pairDlg(i);
+          cell().append(edit);
+          $("pairs").append(tr);
+        });
+        if (!p.rows.length) {
+          const tr = make("tr"),
+            td = make(
+              "td",
+              "empty",
+              "Add your first broker symbol to build this list.",
+            );
+          td.colSpan = 6;
+          tr.append(td);
+          $("pairs").append(tr);
+        }
+        $("checkAll").checked =
+          !!p.rows.length && pick.length === p.rows.length;
+        $("checkAll").indeterminate =
+          pick.length > 0 && pick.length < p.rows.length;
+        $("checkAll").disabled = !p.rows.length;
+        $("count").textContent = String(p.rows.length).padStart(2, "0");
+        $("selectionNote").textContent =
+          pick.length + " of " + p.rows.length + " selected";
+        $("zoneInfo").textContent = p.rules.zone_pips + " pips";
+        $("windowInfo").textContent = p.rules.retest_bars + " bars";
+        $("chips").replaceChildren(
+          ...(pick.length
+            ? pick.map((r) => make("span", "chip", r.symbol))
+            : [make("span", "smallnote", "Select at least one pair.")]),
+        );
+        $("copySetup").disabled =
+          $("copyPairs").disabled =
+          $("download").disabled =
+          $("copyCode").disabled =
+            !pick.length;
+        $("tabCmd").classList.toggle("active", commandTab);
+        $("tabJson").classList.toggle("active", !commandTab);
+        $("code").textContent = pick.length
+          ? commandTab
+            ? cmd
+            : JSON.stringify(exp(), null, 2)
+          : "Select a pair to prepare the handoff.";
+        $("codeNote").textContent = commandTab
+          ? "Windows PowerShell · run from the repo folder after saving wickless.local.json there."
+          : "Exactly what the bot reads. Unchecked pairs are never exported.";
+      }
+      function pairDlg(i) {
+        const r = prof().rows[i];
+        resetDialog(
+          "Edit instrument",
+          "Use the Market Watch name exactly. Size is per trade, not a Hull batch.",
+          "Save instrument",
+          () => {
+            const edited = {
+              symbol: s.value.trim(),
+              lots: l.valueAsNumber,
+              pip_size: pip.valueAsNumber,
+              max_spread_pips: sp.valueAsNumber,
+              max_risk_usd: risk.valueAsNumber,
+              on: r.on,
+            };
+            const rows = prof().rows.map((x, j) => (j === i ? edited : x));
+            validateProfile({ ...prof(), rows });
+            prof().rows = rows;
+          },
+        );
+        const s = field("Broker symbol", r.symbol, { full: true, maxlen: 64 }),
+          l = field("Fixed lots", r.lots, { num: true }),
+          pip = field("Pip size (0 = auto)", r.pip_size, {
+            num: true,
+            max: 10000,
+          }),
+          sp = field("Spread cap (pips)", r.max_spread_pips, {
+            num: true,
+            max: 10000,
+          }),
+          risk = field("Risk cap (USD)", r.max_risk_usd, {
+            num: true,
+            max: 1e6,
+          });
+        rmBtn("Remove pair", () => {
+          prof().rows.splice(i, 1);
+          $("dlg").close();
+          change();
+          msg("Instrument removed.");
+        });
+        s.focus();
+      }
+      $("add").onclick = () => {
+        resetDialog(
+          "Add broker pairs",
+          "Paste exact Market Watch names, separated by commas, spaces or new lines. New symbols start at 0.01 lot.",
+          "Add to selection",
+          () => {
+            const tokens = raw.value
+              .trim()
+              .split(/[\s,;]+/)
+              .filter(Boolean);
+            check(tokens.length, "Enter at least one broker symbol.");
+            const rows = prof().rows.map((x) => ({ ...x }));
+            for (const s of tokens) {
+              const existing = rows.find(
+                (x) => x.symbol.toLowerCase() === s.toLowerCase(),
+              );
+              if (existing) {
+                check(
+                  existing.symbol === s,
+                  "Match the exact capitalization of existing " +
+                    existing.symbol,
+                );
+                existing.on = true;
+              } else {
+                const r = pair(s);
+                pairValid(r);
+                rows.push(r);
+              }
+            }
+            validateProfile({ ...prof(), rows });
+            prof().rows = rows;
+            msg("Pair selection updated.");
+          },
+        );
+        const raw = field("Symbols", "", {
+          area: true,
+          full: true,
+          placeholder: "EURUSD.a, GBPUSD.a, XAUUSD.a",
+        });
+        raw.focus();
+      };
+      function brokerDlg(isNew) {
+        const p = isNew ? newProf("") : prof();
+        resetDialog(
+          isNew ? "New broker profile" : "Edit broker settings",
+          "Profiles are separate. Never enter a password, API key or account login.",
+          "Save profile",
+          () => {
+            const updated = {
+              ...p,
+              broker: n.value.trim(),
+              server: sv.value.trim(),
+              max_positions: mx.valueAsNumber,
+              rules: {
+                zone_pips: z.valueAsNumber,
+                retest_bars: w.valueAsNumber,
+                tolerance_ticks: tol.valueAsNumber,
+                min_body_ticks: mb.valueAsNumber,
+                stop_buffer_ticks: bf.valueAsNumber,
+              },
+            };
+            validateProfile(updated);
+            check(
+              !state.profiles.some(
+                (x, i) =>
+                  (isNew || i !== state.active) &&
+                  x.broker.toLowerCase() === updated.broker.toLowerCase(),
+              ),
+              "This broker profile name is already used.",
+            );
+            if (isNew) {
+              check(state.profiles.length < 60, "Profile limit reached.");
+              state.profiles.push(updated);
+              state.active = state.profiles.length - 1;
+            } else {
+              state.profiles[state.active] = updated;
+            }
+          },
+        );
+        const n = field("Profile name", p.broker, { full: true, maxlen: 80 }),
+          sv = field("Exact MT5 server (optional in paper)", p.server, {
+            full: true,
+            maxlen: 128,
+            req: false,
+            placeholder: "e.g. Broker-Demo",
+          }),
+          mx = field("Max open positions", p.max_positions, {
+            num: true,
+            int: true,
+            min: 1,
+            max: 32,
+          }),
+          z = field("Zone width (pips)", p.rules.zone_pips, {
+            num: true,
+            max: 1000,
+          }),
+          w = field("Retest window (bars)", p.rules.retest_bars, {
+            num: true,
+            int: true,
+            min: 1,
+            max: 100,
+          }),
+          tol = field("Wick tolerance (ticks)", p.rules.tolerance_ticks, {
+            num: true,
+            int: true,
+            max: 100,
+          }),
+          mb = field("Minimum body (ticks)", p.rules.min_body_ticks, {
+            num: true,
+            int: true,
+            max: 10000,
+          }),
+          bf = field("SL buffer (ticks)", p.rules.stop_buffer_ticks, {
+            num: true,
+            int: true,
+            max: 1000,
+          });
+        n.focus();
+      }
+      function parseExport(raw) {
+        const x = JSON.parse(raw);
+        keys(x, [
+          "version",
+          "mode",
+          "broker",
+          "server",
+          "max_positions",
+          "rules",
+          "pairs",
+        ]);
+        check(
+          x.version === version &&
+            ["paper", "demo"].includes(x.mode) &&
+            Array.isArray(x.pairs) &&
+            x.pairs.length > 0,
+          "Use a non-empty Wickless Desk v1 config.",
+        );
+        const p = {
+          broker: x.broker,
+          server: x.server ?? "",
+          max_positions: x.max_positions ?? 2,
+          rules: { ...baseRules, ...x.rules },
+          rows: x.pairs.map((v) => {
+            keys(v, [
+              "symbol",
+              "lots",
+              "pip_size",
+              "max_spread_pips",
+              "max_risk_usd",
+            ]);
+            return { ...v, pip_size: v.pip_size ?? 0, on: true };
+          }),
+        };
+        validateProfile(p);
+        return p;
+      }
+      $("import").onclick = () => {
+        resetDialog(
+          "Import a configuration",
+          "Paste JSON or choose a local config. Imports create a separate profile; all future exports are paper mode.",
+          "Import profile",
+          () => {
+            const p = parseExport(raw.value);
+            check(state.profiles.length < 60, "Profile limit reached.");
+            const base = p.broker;
+            let n = 2;
+            while (
+              state.profiles.some(
+                (x) => x.broker.toLowerCase() === p.broker.toLowerCase(),
+              )
+            )
+              p.broker = base.slice(0, 74) + " (" + n++ + ")";
+            state.profiles.push(p);
+            state.active = state.profiles.length - 1;
+            msg("Broker profile imported.");
+          },
+        );
+        const raw = field("Wickless config JSON", "", {
+          area: true,
+          full: true,
+        });
+        const b = make("button", "btn", "Choose JSON file");
+        b.type = "button";
+        b.onclick = () => $("importFile").click();
+        $("dfields").append(b);
+        $("importFile").value = "";
+        $("importFile").onchange = async () => {
+          const f = $("importFile").files[0];
+          if (!f) return;
+          try {
+            check(f.size < 150000, "Config is too large.");
+            raw.value = await f.text();
+            parseExport(raw.value);
+            $("derr").textContent = "";
+          } catch (e) {
+            $("derr").textContent = e.message;
+          }
+        };
+        raw.focus();
+      };
+      $("newBroker").onclick = () => brokerDlg(true);
+      $("editBroker").onclick = () => brokerDlg(false);
+      $("brokerSelect").onchange = (e) => {
+        state.active = Number(e.target.value);
+        change();
+      };
+      $("checkAll").onchange = (e) => {
+        prof().rows.forEach((p) => (p.on = e.target.checked));
+        change();
+      };
+      $("copyPairs").onclick = () => copy(names().join(", "), "Selected pairs");
+      $("copySetup").onclick = () =>
+        copy(
+          "WICKLESS OBSERVE\n" + JSON.stringify(exp(), null, 2),
+          "Observer setup",
+        );
+      $("tabCmd").onclick = () => {
+        commandTab = true;
+        render();
+      };
+      $("tabJson").onclick = () => {
+        commandTab = false;
+        render();
+      };
+      $("copyCode").onclick = () =>
+        copy(
+          $("code").textContent,
+          commandTab ? "Desktop commands" : "Config JSON",
+        );
+      $("download").onclick = () => {
+        if (!enabled().length) return;
+        const blob = new Blob([JSON.stringify(exp(), null, 2) + "\n"], {
+          type: "application/json",
+        });
+        const u = URL.createObjectURL(blob);
+        const a = make("a");
+        a.href = u;
+        a.download = "wickless.local.json";
+        document.body.append(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(u), 2000);
+        msg("Config prepared. Save wickless.local.json in the repo folder.");
+      };
+      function nav(rules) {
+        $("workspace").hidden = rules;
+        $("rulebook").hidden = !rules;
+        $("navW").classList.toggle("active", !rules);
+        $("navR").classList.toggle("active", rules);
+        $("navW").setAttribute("aria-current", rules ? "false" : "page");
+        $("navR").setAttribute("aria-current", rules ? "page" : "false");
+      }
+      $("navW").onclick = $("back").onclick = () => nav(false);
+      $("navR").onclick = () => nav(true);
+      render();
+    </script>
+  </body>
+</html>

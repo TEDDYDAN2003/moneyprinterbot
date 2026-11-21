@@ -33,3 +33,7 @@ reports/hull_runtime/
 reports/hull_replay*/
 
 config.demo.local.yaml
+
+# Private Wickless broker profiles and audit output
+wickless.local*.json
+reports/wickless_runtime/

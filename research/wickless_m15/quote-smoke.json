@@ -1,0 +1,54 @@
+{
+  "symbol": "EURUSDm",
+  "config": {
+    "version": "wickless-m15/v1",
+    "mode": "paper",
+    "broker": "My demo broker",
+    "server": "",
+    "max_positions": 2,
+    "rules": {
+      "tolerance_ticks": 0,
+      "min_body_ticks": 0,
+      "zone_pips": 3.0,
+      "retest_bars": 10,
+      "stop_buffer_ticks": 0
+    },
+    "pairs": [
+      {
+        "symbol": "EURUSDm",
+        "lots": 0.01,
+        "pip_size": 0.0001,
+        "max_spread_pips": 3.0,
+        "max_risk_usd": 25.0
+      }
+    ]
+  },
+  "model": "first fresh quote, bid/ask spread included, zero broker fees and latency; SL first crossing executable quote, TP at limit",
+  "source_urls": [
+    "https://ticks.ex2archive.com/ticks/EURUSDm/2026/09/Exness_EURUSDm_2026_09.zip",
+    "https://ticks.ex2archive.com/ticks/EURUSDm/2026/10/Exness_EURUSDm_2026_10.zip"
+  ],
+  "archive_sha256": {
+    "09": "9ca940e572c87328ce626e1a42c6f1fe69fbf6e0ab83e83c9a53488fe52ca394",
+    "10": "6b6b48b92cff520b9f3d53753299ddcd9f0274214d235048e3952ab9f12e9ad8"
+  },
+  "warm_closed_bars": 1800,
+  "october_ticks": 1038972,
+  "october_observed_M15": 2099,
+  "first_ms": 1790812802251,
+  "last_ms": 1793393939779,
+  "counts": {
+    "setups": 100,
+    "suggestions": 57,
+    "pair_occupied": 28,
+    "rewarmed_after_gap": 5,
+    "outside_entry_clock": 2
+  },
+  "simulated_fills": 27,
+  "TP": 13,
+  "SL": 14,
+  "open_at_end": 0,
+  "net_before_fees_usd": -11.4,
+  "sum_realized_R": -1.06738,
+  "profit_factor_usd": 0.54527
+}
