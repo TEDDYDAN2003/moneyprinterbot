@@ -34,6 +34,7 @@ NATIVE_MINUTES = {
     15,
     20,
     30,
+    45,  # synthetic, ticket tag still identifies a distinct setup
     60,
     120,
     180,

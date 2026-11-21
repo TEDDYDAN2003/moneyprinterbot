@@ -45,6 +45,16 @@ class Reading:
     skip_after_mss: bool | None = None
 
     @property
+    def confirmed_mss(self):
+        s = self.structure
+        return (
+            self.trigger is None
+            and s.closed_s == self.close_s
+            and s.bias in (-1, 1)
+            and s.event_code == 2 * s.bias
+        )
+
+    @property
     def signal_msc(self):
         return self.trigger.ms if self.trigger else self.close_s * 1000
 
@@ -151,7 +161,7 @@ class FirstCrossGate:
 class Hull:
     def __init__(self, tf: int, p: Indicator, pip_size: float, gate=None):
         if tf not in TF_NAME:
-            raise ValueError("Unsupported native Hull timeframe")
+            raise ValueError("Unsupported Hull timeframe")
         self.tf, self.p, self.pip = tf, p, pip_size
         self.gate = gate if gate is not None else FirstCrossGate()
         n = p.hull_len

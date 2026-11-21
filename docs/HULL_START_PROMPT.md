@@ -1,6 +1,6 @@
 # What to paste into your Windows desktop agent
 
-**Timeframes pending.** Do not start until the operator has supplied `hull.eligible_timeframes`; symbol profiles do not select timeframes.
+**Approved Hull lanes: M15, M30, M45.** Verify the same list in the private config. A confirmed MSS exits only its own lane. These settings alone do not start or arm anything.
 
 With the updated repository open in your agent's workspace, **send just this** for your three slow profiles:
 

@@ -19,14 +19,16 @@ NATIVE_TF = {
     **{f"H{v}": v * 60 for v in (1, 2, 3, 4, 6, 8, 12)},
     "D1": 1440,
 }
-TF_NAME = {v: k for k, v in NATIVE_TF.items()}
+# M45 is a study interval, NEVER an MT5 native timeframe constant.
+SIGNAL_TF = {"M15": 15, "M30": 30, "M45": 45}
+TF_NAME = {v: k for k, v in (NATIVE_TF | SIGNAL_TF).items()}
 LADDER = "profit_ladder_70_30_v1"
 FIXED = "fixed_tp"
 TARGET_POLICY = "base_plus_entry_spread_v1"  # all newly opened Hull tickets, never retrofit saved goals
 DYNAMIC_HULL_LENGTH = 16  # shared base period for the active scanner
 LIVE_TIMING = "live_hull_cross"
 ENTRY_POLICY = "fc_dynamic_skip_first_mss_v2"
-BATCH_ENTRY_POLICY = "first_eligible_while_flat_v1"
+BATCH_ENTRY_POLICY = "first_eligible_while_lane_flat_v2"
 # Removed in Hull only. Older full-file demo configs may still contain the keys.
 RETIRED_LIMITS = ("drawdown_usd", "max_orders_minute")
 
@@ -43,6 +45,7 @@ class Indicator(Strict):
     # None is Pine's blank “Chart” input. Overrides supply bias only, not an entry lane.
     structure_timeframe: str | None = None
     exit_opposite: Literal[True] = True
+    exit_on_mss: Literal[True] = True
     stop: Literal["local_pullback", "confirmed_pivot"] = "local_pullback"
     pullback_bars: int = Field(7, ge=1, le=100)
     swing_len: int = Field(3, ge=1, le=50)
@@ -125,15 +128,17 @@ class HullConfig(Strict):
     @field_validator("eligible_timeframes")
     @classmethod
     def valid_frames(cls, v):
-        if len(set(v)) != len(v) or any(f not in NATIVE_TF for f in v):
-            raise ValueError("Use unique native MT5 timeframe names, e.g. M15 or H1")
+        if len(set(v)) != len(v) or any(f not in SIGNAL_TF for f in v):
+            raise ValueError(
+                "Use a unique subset of the approved Hull lanes: M15, M30, M45"
+            )
         return v
 
     def lanes(self, requested=None):
-        approved = tuple(NATIVE_TF[f] for f in self.eligible_timeframes)
+        approved = tuple(SIGNAL_TF[f] for f in self.eligible_timeframes)
         if not approved:
             raise ValueError(
-                "No eligible Hull timeframes configured; waiting for the operator's timeframe list. Scanner is disabled."
+                "No eligible Hull timeframes configured; scanner is disabled."
             )
         lanes = approved if requested is None else tuple(requested)
         if not lanes or len(set(lanes)) != len(lanes) or set(lanes) - set(approved):
@@ -149,11 +154,9 @@ class HullConfig(Strict):
         ):
             raise ValueError("Select unique, configured Hull symbol keys")
         st = NATIVE_TF.get(self.indicator.structure_timeframe)
-        if st and any(
-            NATIVE_TF[f] > st and NATIVE_TF[f] % st for f in self.eligible_timeframes
-        ):
+        if st and any(SIGNAL_TF[f] != st for f in self.eligible_timeframes):
             raise ValueError(
-                "Lower structure timeframe must nest inside each signal timeframe"
+                "Independent bot lanes require their own structure; set hull.indicator.structure_timeframe: null"
             )
         return self
 

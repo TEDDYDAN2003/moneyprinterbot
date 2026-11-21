@@ -1,0 +1,13 @@
+# FC Dynamic Hull 16 • MT5 lane indicator
+
+**Chart display only — not an EA or a second order manager.** The Python Hull companion is the only component that can send demo orders. The `.mq5` does not use trading, account, file or network APIs, and does not need Algo Trading enabled.
+
+1. In MT5 Desktop select **File → Open Data Folder → MQL5 → Indicators**. Copy `FC-Dynamic-Hull-Lanes.mq5` there.
+2. Open that file in **MetaEditor** (F4), press **F7 / Compile**, and check the Errors tab. No compiled `.ex5` is supplied. In MT5 refresh **Navigator → Indicators** and attach **FC-Dynamic-Hull-Lanes** to the same broker symbol the bot resolves (including any suffix). A standard bid-price M15 chart is convenient; the host chart does not choose the three lanes.
+3. The panel shows **M15 / M30 / M45** separately: last confirmed bias, the current forming-candle Hull setup (can disappear), and last confirmed MSS time in broker chart time. `Focus` selects the two confirmed Hull lines; it never disables the other lanes. Labels are recent **close-time** setups or `M15/M30/M45 MSS EXIT` instructions, **not fills**. Enable `AlertFreshMSS` for a popup on a newly observed shift; attaching the indicator does not replay historical alerts. Set `MarksPerLane` or `OnlyFocusMarks` to reduce overlap.
+
+The monitor implements the shipped **Dynamic** Hull A (bullish Low / bearish High) and Hull B (Close), both base length **16**, local structure, one skipped first stop-ready aligned cross after an MSS, and the local pullback stop/ATR eligibility check. Match any non-default swing, stop, neutral or pip settings to your Python config. A fixed/custom source in a private Python config is not this Dynamic monitor. Chart history cannot reproduce every previously observed live tick or the bot's saved first-cross reservations. No position, lot, risk, spread, SL/TP fill or ladder execution is inferred from a chart marker. Use the broker deals and Python log to audit actual trades.
+
+M15/M30 are native. M45 requires **three consecutive M15 candles** on the broker's D1-open grid (00/45/90… minutes from its daily open). The current M45 Hull can use a complete prefix with the forming M15, but an MSS needs a **closed** M45. Missing/incomplete data is not padded. Load M15, M30 and D1 history, allow MT5 to synchronize, and check **Max bars in chart** (at least ~3,605 M15 bars for the full 1,200-bar M45 warm-up). Different broker sessions/data can produce different M45 boundaries or signals from TradingView.
+
+**Validation:** the actual MQ5 calculations and chart scheduler are exercised on fabricated candles in `qa/check_dynamic_lanes.py` using a local C++ terminal shim. That is not a native MetaEditor compile, a broker test, or a market backtest.

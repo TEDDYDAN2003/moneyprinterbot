@@ -38,6 +38,9 @@ class MT:
     TIMEFRAME_M1 = 1
     TIMEFRAME_M2 = 2
     TIMEFRAME_M5 = 5
+    TIMEFRAME_M15 = 15
+    TIMEFRAME_M30 = 30
+    TIMEFRAME_D1 = 16408
 
     def __init__(self):
         self.a = NS(
@@ -130,6 +133,8 @@ class MT:
         fill = self.retprice or r["price"]
         p = NS(
             ticket=i,
+            identifier=i,
+            time_msc=self.q.time_msc,
             magic=r["magic"],
             symbol=r["symbol"],
             type=r["type"],
@@ -140,7 +145,7 @@ class MT:
             profit=0.0,
         )
         self.positions.append(p)
-        return NS(retcode=10009, volume=r["volume"], price=fill, deal=i)
+        return NS(retcode=10009, volume=r["volume"], price=fill, deal=i, order=i)
 
 
 def sig(sl=1999.95, side=1):

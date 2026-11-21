@@ -155,7 +155,7 @@ def test_live_one_remaining_leg_consumes_repeat_then_same_zone_rearms_only_on_fr
     )
     mt.positions.clear()
     mt.q.time_msc += 110
-    dispatch(d, NAME, [replace(again, tf=2)], **OK)
+    dispatch(d, NAME, [again], **OK)
     assert logs[-1][1]["outcome"] == "already_consumed" and not mt.positions
     now[0] += 60
     mt.q.time_msc += 60000
@@ -291,9 +291,11 @@ def test_versioned_defaults_only_indicator_input_changes_and_legacy_opt_in():
         p.extra_pips,
         h.exit_policy,
     ) == (True, "local_pullback", 7, 14, 0.1, 0, LADDER)
-    assert BATCH_ENTRY_POLICY == "first_eligible_while_flat_v1"
+    assert BATCH_ENTRY_POLICY == "first_eligible_while_lane_flat_v2"
     fixed = Indicator(source="hl2")
-    assert fixed.hull_len == 16 and fixed.signal_policy == "fc_dynamic_source_internal_v1"
+    assert (
+        fixed.hull_len == 16 and fixed.signal_policy == "fc_dynamic_source_internal_v1"
+    )
 
 
 def test_a_waiting_quote_cannot_revive_a_repeat_when_history_catches_up(hull_desk):
@@ -307,7 +309,7 @@ def test_a_waiting_quote_cannot_revive_a_repeat_when_history_catches_up(hull_des
         NS(symbol=NAME, entry=1, type=mt.DEAL_TYPE_SELL, time_msc=T * 1000 + 50)
     ]
     mt.q = quote
-    assert desk.resume_first_quote(NAME) == "same_side_batch_at_signal_close"
+    assert desk.resume_first_quote(NAME, 1) == "same_side_batch_at_signal_close"
     assert not desk.waiting and not mt.requests
     assert desk.batch(NAME, sig()) == "already_consumed"
 

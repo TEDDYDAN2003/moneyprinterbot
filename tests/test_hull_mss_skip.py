@@ -116,6 +116,7 @@ def test_first_aligned_signal_still_closes_owned_opposite_but_never_opens(hull_d
             profit=0,
         )
     )
+    assert desk.owners.bind(mt.positions[0], 1)
     r = FirstCrossGate().apply(candidate(d, T, Structure(T, d, 2 * d)), observe=True)
     dispatch(desk, NAME, [r], data_ok=True, history_ok=True, rewarmed=False)
     assert not mt.positions and [x.get("position") for x in mt.requests] == [72]

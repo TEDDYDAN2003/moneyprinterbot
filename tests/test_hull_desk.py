@@ -92,10 +92,12 @@ def test_fixed_mode_retargets_to_actual_open_and_cash_exit_is_preserved(hull_des
 
 def test_opposite_hull_label_closes_held_side_before_reversal(hull_desk):
     mt, d, _ = hull_desk("slow")
+    mt.q.time_msc = (T - 1) * 1000 + 100
     buy = replace(sig(side=1), close_s=T - 1)
     assert d.batch("XAUUSDm", buy) == "demo_batch_sent"
     assert len(mt.positions) == 10
 
+    mt.q.time_msc = T * 1000 + 100
     sell = replace(sig(sl=2000.05, side=-1), close_s=T)
     assert d.close_opposite("XAUUSDm", sell) == 10
     assert not mt.positions
@@ -105,7 +107,7 @@ def test_protection_entry_age_foreign_positions_and_kill_ownership(hull_desk):
     mt, d, _ = hull_desk()
     mt.q.time_msc -= 10000
     assert d.batch("XAUUSDm", sig()) == WAITING
-    assert not mt.requests and "XAUUSDm" in d.waiting
+    assert not mt.requests and ("XAUUSDm", 1) in d.waiting
     mt, d, _ = hull_desk()
     mt.positions = [NS(ticket=1, symbol="XAUUSDm", magic=99, sl=1, tp=2)]
     assert d.batch("XAUUSDm", sig()) == "foreign_or_unprotected_exposure"
@@ -141,7 +143,7 @@ def test_conflicting_broker_aliases_bad_lots_or_real_account_fail_closed(hull_de
     mt.a.trade_mode = 2
     with pytest.raises(DemoSafetyError):
         identity_check(mt, "demo", True)
-    with pytest.raises(ValueError, match="No eligible"):
+    with pytest.raises(DemoSafetyError, match="demo"):
         run(cfg, h, p, armed=True)
 
 
@@ -237,7 +239,7 @@ def test_preflight_resolves_only_requested_symbols_and_never_sends(
             max_orders_minute=40,
         )
     h = HullConfig.model_validate(cfg["hull"])
-    h = h.model_copy(update={"eligible_timeframes": ("M1", "M5")})
+    h = h.model_copy(update={"eligible_timeframes": ("M15", "M30")})
     mt.copy_rates_from_pos = lambda *args: []
     mt.initialize = lambda: True
     mt.shutdown = lambda: None
@@ -245,12 +247,12 @@ def test_preflight_resolves_only_requested_symbols_and_never_sends(
     monkeypatch.chdir(tmp_path)
     answer = run(cfg, h, selection(h), preflight=True)
     assert (
-        answer["timeframes"] == ["M1", "M5"]
+        answer["timeframes"] == ["M15", "M30"]
         and answer["signal_policy"] == "fc_dynamic_source_internal_v1"
         and answer["entry_timing"] == "live_hull_cross"
         and answer["entry_quote_policy"] == "current_live_tick_or_confirmed_close_v1"
         and answer["specs"]["XAUUSDm"]["bid_chart_verified"]
-        and answer["batch_entry_policy"] == "first_eligible_while_flat_v1"
+        and answer["batch_entry_policy"] == "first_eligible_while_lane_flat_v2"
         and list(answer["specs"]) == ["XAUUSDm"]
         and not mt.requests
     )
@@ -301,7 +303,8 @@ def test_legacy_saved_halt_and_full_send_window_do_not_block_or_reset_state(
     if armed:
         saved = json.loads(d.path.read_text())
         assert saved["guard"] == old["guard"] and saved["sends"] == old["sends"]
-        assert saved["consumed"] == {"OLD": T - 60, "XAUUSDm": T}
+        assert saved["consumed"] == {"OLD": T - 60}
+        assert saved["lane_consumed"] == {"XAUUSDm": {"1": T}}
         _, restarted, _ = hull_desk(armed=True, mt=mt, state=saved)
         assert (
             restarted.batch("XAUUSDm", sig()) == "already_consumed"

@@ -46,7 +46,8 @@ def test_active_bot_refuses_non_16_private_settings(period):
 def test_empty_allowlist_and_cli_override_cannot_initialize_mt5(monkeypatch):
     cfg = load_yaml(ROOT / "config.yaml")
     h = HullConfig.model_validate(cfg["hull"])
-    assert cfg["run"]["mode"] == "paper" and h.eligible_timeframes == ()
+    assert cfg["run"]["mode"] == "paper" and h.lanes() == (15, 30, 45)
+    h = HullConfig.model_validate(cfg["hull"] | {"eligible_timeframes": []})
     monkeypatch.setitem(
         sys.modules, "MetaTrader5", NS(initialize=lambda: pytest.fail("not allowed"))
     )
@@ -54,9 +55,9 @@ def test_empty_allowlist_and_cli_override_cannot_initialize_mt5(monkeypatch):
         with pytest.raises(ValueError, match="No eligible"):
             run(cfg, h, selection(h), frames=requested)
     approved = HullConfig.model_validate(
-        cfg["hull"] | {"eligible_timeframes": ["M15", "H1"]}
+        cfg["hull"] | {"eligible_timeframes": ["M15", "M45"]}
     )
-    assert approved.lanes() == (15, 60)
+    assert approved.lanes() == (15, 45)
     with pytest.raises(ValueError, match="not in"):
         approved.lanes((1,))
     with pytest.raises(ValidationError):
@@ -111,6 +112,8 @@ def position(mt, d, side, ticket, **changes):
     p.update(changes)
     pos = NS(**p)
     mt.positions.append(pos)
+    if d.owned(pos):
+        assert d.owners.bind(pos, 1)
     return pos
 
 
@@ -165,16 +168,18 @@ def test_exit_latches_until_new_quote_and_never_blindly_resends(hull_desk):
     assert not d.exits
 
 
-def test_conflict_still_closes_at_risk_tickets_but_never_opens_a_batch(hull_desk):
-    mt, d, log = hull_desk()
+def test_simultaneous_opposite_entries_remain_independent(hull_desk):
+    mt, d, log = hull_desk("medium")
     position(mt, d, -1, 98)
+    d.verify_signal = lambda *_: True
     a = replace(sig(), trigger=LiveTick.read(mt.q), close_s=T + 60)
     b = replace(sig(2001, -1), tf=5, trigger=a.trigger, close_s=T + 300)
     dispatch(d, NAME, [a, b], **OK)
+    assert mt.requests[0]["position"] == 98
     assert (
-        len(mt.requests) == 1 and mt.requests[0]["position"] == 98 and not mt.positions
+        sorted((d.owners.lane(p), p.type) for p in mt.positions)
+        == [(1, 0)] * 4 + [(5, 1)] * 4
     )
-    assert log[-1][1]["outcome"] == "conflicting_trend_signals_same_tick"
 
 
 def test_live_repricing_vanish_and_restart_reservation(hull_desk):
@@ -187,11 +192,16 @@ def test_live_repricing_vanish_and_restart_reservation(hull_desk):
     assert restart.batch(NAME, replace(r, trigger=None)) == "already_consumed"
 
 
-def test_two_lanes_cannot_resurrect_side_flattened_at_this_tick(hull_desk):
+def test_sibling_raw_exit_cannot_touch_occupied_lane(hull_desk):
     mt, d, log = hull_desk()
     position(mt, d, 1, 61)
     eligible = replace(sig(), trigger=LiveTick.read(mt.q), close_s=T + 60)
     exit_only = replace(raw(mt, -1), tf=5, close_s=T + 300)
     dispatch(d, NAME, [eligible, exit_only], **OK)
-    assert not mt.positions and [q["position"] for q in mt.requests] == [61]
-    assert log[-1][1]["outcome"] == "same_side_held_at_opposite_exit"
+    assert [p.ticket for p in mt.positions] == [61] and not mt.requests
+    assert any(
+        e == "label_decision"
+        and x["tf"] == 1
+        and x["outcome"] == "same_side_batch_open"
+        for e, x in log
+    )

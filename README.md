@@ -6,7 +6,7 @@
 
 ## Dynamic Hull bot
 
-**Timeframes pending:** the active bot uses the [operator’s Dynamic Hull Pine](indicators/FC-Hull-Dynamic-Source.pine), not Either/16. No timeframe is eligible until explicitly listed in `hull.eligible_timeframes`; profile selection alone cannot start it. [Entry/exit rules and local YAML changes](docs/HULL_STRUCTURE.md).
+**Dynamic Hull 16:** the approved bot lanes are **M15, M30 and M45**, independent per broker symbol. A confirmed MSS flattens only that lane, even without a Hull cross. [Bot rules / upgrade](docs/HULL_STRUCTURE.md) · [Read-only MT5 indicator](MT5/DYNAMIC-LANES.md). The checked-in mode remains paper.
 
 ## Start with just your profiles (after timeframe selection)
 
@@ -53,7 +53,7 @@ git rev-parse HEAD
 
 Stop if the checkout is dirty, on another branch, diverged or the pull fails. Do not reset, force, or discard local work. After preflight, match the **latest** observer `started.summary.checkout_head_at_start` against `git rev-parse HEAD`, check `source_module` points into this checkout, and verify `entry_policy: fc_dynamic_skip_first_mss_v2`, `entry_timing: live_hull_cross`, `entry_quote_policy: current_live_tick_or_confirmed_close_v1` and the default `new_ticket_exit_policy: profit_ladder_70_30_v1`. For a non-Git install the SHA may be null: verify the source/version before reuse. An older `started` record or `git status` alone does not prove the running version.
 
-**Current signal:** verify `signal_policy: fc_dynamic_source_internal_v1`, `indicator.source: dynamic`, `indicator.hull_len: 16`, the approved timeframe list, and `batch_entry_policy: first_eligible_while_flat_v1`. The same-side no-stacking rule, local-wick initial stop and per-ticket 70/30 ladder remain in place. [Configuration migration](docs/HULL_STRUCTURE.md#upgrade-the-local-configuration).
+**Current signal:** verify `signal_policy: fc_dynamic_source_internal_v1`, `indicator.source: dynamic`, `indicator.hull_len: 16`, the approved timeframe list, and `batch_entry_policy: first_eligible_while_lane_flat_v2`. The same-side no-stacking rule, local-wick initial stop and per-ticket 70/30 ladder remain in place. [Configuration migration](docs/HULL_STRUCTURE.md#upgrade-the-local-configuration).
 
 ### 1. Read the request
 
@@ -87,7 +87,7 @@ Stop if the checkout is dirty, on another branch, diverged or the pull fails. Do
 
    No `--arm-demo`, no `--arm-orders`, no `--timeframe` override. One scanner watches **only the explicitly approved timeframes**. Verify it is running and report its process ID and actual `reports/hull_runtime/<account-hash>/shadow.jsonl` path. If you lack desktop access or launch fails, say so; do not claim it started.
 
-**What the scanner will do:** read live crosses on the selected instruments. Open only BUY in bullish or SELL in bearish structure, never neutral. A raw opposite cross requests closure of owned opposing tickets first; no premium/discount gate or required BOS. Keep the local-wick initial SL and [original per-ticket profit ladder](docs/HULL_DEMO.md#profit-ladder-for-new-tickets). Never change lots, stops or limits to force a fill.
+**What the scanner will do:** read live crosses on the selected instruments. Open only BUY in bullish or SELL in bearish structure, never neutral. A confirmed MSS flattens only the originating lane. A raw opposite cross requests closure of that lane’s owned opposing tickets first; no premium/discount gate or required BOS. Keep the local-wick initial SL and [original per-ticket profit ladder](docs/HULL_DEMO.md#profit-ladder-for-new-tickets). Never change lots, stops or limits to force a fill.
 
 ### 3. Demo orders require a separate instruction
 

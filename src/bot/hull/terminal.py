@@ -111,33 +111,29 @@ def source_build():
     return {"source_module": str(module), "checkout_head_at_start": head}
 
 
-def dispatch(d, name, labels, *, data_ok, history_ok, rewarmed):
-    """Raw exits first (even if another lane or deal history is unavailable).
-    Only trend-aligned entries vote. Never reopen on an older signal or hedge
-    simultaneously qualified opposite directions. A stale close is not a fresh cross.
-    """
+def dispatch(d, name, labels, *, data_ok, history_ok, rewarmed, shifts=()):
+    """All protective actions before new entries. No cross-timeframe voting or occupancy."""
     now = time.time()
-    labels = [
-        r
-        for r in labels
-        if r.label
-        and TF_NAME.get(r.tf) in d.h.eligible_timeframes
-        and 0 <= now - r.signal_s <= d.lim.max_entry_age_s
-        and (not r.trigger or now < r.close_s)
-    ]
-    window = d.waiting.get(name)
-    if window:
-        labels = [
-            r
-            for r in labels
-            if r.signal_msc != window.reading.signal_msc
-            or r.tf not in window.observed_lanes
-        ]
-    exited_sides = set()
-    for r in sorted(labels, key=lambda r: r.signal_msc):
+    for r in sorted(
+        (*shifts, *(r for r in labels if getattr(r, "confirmed_mss", False))),
+        key=lambda r: r.close_s,
+    ):
+        d.close_mss(name, r)
+    events, exited = {}, set()
+    for r in sorted(labels, key=lambda v: v.signal_msc):
+        if (
+            not r.label
+            or TF_NAME.get(r.tf) not in d.h.eligible_timeframes
+            or not 0 <= now - r.signal_s <= d.lim.max_entry_age_s
+            or (r.trigger and now >= r.close_s)
+        ):
+            continue
+        w = d.waiting.get((name, r.tf))
+        if w and (r.signal_msc, r.label) == (w.reading.signal_msc, w.reading.label):
+            continue
         matched = d.close_opposite(name, r)
         if matched:
-            exited_sides.add((r.signal_msc, -r.label))
+            exited.add((r.tf, r.signal_msc, -r.label))
             d.emit(
                 "opposite_label_exit",
                 symbol=name,
@@ -147,74 +143,70 @@ def dispatch(d, name, labels, *, data_ok, history_ok, rewarmed):
                 raw_side=r.label,
                 **r.clock_fields(),
             )
-    if not (data_ok and history_ok) or rewarmed:
-        reason = (
-            "data_or_deal_history_unavailable"
-            if not (data_ok and history_ok)
-            else "warmup_only"
-        )
-        if window:
-            d.cancel_wait(
-                name,
-                "first_quote_wait_rewarmed"
-                if rewarmed and reason == "warmup_only"
-                else reason,
+        events.setdefault(r.tf, []).append(r)
+    frames = set(events) | {tf for sym, tf in d.waiting if sym == name}
+    for tf in sorted(frames):
+        w = d.waiting.get((name, tf))
+        rows = events.get(tf, [])
+        healthy = data_ok.get(tf, False) if isinstance(data_ok, dict) else data_ok
+        warming = rewarmed.get(tf, False) if isinstance(rewarmed, dict) else rewarmed
+        if not (healthy and history_ok) or warming:
+            why = (
+                "data_or_deal_history_unavailable"
+                if not (healthy and history_ok)
+                else "warmup_only"
             )
-        if labels:
+            if w:
+                d.cancel_wait(
+                    name,
+                    tf,
+                    "first_quote_wait_rewarmed" if why == "warmup_only" else why,
+                )
+            if rows:
+                d.emit(
+                    "label_decision",
+                    symbol=name,
+                    tf=tf,
+                    outcome=why,
+                    **rows[-1].clock_fields(),
+                )
+            continue
+        latest = max((r.signal_msc for r in rows), default=-1)
+        if w and latest > w.reading.signal_msc:
+            d.cancel_wait(name, tf, "first_quote_wait_superseded")
+            w = None
+        if w and latest < w.reading.signal_msc:
+            rows = []
+        peers = [r for r in rows if r.signal_msc == latest] + ([w.reading] if w else [])
+        if not peers:
+            continue
+        valid = [r for r in peers if r.entry_side]
+        r = (valid or peers)[-1]
+        if len({v.label for v in peers}) > 1:
+            why = "conflicting_signals_same_lane_tick"
+        elif (tf, r.signal_msc, r.entry_side) in exited:
+            why = "same_side_held_at_opposite_exit"
+        elif w:
+            why = d.resume_first_quote(name, tf)
+        elif valid:
+            why = d.batch(name, r, raw_tf=tf)
+        else:
+            why = r.entry_reason
+        if w and why in (
+            "conflicting_signals_same_lane_tick",
+            "same_side_held_at_opposite_exit",
+        ):
+            d.cancel_wait(name, tf, why)
+        elif why != WAITING:
             d.emit(
                 "label_decision",
                 symbol=name,
-                tf=labels[-1].tf,
-                outcome=reason,
-                **labels[-1].clock_fields(),
+                tf=tf,
+                raw_selected_tf=tf,
+                close_s=r.close_s,
+                **r.clock_fields(),
+                outcome=why,
             )
-        return
-    latest = max((r.signal_msc for r in labels), default=-1)
-    if window and latest > window.reading.signal_msc:
-        d.cancel_wait(name, "first_quote_wait_superseded")
-        window = None
-    peers = [r for r in labels if r.signal_msc == latest]
-    if window:
-        peers = [window.reading] + [
-            r for r in peers if r.signal_msc == window.reading.signal_msc
-        ]
-    if not peers:
-        return
-    valid = [r for r in peers if r.entry_side]
-    context = max(valid or peers, key=lambda r: r.tf)
-    conflict = len({r.entry_side for r in valid}) > 1
-    if conflict:
-        why = "conflicting_trend_signals_same_tick"
-        if window:
-            d.cancel_wait(name, why)
-            return
-    elif (context.signal_msc, context.entry_side) in exited_sides:
-        # This direction was held at the trigger. Don't reopen it on the very
-        # signal that flattened it, even if the broker deal log is lagging.
-        why = "same_side_held_at_opposite_exit"
-        if window:
-            d.cancel_wait(name, why)
-            return
-    elif window:
-        window.observed_lanes.update(r.tf for r in peers)
-        window.reading = context
-        why = d.resume_first_quote(name)
-    elif valid:
-        why = d.batch(
-            name, context, raw_tf=context.tf, observed_lanes=[r.tf for r in peers]
-        )
-    else:
-        why = context.entry_reason
-    if why != WAITING:
-        d.emit(
-            "label_decision",
-            symbol=name,
-            tf=context.tf,
-            raw_selected_tf=context.tf,
-            close_s=context.close_s,
-            **context.clock_fields(),
-            outcome=why,
-        )
 
 
 def target_preview(mt, name, p, q, grid, h, now):
@@ -321,6 +313,10 @@ def run(
                 ),
                 "preview_quote": asdict(q) if q else None,
                 "legs_when_room": COUNTS[p.rate],
+                "max_tickets_across_selected_lanes": len(frames) * max(COUNTS[p.rate]),
+                "max_lots_across_selected_lanes": round(
+                    len(frames) * max(COUNTS[p.rate]) * p.lots, 8
+                ),
                 "batch_lots_range": [
                     round(p.lots * min(COUNTS[p.rate]), 8),
                     round(p.lots * max(COUNTS[p.rate]), 8),
@@ -341,7 +337,10 @@ def run(
             "batch_entry_policy": BATCH_ENTRY_POLICY,
             "entry_timing": h.entry_timing,
             "entry_quote_policy": LIVE_QUOTE_POLICY,
-            "opposite_exit": "raw_cross_before_entry_checks",
+            "opposite_exit": "lane_raw_cross_before_entry_checks",
+            "mss_exit": "flatten_own_lane_on_confirmed_shift",
+            "ownership": "verified_position_id_and_broker_symbol_and_signal_timeframe",
+            "m45_clock": "3 consecutive M15 bars anchored to the broker D1 open",
             "choch_entry": "never_standalone",
             "post_mss_entry": "skip_first_qualified_cross_per_lane",
             "price_zone_filter": False,
@@ -408,6 +407,9 @@ def run(
                     )
                     checks[TF_NAME[tf]] = {
                         "status": status,
+                        "bar_source": "3 x M15, broker D1 anchor"
+                        if tf == 45
+                        else "native MT5",
                         "closed_bars_loaded": lane.h.n,
                         "current_structure_phase": active.phase,
                         "last_label_for_comparison_only": describe(v) if v else None,
@@ -459,7 +461,7 @@ def run(
             # Context settings are part of the identity: history in another lane
             # cannot consume this lane's skip. Store on the existing account journal.
             policy_key = hashlib.sha256(
-                h.indicator.model_dump_json().encode()
+                h.indicator.model_dump_json(exclude={"exit_on_mss"}).encode()
             ).hexdigest()[:16]
             skip_book = state.setdefault("first_cross_after_mss", {}).setdefault(
                 policy_key, {}
@@ -470,6 +472,17 @@ def run(
                     lane.h.gate.bind(record, d.persist if armed else None)
 
             def verify(name, r, quote):
+                # Take care of an MSS even between legs of a slow batch on this
+                # instrument. A sibling shift protects the sibling, not this batch.
+                invalidated = False
+                for f, stream in bundles[name][1].items():
+                    for shift in stream.boundary_shifts(mt, name, time.time()):
+                        d.confirmed_shift(name, f, shift)
+                        if f == r.tf and shift.closed_s * 1000 >= r.signal_msc:
+                            invalidated = True
+                if invalidated:
+                    return False
+
                 def interrupt(opposite):
                     emit(
                         "live_hull_cross",
@@ -512,7 +525,7 @@ def run(
                     sync = now
                 for name in syms:
                     d.service_if_due()
-                    ds, data_ok, rewarmed = [], True, False
+                    ds, data_ok, rewarmed = [], {}, {}
                     ext, lanes = bundles[name]
                     ext_status = (
                         ext.refresh(mt, name, time.time()) if ext else "updated"
@@ -520,20 +533,29 @@ def run(
                     valid_lanes = []
                     for tf, lane in lanes.items():
                         if lane.ext and ext_status == "history_unavailable":
-                            data_ok = False
+                            data_ok[tf] = False
                             lane.baseline_due = True
                             continue
                         reading, why = lane.refresh(mt, name, time.time())
+                        data_ok[tf] = (
+                            why != "history_unavailable"
+                            and specs[name]["bid_chart_verified"]
+                        )
+                        if data_ok[tf]:
+                            for shift in lane.shifts:
+                                d.close_mss(
+                                    name, shift
+                                )  # independent of labels, history sync or entry age
                         warming = why == "warmup_only" or (
                             lane.ext and ext_status == "warmup_only"
                         )
                         if warming:
-                            lane.baseline_due = rewarmed = True
+                            lane.baseline_due = rewarmed[tf] = True
                         if (
                             why == "history_unavailable"
                             or not specs[name]["bid_chart_verified"]
                         ):
-                            data_ok = False
+                            data_ok[tf] = False
                             lane.baseline_due = True
                             continue
                         valid_lanes.append(lane)
@@ -556,17 +578,14 @@ def run(
                         if reading and lane.note(reading, baseline=bool(warming)):
                             ds.append(reading)
                             emit("closed_label", symbol=name, **describe(reading))
-                    if valid_lanes:
-                        live, coherent = sample(
-                            mt, name, valid_lanes, time.time, limits.max_quote_age_s
+                    for lane in valid_lanes:
+                        # One bad/incomplete M45 projection cannot veto a usable M15/M30 signal.
+                        live, _ = sample(
+                            mt, name, [lane], time.time, limits.max_quote_age_s
                         )
                         for reading in live:
                             ds.append(reading)
                             emit("live_hull_cross", symbol=name, **describe(reading))
-                        # A confirmed close may still wait for its first fresh post-close quote.
-                        # A partial set of live projections cannot authorize a live batch.
-                        if live and not coherent:
-                            data_ok = False
                     dispatch(
                         d,
                         name,

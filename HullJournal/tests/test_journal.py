@@ -331,6 +331,19 @@ class JournalTests(unittest.TestCase):
         rows, _, _ = self.read(mt, repo=self.folder)
         self.assertEqual(rows["setups"][0]["ticket_count"], "1")
 
+    def test_same_symbol_same_instant_independent_15_30_and_synthetic_45(self):
+        ds = [
+            d
+            for tf in (15, 30, 45)
+            for d in ticket(pid=400 + tf, tf=tf, stamp=T, gross=tf)
+        ]
+        view, _, _ = self.read(FakeMT(ds, T + 400))
+        for kind in ("tickets", "setups"):
+            self.assertEqual(
+                {r["timeframe"] for r in view[kind]}, {"M15", "M30", "M45"}
+            )
+            self.assertEqual(len({r["setup_id"] for r in view[kind]}), 3)
+
     def test_unknown_never_guessed_or_grouped(self):
         ds = ticket() + ticket(402, 2, tag_override="broker replaced")
         mt = FakeMT(ds, T + 200)

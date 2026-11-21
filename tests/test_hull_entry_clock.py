@@ -66,7 +66,7 @@ def test_restart_cannot_recover_wait_and_monotonic_deadline_does_not_slide(
     # Even a stuck wall clock cannot give this reservation another window.
     mono[0] += 8
     mt.q = NS(time_msc=T * 1000 + 400, bid=2000.0, ask=2000.1)
-    assert d.resume_first_quote("XAUUSDm") == "entry_window_expired"
+    assert d.resume_first_quote("XAUUSDm", 1) == "entry_window_expired"
     assert not d.waiting and not mt.requests
 
 
@@ -99,7 +99,7 @@ def test_first_quote_resumption_rechecks_guards_and_never_repeats_exit(
     ok = {"data_ok": True, "history_ok": True, "rewarmed": False}
     name = "XAUUSDm"
     dispatch(d, name, [sig()], **ok)
-    assert name in d.waiting and not mt.requests and exits == [T]
+    assert (name, 1) in d.waiting and not mt.requests and exits == [T]
     mt.q = old
     if change == "kill":
         d.kill.touch()
@@ -122,12 +122,14 @@ def test_first_quote_resumption_rechecks_guards_and_never_repeats_exit(
                 magic=d.h.magic,
                 type=0,
                 ticket=55,
+                time_msc=(T - 5) * 1000,
                 price_open=2000,
                 sl=1999.0,
                 tp=2001.0,
                 volume=0.01,
             )
         )
+        assert d.owners.bind(mt.positions[-1], 1)
     elif change == "pending_order":
         mt.orders.append(1)
     elif change == "invalid_tick":
@@ -190,16 +192,10 @@ def test_after_first_plan_a_preclose_tick_with_identical_prices_cannot_send_or_w
 
 
 @pytest.mark.parametrize(
-    "lane,outcome,chosen,exits",
-    [
-        ("duplicate", "shadow_plan_only", 1, [1]),
-        ("opposite_invalid", "shadow_plan_only", 1, [1, 2]),
-        ("same_higher", "shadow_plan_only", 5, [1, 5]),
-        ("opposite_valid", "conflicting_trend_signals_same_tick", 1, [1, 2]),
-    ],
+    "lane", ["duplicate", "opposite_invalid", "same_higher", "opposite_valid"]
 )
-def test_late_native_lane_at_same_close_does_not_reset_a_quote_window(
-    hull_desk, monkeypatch, lane, outcome, chosen, exits
+def test_late_native_lane_at_same_close_keeps_its_own_quote_window(
+    hull_desk, monkeypatch, lane
 ):
     mt, d, log = hull_desk(armed=False)
     q = mt.q
@@ -209,18 +205,23 @@ def test_late_native_lane_at_same_close_does_not_reset_a_quote_window(
     monkeypatch.setattr(d, "close_opposite", lambda n, r: raw.append(r.tf) or 0)
     ok = {"data_ok": True, "history_ok": True, "rewarmed": False}
     dispatch(d, name, [sig()], **ok)
-    assert name in d.waiting
+    assert (name, 1) in d.waiting
     mt.q = q
     other = {
         "duplicate": sig(),
         "opposite_invalid": replace(sig(side=-1), tf=2, structure=Structure()),
         "same_higher": replace(sig(), tf=5),
-        "opposite_valid": replace(sig(side=-1), tf=2),
+        "opposite_valid": replace(sig(2001, side=-1), tf=2),
     }[lane]
     dispatch(d, name, [other], **ok)
-    (done,) = [v for k, v in log if k == "label_decision"]
-    assert done["tf"] == chosen and done["outcome"] == outcome and not d.waiting
-    assert not mt.requests and raw == exits and d.state["consumed"][name] == T
+    outcomes = {v["tf"]: v["outcome"] for k, v in log if k == "label_decision"}
+    assert outcomes[1] == "shadow_plan_only" and not d.waiting and not mt.requests
+    if lane != "duplicate":
+        assert outcomes[other.tf] == (
+            "neutral_structure" if lane == "opposite_invalid" else "shadow_plan_only"
+        )
+    assert raw == ([1] if lane == "duplicate" else [1, other.tf])
+    assert d.state["lane_consumed"][name]["1"] == T
 
 
 @pytest.mark.parametrize(
@@ -251,7 +252,7 @@ def test_only_quote_availability_can_be_revisited(
     # A post-close tick can itself be too old. It cannot be used to price an entry.
     now[0] += 0.25
     mt.q = NS(time_msc=T * 1000 + 100, bid=2000.0, ask=2000.1)
-    assert d.resume_first_quote(name) == WAITING and not checks and not mt.requests
+    assert d.resume_first_quote(name, 1) == WAITING and not checks and not mt.requests
     if after == "missing":
         mt.q = None
         now[0] = T + 8.001
@@ -259,7 +260,7 @@ def test_only_quote_availability_can_be_revisited(
         now[0] += 0.25
         mt.q.time_msc = int(now[0] * 1000) - 50
         mt.bad = after == "uncertain"
-    assert d.resume_first_quote(name) == expected
+    assert d.resume_first_quote(name, 1) == expected
     assert not d.waiting and d.batch(name, sig()) == "already_consumed"
     assert len(checks) == int(after in ("reject", "uncertain")) and len(
         mt.requests
@@ -281,7 +282,10 @@ def test_waiting_symbol_does_not_hold_up_another_symbol(hull_desk):
     mt.symbol_info_tick = lambda n: None if n == a else mt.q
     dispatch(d, a, [sig()], **ok)
     dispatch(d, b, [sig()], **ok)
-    assert list(d.waiting) == [a] and d.state["consumed"] == {a: T, b: T}
+    assert list(d.waiting) == [(a, 1)] and d.state["lane_consumed"] == {
+        a: {"1": T},
+        b: {"1": T},
+    }
     mt.symbol_info_tick = lambda n: mt.q
     dispatch(d, a, [], **ok)
     assert not d.waiting and not mt.requests

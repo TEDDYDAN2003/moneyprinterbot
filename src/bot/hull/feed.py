@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from bisect import bisect_right
+from copy import deepcopy
 from math import ceil
 
 from bot.execution.demo_runner import DemoSafetyError
@@ -10,11 +11,14 @@ from bot.zones.engine import Bar
 
 from .config import TF_NAME
 from .curves import LiveTick
+from .m45 import BASE, rates45
 from .signal import Hull
 from .structure import InternalStructure, Structure
 
 
 def rates(mt, name, tf, pos, count):
+    if tf == 45:
+        return rates45(mt, name, pos, count)
     period = getattr(mt, "TIMEFRAME_" + TF_NAME[tf])
     return mt.copy_rates_from_pos(name, period, pos, count)
 
@@ -90,8 +94,10 @@ class Stream:
         self.tf, self.cfg, self.pip, self.ext = tf, cfg, pip, external
         self.h = Hull(tf, cfg, pip)
         self.last_label = None
+        self.shifts = []  # incremental confirmed exits, independent of Hull labels
         self.observed = {}  # (bar end -> keys); raw notification != entry permission
         self.baseline_due = True
+        self.roll_checked = 0
         self.last_sample = self.last_tick_ms = None
         self.min_bars = max(
             cfg.hull_len + int(cfg.hull_len**0.5) + 2,
@@ -101,6 +107,7 @@ class Stream:
         )
 
     def refresh(self, mt, name, now):
+        self.shifts = []
         step = self.tf * 60
         reload = self.h.prev is None or now - self.h.prev.t > step * 4
         rows = rates(
@@ -131,6 +138,10 @@ class Stream:
                 context=context,
                 observe_first=not self.ext or self.ext.current(self.tf, t, t + step),
             )
+            # Do not replay startup/reload history. A tracked confirmed exit is not
+            # discarded merely because an entry is late, paused or has no Hull cross.
+            if not reload and not self.ext and decision.confirmed_mss:
+                self.shifts.append(decision)
             if decision.label:
                 self.last_label = decision
             updates += 1
@@ -146,6 +157,40 @@ class Stream:
             return None, "history_unavailable"
         return decision, "updated" if decision else "unchanged"
 
+    def boundary_shifts(self, mt, name, now):
+        """An order precheck may run across another lane's close. Inspect just
+        newly due, contiguous CLOSED bars without committing that lane's Hull,
+        first-cross gate or notification cursor. Its next normal poll still sees
+        its own entry signals. No warmup replay and no forming-bar structure.
+        """
+        step = self.tf * 60
+        if not self.h.prev or self.ext:
+            return []
+        last = self.h.prev.t
+        if (
+            now < max(last + 2 * step, self.roll_checked + step)
+            or now - last > 4 * step
+        ):
+            return []
+        rows = rates(mt, name, self.tf, 1, 4)
+        if rows is None:
+            return []
+        engine, events = None, []
+        for row in rows:
+            t = int(row["time"])
+            if t <= self.h.prev.t:
+                continue
+            if t != last + step or t + step > now:
+                break
+            if engine is None:
+                engine = deepcopy(self.h.structure)
+            frame = engine.update(candle(row), t + step)
+            if abs(frame.event_code) == 2 and frame.closed_s > self.roll_checked:
+                events.append(frame)
+            self.roll_checked = max(self.roll_checked, t + step)
+            last = t
+        return events
+
     def current_bar(self, mt, name, tick):
         if not self.h.prev:
             return None
@@ -158,6 +203,13 @@ class Stream:
             return None
         try:
             b = candle(rows[0])
+            if (
+                self.tf == 45
+                and not rows[0]["last_m15"]
+                <= tick.ms / 1000
+                < rows[0]["last_m15"] + BASE
+            ):
+                return None
         except (ValueError, TypeError, OverflowError, IndexError, KeyError):
             return None
         if b.t != start or b.c != tick.bid:
@@ -233,36 +285,24 @@ def verify_before_leg(mt, name, lanes, signal, quote, clock, max_age, on_opposit
     q = LiveTick.read(quote)
     if not q or not 0 <= clock() - q.ms / 1000 <= max_age:
         return False
-    readings = {tf: lane.project(mt, name, q) for tf, lane in lanes.items()}
+    lane = lanes[signal.tf]
+    r = lane.project(mt, name, q)
     now = clock()
     if (
         LiveTick.read(mt.symbol_info_tick(name)) != q
         or not 0 <= now - q.ms / 1000 <= max_age
+        or r is None
+        or now >= r.close_s
+        or (lane.last_tick_ms is not None and q.ms < lane.last_tick_ms)
     ):
         return False
-    ok = True
-    for tf, r in readings.items():
-        lane = lanes[tf]
-        if (
-            r is None
-            or now >= r.close_s
-            or (lane.last_tick_ms is not None and q.ms < lane.last_tick_ms)
-        ):
-            ok = False
-            continue
-        r = lane.h.gate.apply(r, observe=True)
-        lane.h.gate.flush()
-        readings[tf] = r
-        if r.label == -signal.label and lane.note(r, baseline=lane.baseline_due):
+    r = lane.h.gate.apply(r, observe=True)
+    lane.h.gate.flush()
+    if r.label == -signal.label:
+        if lane.note(r, baseline=lane.baseline_due):
             on_opposite(r)
-            ok = False
-    r = readings[signal.tf]
-    if (
-        not ok
-        or not r
-        or r.structure.bias != signal.label
-        or r.structure.epoch != signal.structure.epoch
-    ):
+        return False
+    if r.structure.bias != signal.label or r.structure.epoch != signal.structure.epoch:
         return False
     return not signal.trigger or (
         r.close_s == signal.close_s

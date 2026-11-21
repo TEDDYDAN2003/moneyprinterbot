@@ -2,7 +2,7 @@
 
 **Wickless is a separate bot:** for `WICKLESS OBSERVE`, use the pasted Wickless JSON and the [Wickless operator guide](docs/WICKLESS.md), not Hull profiles, tickets or commands. Ordinary setup, implementation and test requests never send orders.
 
-**Dynamic Hull upgrade:** no timeframe is eligible until the operator names it. `hull.eligible_timeframes: []` is intentional. A profile, CLI override or old chart preset cannot authorize a lane. Do not start an observer or arm until the list is provided. [Policy and private-config migration](docs/HULL_STRUCTURE.md).
+**Dynamic Hull:** M15/M30/M45 authorized as independent lanes in `hull.eligible_timeframes`, not authorization to start a scanner or send orders. `structure_timeframe: null`. A confirmed MSS closes only the originating symbol/timeframe; M45 is three aligned M15 candles. [Rules and private YAML migration](docs/HULL_STRUCTURE.md).
 
 Open **PowerShell in the bot folder** on your Windows MT5 PC (usually `$HOME\Downloads\xauusdm-directional-research`). You should see `config.yaml` and `HullJournal`. No environment activation is needed.
 
@@ -112,7 +112,7 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" 
 
 ## When does the signal appear?
 
-On an eligible lane, a fresh raw cross can appear on a forming candle. Structure changes only on a confirmed structure close. Bullish BUY / bearish SELL may enter if flat and protected; a raw opposite cross exits the owned opposing side regardless of entry eligibility. A structure event alone is not a trade. [Exact rules](docs/HULL_STRUCTURE.md).
+On an eligible lane, a fresh raw cross can appear on a forming candle. Structure changes only on a confirmed structure close. Bullish BUY / bearish SELL may enter if flat and protected; a raw opposite cross exits the owned opposing side regardless of entry eligibility. A confirmed MSS alone closes its own symbol/timeframe batch, never another timeframe and never an automatic entry. [Exact rules](docs/HULL_STRUCTURE.md).
 
 ## Desktop agent rules
 

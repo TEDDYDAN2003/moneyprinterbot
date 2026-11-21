@@ -45,6 +45,7 @@ class TicketLadders:
         key = str(p.ticket)
         self.d.state.setdefault("ladder_by_ticket", {})[key] = {
             "policy": LADDER,
+            "tf": self.d.owners.lane(p),
             "symbol": p.symbol,
             "identifier": int(getattr(p, "identifier", p.ticket)),
             "opened_msc": opened_ms(p),
@@ -68,6 +69,7 @@ class TicketLadders:
             self.d.owned(p)
             and str(p.ticket) == key
             and r["policy"] == LADDER
+            and (r.get("tf") is None or self.d.owners.lane(p) == r["tf"])
             and p.symbol == r["symbol"]
             and p.type == self.d.typ(r["side"])
             and int(getattr(p, "identifier", p.ticket)) == r["identifier"]

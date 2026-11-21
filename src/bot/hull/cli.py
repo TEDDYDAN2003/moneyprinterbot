@@ -1,6 +1,6 @@
 from bot.config.loader import load_yaml
 
-from .config import NATIVE_TF, HullConfig, selection
+from .config import NATIVE_TF, SIGNAL_TF, HullConfig, selection
 
 
 def register(sub):
@@ -40,7 +40,7 @@ def register(sub):
         )
         p.add_argument(
             "--timeframe",
-            choices=tuple(NATIVE_TF),
+            choices=tuple(NATIVE_TF) if name == "hull-replay" else tuple(SIGNAL_TF),
             help="optional single approved lane; cannot override an empty allowlist",
         )
         if name in ("trade", "trade-all"):
@@ -81,7 +81,8 @@ def handle(args):
             raise ValueError(
                 "hull-replay is archived v4 only; not a Dynamic Hull backtest"
             )
-        from .v4.config import HullConfig as V4, FRAMES
+        from .v4.config import FRAMES
+        from .v4.config import HullConfig as V4
         from .v4.replay import run_replay
 
         h = V4.model_validate(cfg["hull"])
@@ -96,7 +97,7 @@ def handle(args):
         from .terminal import run
 
         h = HullConfig.model_validate(cfg["hull"])
-        frames = h.lanes((NATIVE_TF[args.timeframe],) if args.timeframe else None)
+        frames = h.lanes((SIGNAL_TF[args.timeframe],) if args.timeframe else None)
         p = selection(
             h, args.symbols, args.profile, args.lots, args.target_usd, args.rate
         )

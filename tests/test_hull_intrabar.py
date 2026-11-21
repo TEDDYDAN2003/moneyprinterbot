@@ -177,6 +177,9 @@ def test_observer_uses_verified_live_chart_candle_not_next_bar_close(
     # against a fake in-memory terminal; no real terminal, order send, or simulation of returns.
     mt = MT()
     cfg = load_yaml(ROOT / "config.yaml")
+    from bot.hull.config import SIGNAL_TF
+
+    monkeypatch.setitem(SIGNAL_TF, "M1", 1)  # short fabricated clock
     cfg["hull"]["eligible_timeframes"] = ["M1"]
     cfg["hull"]["indicator"].update(swing_len=1, atr_length=2)
     cfg["hull"]["symbols"]["XAUUSD"].update(session="continuous")

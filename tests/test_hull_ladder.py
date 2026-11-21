@@ -303,7 +303,10 @@ def test_fixed_legacy_and_new_tickets_can_coexist(hull_desk):
     p.profit = 11.0
     d.supervise()
     assert p in mt.positions and d.ladders.book[str(p.ticket)]["rung"] == 2
-    assert d.close_opposite(NAME, sig(side=-1)) == 1 and mt.positions == [manual]
+    from bot.hull.curves import LiveTick
+
+    opposite = replace(sig(side=-1), trigger=LiveTick.read(mt.q), close_s=T + 60)
+    assert d.close_opposite(NAME, opposite) == 1 and mt.positions == [manual]
     d.supervise()
     assert not d.ladders.book and not d.state["target_by_ticket"]
 

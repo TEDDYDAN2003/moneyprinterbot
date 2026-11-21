@@ -106,7 +106,10 @@ def test_mock_gold_2048_70_batch_risk_and_57_percent_free_keeps_all_tickets_prot
         p.volume == 0.1 and p.sl == 1979.613 and p.tp > p.price_open
         for p in mt.positions
     )
-    assert not d.state.get("manual_hold") and d.batch(NAME, sig()) == "already_consumed"
+    assert (
+        not d.state.get("manual_hold")
+        and d.batch(NAME, replace(sig(), tf=5)) == "already_consumed"
+    )
 
 
 @pytest.mark.parametrize(
@@ -301,7 +304,7 @@ def test_eight_slow_batches_can_send_80_protected_entries_in_one_window(hull_des
         assert d.batch(name, sig()) == "demo_batch_sent"
     assert len(mt.requests) == len(mt.positions) == len(d.ladders.book) == 80
     assert all(p.sl > 0 and p.tp > p.price_open for p in mt.positions)
-    assert d.state["consumed"] == dict.fromkeys(names, T)
+    assert d.state["lane_consumed"] == {name: {"1": T} for name in names}
     assert "sends" not in d.state
     for name in names:
         assert d.batch(name, sig()) == "already_consumed"

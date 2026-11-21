@@ -1,3 +1,5 @@
+**Current Dynamic Hull 16:** use [FC Dynamic Hull lane indicator](DYNAMIC-LANES.md). The instructions below apply only to the archived v4 indicator.
+
 > This MT5 chart study is historical v4. Use the [Dynamic Hull reference](../indicators/FC-Hull-Dynamic-Source.pine) for the current Python bot.
 
 # Install FC Hull BOS Half-Range v4

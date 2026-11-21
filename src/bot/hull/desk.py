@@ -15,7 +15,7 @@ from bot.zones.monitor import account_check, fresh, save, snapshot
 from .config import COUNTS, FIXED, LADDER, TARGET_POLICY, TF_NAME
 from .entry_clock import FAST_POLL_S, WAITING, TimingBlock, check_quote, utc
 from .ladder import Protection, executable, inside
-from .ladder_desk import TicketLadders
+from .ladder_desk import TicketLadders, opened_ms
 from .orders import (
     Block,
     Exposure,
@@ -26,6 +26,7 @@ from .orders import (
     target,
     valid_cash,
 )
+from .ownership import Owners
 from .signal import Reading
 
 
@@ -78,7 +79,6 @@ class FirstQuoteWindow:
     reading: Reading
     end_mono: float
     raw_tf: int | None
-    observed_lanes: set[int]
     polls: int = 0
     last_wait_reason: str | None = None
 
@@ -105,7 +105,11 @@ class Desk:
             None  # installed by the native scanner; mandatory for live orders
         )
         self.exits = self.state.setdefault("opposite_exits", {})
-        self.waiting: dict[str, FirstQuoteWindow] = {}  # never restored after restart
+        self.owners = Owners(state)
+        self.mss_book = state.setdefault("last_lane_mss_exit", {})
+        self.waiting: dict[
+            tuple[str, int], FirstQuoteWindow
+        ] = {}  # never restored after restart
 
     def persist(self):
         if self.armed:
@@ -244,6 +248,16 @@ class Desk:
                 or deal.type != closing_type
             ):
                 continue
+            # MT5 can assign a manual or server exit a different magic. Resolve the
+            # actual opening position ID. An unknown recent exit remains a safety veto.
+            owner = self.owners.book.get(str(getattr(deal, "position_id", None)))
+            if (
+                owner
+                and owner["symbol"] == name
+                and owner["magic"] == self.h.magic
+                and owner["tf"] != reading.tf
+            ):
+                continue
             ms = getattr(deal, "time_msc", None)
             if not isinstance(ms, int) or ms <= 0:
                 raise Block("entry_deal_history_unavailable")
@@ -255,7 +269,12 @@ class Desk:
             raise Block("timeframe_not_eligible")
         if not d.entry_side:
             raise Block(d.entry_reason)
-        if any(x["symbol"] == name for x in self.exits.values()):
+        if self.mss_book.get(name, {}).get(str(d.tf), -1) >= d.signal_s:
+            raise Block("confirmed_mss_exit")
+        if any(
+            x["symbol"] == name and x.get("tf") in (None, d.tf)
+            for x in self.exits.values()
+        ):
             raise Block("opposite_exit_not_confirmed_flat")
         mt = self.mt
         p = self.syms[name][1]
@@ -270,10 +289,13 @@ class Desk:
             raise Block("ladder_reconciliation_required")
         ps, os = snapshot(mt)
         e = self.exposure(ps, os)
-        tickets = {r.ticket for r in ps if r.symbol == name}
+        here = [(r, self.owners.lane(r)) for r in ps if r.symbol == name]
+        if any(tf is None for _, tf in here):
+            raise Block("unattributed_hull_position_review")
+        tickets = {r.ticket for r, tf in here if tf == d.tf}
         if tickets != (expected or set()):
             if stage == "first_plan" and any(
-                r.symbol == name and r.type == self.typ(d.side) for r in ps
+                tf == d.tf and r.type == self.typ(d.side) for r, tf in here
             ):
                 raise Block("same_side_batch_open")
             raise Block("symbol_busy_or_batch_changed")
@@ -387,13 +409,15 @@ class Desk:
             symbol=p.symbol,
             ticket=int(p.ticket),
             reason=reason,
+            tf=self.owners.lane(p),
             retcode=getattr(res, "retcode", None),
         )
 
-    @staticmethod
-    def _matches_exit(p, x):
+    def _matches_exit(self, p, x):
         return (
-            p.symbol == x["symbol"]
+            x.get("tf") is not None
+            and self.owners.lane(p) == x["tf"]
+            and p.symbol == x["symbol"]
             and p.type == x["type"]
             and getattr(p, "identifier", p.ticket) == x["identifier"]
             and p.price_open == x["open"]
@@ -415,12 +439,18 @@ class Desk:
         if x["status"] == "verify_partial" and 0 < p.volume < x["volume_sent"]:
             x["status"] = "await_quote"  # only the reconciled remaining volume
         if x["status"] == "await_quote":
-            self.close_owned(p, "opposite_hull_label", intent=x)
+            self.close_owned(p, x["reason"], intent=x)
             after = self.mt.positions_get(ticket=p.ticket)
             if after is not None and not after:
                 self.exits.pop(key, None)
                 self.persist()
-                self.emit("opposite_exit_confirmed", symbol=p.symbol, ticket=p.ticket)
+                self.emit(
+                    "lane_exit_confirmed",
+                    symbol=p.symbol,
+                    tf=x.get("tf"),
+                    reason=x.get("reason"),
+                    ticket=p.ticket,
+                )
             elif x["status"] == "verify_or_review":
                 self.emit(
                     "opposite_exit_review",
@@ -441,36 +471,99 @@ class Desk:
             or (reading.trigger is not None and now >= reading.close_s)
         ):
             return 0
-        ps = self.mt.positions_get()
+        return self._protect(name, reading.tf, reading.signal_msc, reading.label)
+
+    def close_mss(self, name, reading):
+        """Confirmed native structure shift. Fence the lane before any replacement.
+
+        Not an entry: no entry-age cutoff, raw cross, valid stop, spread cap or
+        market-session gate. Reserve all matching legs durably before sending.
+        """
+        if not isinstance(reading, Reading) or not reading.confirmed_mss:
+            return 0
+        return self.confirmed_shift(name, reading.tf, reading.structure)
+
+    def confirmed_shift(self, name, tf, frame):
+        close = frame.closed_s
+        if (
+            close is None
+            or close > time.time()
+            or name not in self.syms
+            or TF_NAME.get(tf) not in self.h.eligible_timeframes
+            or frame.bias not in (-1, 1)
+            or frame.event_code != 2 * frame.bias
+        ):
+            return 0
+        seen = self.mss_book.setdefault(name, {})
+        if seen.get(str(tf), -1) >= close:
+            return 0
+        window = self.waiting.get((name, tf))
+        if window and window.reading.signal_s <= close:
+            self.cancel_wait(name, tf, "confirmed_mss_exit")
+        # Write the lane/time fence BEFORE querying inventory. Even if the terminal
+        # is unavailable or the process stops here, supervise() can latch an older
+        # verified ticket, never one opened after this shift.
+        seen[str(tf)] = close
+        self.persist()
+        return self._protect(name, tf, close * 1000, 0, bias=frame.bias)
+
+    def _protect(self, name, tf, stamp, raw_side, *, bias=0):
+        shift = raw_side == 0
+        close = stamp // 1000
+        ps = self.mt.positions_get() if self.armed else ()
         if ps is None:
-            raise DemoSafetyError("Cannot verify owned positions for opposite exit")
+            if shift:
+                self.emit(
+                    "lane_mss_await_inventory",
+                    symbol=name,
+                    tf=tf,
+                    close_s=close,
+                )
+                return 0
+            raise DemoSafetyError("Cannot verify owned positions for lane exit")
         matched = []
+        reason = "confirmed_lane_mss" if shift else "opposite_hull_label"
         for p in ps:
             if (
                 p.symbol != name
                 or not self.owned(p)
-                or p.type == self.typ(reading.label)
-                or getattr(p, "time_msc", 0) > reading.signal_msc
+                or self.owners.lane(p) != tf
+                or (not shift and p.type == self.typ(raw_side))
+                or not 0 < opened_ms(p) <= stamp
             ):
                 continue
-            key = str(p.ticket)
-            self.exits.setdefault(
-                key,
-                {
-                    "symbol": name,
-                    "type": p.type,
-                    "open": p.price_open,
-                    "identifier": getattr(p, "identifier", p.ticket),
-                    "trigger_msc": reading.signal_msc,
-                    "status": "await_quote",
-                },
-            )
+            self._reserve_exit(p, tf, reason, stamp)
             matched.append(p)
-        if matched:
-            self.persist()  # reserve every owned leg BEFORE the first close request
-            for p in matched:
-                self._service_exit(p, self.exits[str(p.ticket)])
-        return len(matched)  # matched tickets, NOT a claim of a fill
+        if matched or shift:
+            self.persist()  # watermark and every ticket intent in one atomic snapshot
+        for p in matched:
+            self._service_exit(p, self.exits[str(p.ticket)])
+        if shift:
+            self.emit(
+                "lane_mss_exit",
+                symbol=name,
+                tf=tf,
+                close_s=close,
+                bias=bias,
+                matched_positions=len(matched),
+                armed=self.armed,
+            )
+        return len(matched)
+
+    def _reserve_exit(self, p, tf, reason, stamp):
+        self.exits.setdefault(
+            str(p.ticket),
+            {
+                "symbol": p.symbol,
+                "tf": tf,
+                "reason": reason,
+                "type": p.type,
+                "open": p.price_open,
+                "identifier": getattr(p, "identifier", p.ticket),
+                "trigger_msc": stamp,
+                "status": "await_quote",
+            },
+        )
 
     def service_if_due(self):
         # Single MT5 writer: also check between confirmed legs / symbols when a
@@ -495,6 +588,18 @@ class Desk:
             {},
             {},
         )  # per sweep only; fresh quote is re-read before each send
+        # Reconcile outstanding shift fences even after restart, on one full
+        # account snapshot, before a ladder amendment or a new entry is possible.
+        recovered = False
+        for p in ps:
+            if self.owned(p) and str(p.ticket) not in self.exits:
+                tf = self.owners.lane(p)
+                stamp = self.mss_book.get(p.symbol, {}).get(str(tf), -1) * 1000
+                if tf is not None and 0 < opened_ms(p) <= stamp:
+                    self._reserve_exit(p, tf, "confirmed_lane_mss", stamp)
+                    recovered = True
+        if recovered:
+            self.persist()
         for p in ps:
             if not self.owned(p):
                 continue
@@ -521,8 +626,16 @@ class Desk:
             pending = self.exits.pop(key)
             self.persist()
             self.emit(
-                "opposite_exit_confirmed", symbol=pending["symbol"], ticket=int(key)
+                "lane_exit_confirmed",
+                symbol=pending["symbol"],
+                tf=pending.get("tf"),
+                reason=pending.get("reason"),
+                ticket=int(key),
             )
+        if self.owners.prune(
+            {str(getattr(p, "identifier", p.ticket)) for p in ps}, time.time()
+        ):
+            self.persist()
         self.ladders.prune(active)
         if stale := set(goals) - active:
             for k in stale:
@@ -530,7 +643,7 @@ class Desk:
             self.persist()
         self.last_service = time.monotonic()
 
-    def finalize(self, name, plan, res, expected):
+    def finalize(self, name, tf, plan, res, expected):
         mt = self.mt
         self.account()
         if (
@@ -540,7 +653,13 @@ class Desk:
         ):
             return None, "uncertain_or_partial_fill"
         ps, os = snapshot(mt)
-        new = [p for p in ps if p.symbol == name and p.ticket not in expected]
+        new = [
+            p
+            for p in ps
+            if p.symbol == name
+            and p.ticket not in expected
+            and self.owners.lane(p) is None
+        ]
         if len(new) != 1 or not self.owned(new[0]):
             return None, "ticket_not_reconciled"
         p = new[0]
@@ -548,10 +667,9 @@ class Desk:
         # If MT5 supplies that identifier, never enroll a different ticket merely
         # because it appeared in the same positions snapshot.
         opening_order = getattr(res, "order", 0)
-        if (
-            self.h.exit_policy == LADDER
-            and opening_order
-            and opening_order not in (p.ticket, getattr(p, "identifier", p.ticket))
+        if not opening_order or opening_order not in (
+            p.ticket,
+            getattr(p, "identifier", p.ticket),
         ):
             return None, "opening_order_not_reconciled"
         grid = Grid.from_info(mt.symbol_info(name))
@@ -563,6 +681,9 @@ class Desk:
             or p.price_open <= 0
         ):
             return None, "fill_not_reconciled"
+        if not self.owners.bind(p, tf):
+            return None, "lane_identity_not_reconciled"
+        self.persist()
         if self.h.exit_policy == FIXED:
             self.state.setdefault("target_by_ticket", {})[str(p.ticket)] = plan.goal_usd
             self.persist()
@@ -634,8 +755,8 @@ class Desk:
             self.ladders.enroll(p, plan, tp)
         return p.ticket, "ok"
 
-    def cancel_wait(self, name, reason):
-        w = self.waiting.pop(name, None)
+    def cancel_wait(self, name, tf, reason):
+        w = self.waiting.pop((name, tf), None)
         if w is not None:
             self.emit(
                 "label_decision",
@@ -650,15 +771,15 @@ class Desk:
             )
 
     def cancel_all_waits(self):
-        for name in list(self.waiting):
-            self.cancel_wait(name, "first_quote_wait_stopped")
+        for name, tf in list(self.waiting):
+            self.cancel_wait(name, tf, "first_quote_wait_stopped")
 
     def _live_reserved(self, name, d):
         # Honor pre-upgrade live reservations for duplicate prevention. Never write a new one.
         last = self.state.get("live_bars", {}).get(name, {}).get(str(d.tf))
         return last == [d.close_s, d.side]
 
-    def batch(self, name, d, *, raw_tf=None, observed_lanes=()):
+    def batch(self, name, d, *, raw_tf=None):
         if not isinstance(d, Reading):
             return "not_dynamic_hull_signal"
         if TF_NAME.get(d.tf) not in self.h.eligible_timeframes:
@@ -669,24 +790,29 @@ class Desk:
         bar_id = f"{d.tf}:{d.side}"
         if bars.get(bar_id, -1) >= d.close_s:
             return "already_consumed"
-        seen = self.state.setdefault("consumed", {})
-        if seen.get(name, 0) >= d.signal_s or self._live_reserved(name, d):
+        seen = self.state.setdefault("lane_consumed", {}).setdefault(name, {})
+        if self.mss_book.get(name, {}).get(str(d.tf), -1) >= d.signal_s:
+            return "confirmed_mss_exit"
+        # Legacy symbol watermark is read-only; NEW reservations never consume siblings.
+        if max(
+            seen.get(str(d.tf), 0), self.state.get("consumed", {}).get(name, 0)
+        ) >= d.signal_s or self._live_reserved(name, d):
             return "already_consumed"
-        self.cancel_wait(name, "first_quote_wait_superseded")
+        self.cancel_wait(name, d.tf, "first_quote_wait_superseded")
         # Reserve ONCE before touching broker order APIs. Only the original,
         # in-memory first-quote window may resume this reservation. A restart cannot.
-        seen[name] = d.signal_s  # seconds, backwards-compatible with closed-only state
+        seen[str(d.tf)] = d.signal_s
         bars[bar_id] = d.close_s
         self.persist()
         mono = time.monotonic()
         remaining = d.signal_s + self.lim.max_entry_age_s - time.time()
-        window = FirstQuoteWindow(d, mono + remaining, raw_tf, {d.tf, *observed_lanes})
+        window = FirstQuoteWindow(d, mono + remaining, raw_tf)
         return self._attempt(name, window)
 
-    def resume_first_quote(self, name):
+    def resume_first_quote(self, name, tf):
         # Take the reservation out before processing; only another waitable check can put it back.
-        w = self.waiting.pop(name)
-        if self.state["consumed"].get(name) != w.reading.signal_s:
+        w = self.waiting.pop((name, tf))
+        if self.state["lane_consumed"][name].get(str(tf)) != w.reading.signal_s:
             return "first_quote_wait_superseded"
         return self._attempt(name, w)
 
@@ -801,6 +927,7 @@ class Desk:
                     raise Block("quote_or_plan_changed")
                 self.state["manual_hold"] = {
                     "symbol": name,
+                    "tf": d.tf,
                     "signal": d.signal_s,
                     **d.clock_fields(),
                     "leg": sent + 1,
@@ -855,7 +982,7 @@ class Desk:
                     price=getattr(res, "price", None),
                     deal=getattr(res, "deal", None),
                 )
-                ticket, status = self.finalize(name, plan, res, expected)
+                ticket, status = self.finalize(name, d.tf, plan, res, expected)
                 if ticket is None:
                     return status + "_manual_hold"
                 expected.add(ticket)
@@ -885,7 +1012,7 @@ class Desk:
                 )
             if wait:
                 window.last_wait_reason = check.reason
-                self.waiting[name] = window
+                self.waiting[(name, d.tf)] = window
                 return WAITING
             why = check.reason
         except Block as exc:
