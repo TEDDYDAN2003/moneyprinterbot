@@ -88,7 +88,8 @@ def test_native_forming_cross_is_live_but_cannot_modify_closed_trend_anchor_or_a
     b = Bar(T, cur, max(cur, px), min(cur, px), px)
     q = LiveTick(T * 1000 + 300, px, px + 0.01)
     r = h.preview(b, q)
-    assert r.label == r.entry_side == -sign and r.structure == rows[-1].structure
+    assert r.label == r.side == -sign and r.structure == rows[-1].structure
+    assert r.entry_side == 0 and r.entry_reason == "first_trend_cross_after_mss"
     assert r.atr == rows[-1].atr and r.anchor_s < T and r.trigger == q
     assert r.raw_sl == pytest.approx(r.anchor - r.label * 0.1 * r.atr)
     assert h.preview(replace(b, c=cur), replace(q, bid=cur, ask=cur + 0.01)).label == 0
@@ -168,8 +169,9 @@ def test_initial_live_snapshot_and_repeated_markers_are_not_new_orders():
 
 
 @pytest.mark.parametrize("invert", [False, True])
+@pytest.mark.parametrize("already_skipped", [False, True])
 def test_observer_uses_verified_live_chart_candle_not_next_bar_close(
-    invert, tmp_path, monkeypatch
+    invert, already_skipped, tmp_path, monkeypatch
 ):
     # Two observations in one forming candle. Run the actual scanner in READ ONLY,
     # against a fake in-memory terminal; no real terminal, order send, or simulation of returns.
@@ -180,6 +182,13 @@ def test_observer_uses_verified_live_chart_candle_not_next_bar_close(
     cfg["hull"]["symbols"]["XAUUSD"].update(session="continuous")
     h = HullConfig.model_validate(cfg["hull"])
     bars = fixture(invert)
+    if already_skipped:
+        # This close consumes the first cross. Two more closed candles set up
+        # the next live opportunity, with the same MSS and no BOS requirement.
+        for i, x in enumerate((15, 16, 16)):
+            o, c = bars[-1].c, 200 - x if invert else x
+            bars.append(Bar(T + i * 60, o, max(o, c), min(o, c), c))
+        bars = [replace(b, t=b.t - 180) for b in bars]
     cur = bars[-1].c
     wall = [T + 0.1]
 
@@ -211,13 +220,17 @@ def test_observer_uses_verified_live_chart_candle_not_next_bar_close(
         .splitlines()
     ]
     (raw,) = [r for r in events if r["event"] == "live_hull_cross"]
-    assert raw["label"] == raw["entry_side"] == (1 if invert else -1)
+    assert raw["label"] == raw["side"] == (1 if invert else -1)
+    assert raw["entry_side"] == (raw["label"] if already_skipped else 0)
+    assert raw["entry_reason"] == (
+        "ready" if already_skipped else "first_trend_cross_after_mss"
+    )
     assert (
         raw["trigger_msc"] < raw["close_s"] * 1000
         and raw["entry_timing"] == "live_hull_cross"
     )
     assert [r["outcome"] for r in events if r["event"] == "label_decision"] == [
-        "shadow_plan_only"
+        "shadow_plan_only" if already_skipped else "first_trend_cross_after_mss"
     ]
     assert not mt.requests
 

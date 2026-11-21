@@ -17,18 +17,18 @@ from .config import (
     BATCH_ENTRY_POLICY,
     COUNTS,
     ENTRY_POLICY,
-    NATIVE_TF,
-    TF_NAME,
     LADDER,
+    NATIVE_TF,
     RETIRED_LIMITS,
     TARGET_POLICY,
+    TF_NAME,
 )
+from .curves import LiveTick
 from .desk import Desk, identity_check, resolve
 from .entry_clock import LIVE_QUOTE_POLICY, WAITING, poll_delay
+from .feed import Stream, StructureTape, sample, verify_before_leg
 from .ladder import cash_levels
 from .orders import Block, Grid, spread_goal
-from .curves import LiveTick
-from .feed import Stream, StructureTape, sample, verify_before_leg
 
 
 def describe(r):
@@ -343,6 +343,7 @@ def run(
             "entry_quote_policy": LIVE_QUOTE_POLICY,
             "opposite_exit": "raw_cross_before_entry_checks",
             "choch_entry": "never_standalone",
+            "post_mss_entry": "skip_first_qualified_cross_per_lane",
             "price_zone_filter": False,
             **source_build(),
             "specs": specs,
@@ -454,6 +455,19 @@ def run(
             d = Desk(mt, cfg, h, syms, identity, state, path, emit, armed)
             locks.callback(d.cancel_all_waits)
             bundles = {name: make_lanes(h, frames, p) for name, (_, p) in syms.items()}
+
+            # Context settings are part of the identity: history in another lane
+            # cannot consume this lane's skip. Store on the existing account journal.
+            policy_key = hashlib.sha256(
+                h.indicator.model_dump_json().encode()
+            ).hexdigest()[:16]
+            skip_book = state.setdefault("first_cross_after_mss", {}).setdefault(
+                policy_key, {}
+            )
+            for name, (_, lanes) in bundles.items():
+                for tf, lane in lanes.items():
+                    record = skip_book.setdefault(name, {}).setdefault(str(tf), {})
+                    lane.h.gate.bind(record, d.persist if armed else None)
 
             def verify(name, r, quote):
                 def interrupt(opposite):

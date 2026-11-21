@@ -24,7 +24,7 @@ LADDER = "profit_ladder_70_30_v1"
 FIXED = "fixed_tp"
 TARGET_POLICY = "base_plus_entry_spread_v1"  # all newly opened Hull tickets, never retrofit saved goals
 LIVE_TIMING = "live_hull_cross"
-ENTRY_POLICY = "fc_dynamic_trend_cross_v1"
+ENTRY_POLICY = "fc_dynamic_skip_first_mss_v2"
 BATCH_ENTRY_POLICY = "first_eligible_while_flat_v1"
 # Removed in Hull only. Older full-file demo configs may still contain the keys.
 RETIRED_LIMITS = ("drawdown_usd", "max_orders_minute")

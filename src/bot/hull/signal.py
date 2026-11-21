@@ -5,12 +5,14 @@ is never appended to closed indicator/structure/stop history.
 """
 
 from __future__ import annotations
+
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from bot.zones.engine import Bar
+
 from .config import ENTRY_POLICY, TF_NAME, Indicator
-from .curves import Baseline, LiveTick, WMA
+from .curves import WMA, Baseline, LiveTick
 from .entry_clock import utc
 from .structure import InternalStructure, Structure
 
@@ -40,6 +42,7 @@ class Reading:
     cross_low: int = 0
     cross_high: int = 0
     trigger: LiveTick | None = None
+    skip_after_mss: bool | None = None
 
     @property
     def signal_msc(self):
@@ -60,7 +63,7 @@ class Reading:
         }
 
     @property
-    def entry_reason(self):
+    def candidate_reason(self):
         if not self.label:
             return "no_cross"
         if not self.structure.bias:
@@ -70,6 +73,17 @@ class Reading:
         if self.side != self.label or self.raw_sl is None:
             return self.reason if self.reason != "ready" else "no_valid_initial_stop"
         return "ready"
+
+    @property
+    def entry_reason(self):
+        reason = self.candidate_reason
+        if (
+            reason == "ready"
+            and self.structure.epoch is not None
+            and self.skip_after_mss is not False
+        ):
+            return "first_trend_cross_after_mss"
+        return reason
 
     @property
     def entry_side(self):
@@ -85,11 +99,61 @@ class Reading:
         }
 
 
+class FirstCrossGate:
+    """One first trend-aligned signal per confirmed structure shift, not per tick/fill."""
+
+    def __init__(self):
+        self.bind({}, None)
+
+    def bind(self, record, persist):
+        self.record, self.persist = record, persist
+        self.saved = record.get("epoch"), record.get("bar")
+
+    def apply(self, r, *, observe):
+        s = r.structure
+        epoch, known = s.epoch, self.record.get("epoch")
+        # After a restart, the shift can predate a finite history reload. Restore
+        # only a matching *confirmed* context at/after its original timestamp.
+        if (
+            epoch is None
+            and known is not None
+            and s.closed_s is not None
+            and s.closed_s >= known
+            and s.bias == self.record.get("bias")
+        ):
+            epoch = known
+            r = replace(r, structure=replace(s, last_mss_s=known))
+        if epoch is None:
+            return r
+        newer = known is None or epoch > known
+        older = known is not None and epoch < known
+        bar = None if newer else self.record.get("bar")
+        if newer and observe:
+            self.record.update(
+                epoch=epoch, bias=s.bias, bar=None
+            )  # armed, not consumed
+        if r.candidate_reason != "ready":
+            return r
+        # A reload cannot roll back live state. Same-bar rechecks never promote
+        # the skipped signal. Actual order admission/fills are intentionally later.
+        skip = older or bar is None or r.close_s <= bar
+        if observe and not older and bar is None:
+            self.record["bar"] = r.close_s
+        return replace(r, skip_after_mss=skip)
+
+    def flush(self):
+        stamp = self.record.get("epoch"), self.record.get("bar")
+        if self.persist is not None and stamp != self.saved:
+            self.persist()
+            self.saved = stamp
+
+
 class Hull:
-    def __init__(self, tf: int, p: Indicator, pip_size: float):
+    def __init__(self, tf: int, p: Indicator, pip_size: float, gate=None):
         if tf not in TF_NAME:
             raise ValueError("Unsupported native Hull timeframe")
         self.tf, self.p, self.pip = tf, p, pip_size
+        self.gate = gate if gate is not None else FirstCrossGate()
         n = p.hull_len
         h = max(1, n // 2)
         self.fixed = p.custom_source if p.source == "custom" else p.source
@@ -103,10 +167,12 @@ class Hull:
         self.structure = InternalStructure(p.swing_len)
         self.last_cross = {1: None, -1: None}
 
-    def update(self, c: Bar, *, context: Structure | None = None) -> Reading:
+    def update(
+        self, c: Bar, *, context: Structure | None = None, observe_first=True
+    ) -> Reading:
         if self.prev and c.t <= self.prev.t:
             raise ValueError("Closed bars must be unique and ordered")
-        return self._read(c, None, context)
+        return self._read(c, None, context, observe_first)
 
     def preview(
         self, c: Bar, tick: LiveTick, *, context: Structure | None = None
@@ -119,9 +185,9 @@ class Hull:
             or not c.t * 1000 <= tick.ms < (c.t + period) * 1000
         ):
             raise ValueError("Live bid candle and tick must follow the closed state")
-        return self._read(c, tick, context)
+        return self._read(c, tick, context, False)
 
-    def _read(self, c, tick, context):
+    def _read(self, c, tick, context, observe_first):
         commit, p = tick is None, self.p
         close_s = c.t + self.tf * 60
         native = self.structure.update(c, close_s) if commit else self.structure.view
@@ -211,7 +277,7 @@ class Hull:
                 self.last_cross[label] = c.t
         if commit:
             self.prev, self.last_b = c, b
-        return Reading(
+        r = Reading(
             close_s,
             self.tf,
             c.c,
@@ -236,3 +302,4 @@ class Hull:
             curves.get("high", (None, 0))[1],
             tick,
         )
+        return self.gate.apply(r, observe=observe_first)

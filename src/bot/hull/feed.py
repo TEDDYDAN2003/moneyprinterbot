@@ -7,6 +7,7 @@ from math import ceil
 
 from bot.execution.demo_runner import DemoSafetyError
 from bot.zones.engine import Bar
+
 from .config import TF_NAME
 from .curves import LiveTick
 from .signal import Hull
@@ -109,7 +110,10 @@ class Stream:
             self.baseline_due = True
             return None, "history_unavailable"
         if reload:
-            self.h, self.last_label = Hull(self.tf, self.cfg, self.pip), None
+            self.h, self.last_label = (
+                Hull(self.tf, self.cfg, self.pip, self.h.gate),
+                None,
+            )
         updates, last, gap, decision = 0, -1, False, None
         for row in rows:
             t = int(row["time"])
@@ -122,10 +126,15 @@ class Stream:
                 continue
             gap |= bool(self.h.prev and t != self.h.prev.t + step)
             context = self.ext.at(self.tf, t, t + step) if self.ext else None
-            decision = self.h.update(candle(row), context=context)
+            decision = self.h.update(
+                candle(row),
+                context=context,
+                observe_first=not self.ext or self.ext.current(self.tf, t, t + step),
+            )
             if decision.label:
                 self.last_label = decision
             updates += 1
+        self.h.gate.flush()
         if reload or gap or updates > 1 or (updates and self.baseline_due):
             self.baseline_due = True
             return None, "warmup_only"
@@ -165,11 +174,11 @@ class Stream:
         return self.h.preview(b, tick, context=context)
 
     def note(self, r, *, baseline=False):
-        """One raw event per (chart candle, direction, selected source, bias).
+        """One raw event per (chart candle, direction, selected source, bias, MSS).
 
         A verified cross at attachment is not a new signal. An observed live
         event cannot fire again just because its candle subsequently closes.
-        A real cross on a newly selected curve at a structure flip can qualify.
+        A real cross on a flip is still a raw exit even when entry is skipped.
         """
         self.observed = {
             k: v for k, v in self.observed.items() if k >= r.close_s - self.tf * 60
@@ -177,7 +186,7 @@ class Stream:
         if not r.label:
             return False
         keys = self.observed.setdefault(r.close_s, set())
-        key = r.label, r.active_source, r.structure.bias
+        key = r.label, r.active_source, r.structure.bias, r.structure.epoch
         fresh = key not in keys
         keys.add(key)
         return fresh and not baseline
@@ -206,6 +215,8 @@ def sample(mt, name, lanes, clock, max_age):
             s.baseline_due = True
             continue
         resumed = s.last_sample is not None and not 0 <= now - s.last_sample <= max_age
+        r = s.h.gate.apply(r, observe=True)  # coherent broker snapshot only
+        s.h.gate.flush()
         if s.note(r, baseline=s.baseline_due or resumed):
             out.append(r)
         s.baseline_due = False
@@ -239,11 +250,19 @@ def verify_before_leg(mt, name, lanes, signal, quote, clock, max_age, on_opposit
         ):
             ok = False
             continue
+        r = lane.h.gate.apply(r, observe=True)
+        lane.h.gate.flush()
+        readings[tf] = r
         if r.label == -signal.label and lane.note(r, baseline=lane.baseline_due):
             on_opposite(r)
             ok = False
     r = readings[signal.tf]
-    if not ok or not r or r.structure.bias != signal.label:
+    if (
+        not ok
+        or not r
+        or r.structure.bias != signal.label
+        or r.structure.epoch != signal.structure.epoch
+    ):
         return False
     return not signal.trigger or (
         r.close_s == signal.close_s

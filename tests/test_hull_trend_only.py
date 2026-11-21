@@ -49,7 +49,7 @@ def test_empty_allowlist_and_cli_override_cannot_initialize_mt5(monkeypatch):
 
 
 @pytest.mark.parametrize("side", [-1, 1])
-@pytest.mark.parametrize("event", [0, 1, 2, 3])
+@pytest.mark.parametrize("event", [0, 1, 3])
 def test_trend_cross_no_midpoint_bos_or_retest_required(hull_desk, side, event):
     mt, d, events = hull_desk("medium", armed=False)
     # No range/extreme exists. Price need not visit a discount/premium half at signal or quote.

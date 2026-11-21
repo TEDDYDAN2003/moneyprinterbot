@@ -10,6 +10,8 @@ The scanner’s signal reference is the operator’s [FC DynHull Pine v6](../ind
 | Bearish | Close owned shorts; no new long | Close owned longs first; a new SELL is eligible if flat |
 | Neutral | Close owned shorts only | Close owned longs only |
 
+**After each confirmed MSS/CHoCH, skip exactly the first trend-aligned Hull cross on each signal lane.** A matching cross on the shift close counts as first. INIT/BOS do not arm or reset this rule; opposite raw signals still exit and do not spend it. The skipped bar stays blocked on every tick and at its close. A later distinct aligned cross is eligible, subject to normal order checks. A raw bot signal with an unusable initial stop is not an otherwise-valid candidate and does not use the skip. The first candidate is counted as a signal, not a fill; a desk/risk veto never refunds it.
+
 No midpoint, discount/premium, swing-zone, EMA or later-BOS requirement at the signal **or** on the quote used for a ticket. INIT/BOS/MSS, a wick touch, or bias alone is never an entry or an exit signal. The execution desk still requires a valid original SL and all existing order protections for **new** entries.
 
 ## Calculation and clocks
@@ -25,3 +27,9 @@ No midpoint, discount/premium, swing-zone, EMA or later-BOS requirement at the s
 Keep the existing broker aliases, lots, risk limits, magic number, ladder and ticket state. In `hull:` use `entry_timing: live_hull_cross` and initially `eligible_timeframes: []`. Under `indicator:` use `source: dynamic`, `hull_len: 24`, `swing_len: 3`, `structure_timeframe: null`, `neutral_mode: high` and `exit_opposite: true`. Remove the retired `signal` and `ema_length` keys. Old `either`, old clock values, or disabling opposite exits are rejected rather than silently changing a running policy. A private YAML is not overwritten, and a running process is not updated by editing these files.
 
 The default initial stop, spread-inclusive per-ticket TP, 70/30 ladder and broker safeguards are documented in the [operating guide](HULL_DEMO.md#which-candle-supplies-the-stop). No performance result is claimed for this replacement.
+
+## Pine win-rate table (not a bot configuration)
+
+The 15m, 30m and 45m rows each evaluate the same Hull and configured structure on their own candles. With **Chart**, each row uses its own native structure. The optional override follows the same confirmed-structure clock as the chart. One open position per row; open positions at the end of the test window are not in the win-rate denominator. Chart alerts may be live; historical table entries and opposite-signal exits use the signal candle’s close.
+
+Set lot size and USD target. TP distance in ticks is `ceil(target USD / (lots × USD per tick per lot))`; distance in broker points is `ticks × minimum tick / broker point size`. Use the tick-value override for a different broker contract. The table uses gross price movement, not broker spreads, fees, the real SL or the profit ladder. Immediate break-even is the default; a positive percentage arms protection from the bar **after** a favorable close reaches that fraction of the TP distance. An active break-even or any opposite raw cross before TP scores a loss. Price levels are checked before the close signal; ambiguous TP/active-BE order scores a loss unless the open itself already reached TP. No market replay or performance estimates are included. The three comparison intervals do not authorize any live bot timeframe.

@@ -33,6 +33,11 @@ class Structure:
     pl: Pivot | None = None
     lo_class: int = 0
     replace_lo: bool = False
+    last_mss_s: int | None = None
+
+    @property
+    def epoch(self):
+        return self.closed_s if abs(self.event_code) == 2 else self.last_mss_s
 
     @property
     def phase(self):
@@ -188,5 +193,18 @@ class InternalStructure:
                     lc, rl = 1, self.has_pull_l
                     self.has_pull_l, self.has_hi = True, False
                 self.pull_l = pl
-        self.view = Structure(closed, d, ev, level, self.guard, ph, hc, rh, pl, lc, rl)
+        self.view = Structure(
+            closed,
+            d,
+            ev,
+            level,
+            self.guard,
+            ph,
+            hc,
+            rh,
+            pl,
+            lc,
+            rl,
+            closed if abs(ev) == 2 else self.view.epoch,
+        )
         return self.view
