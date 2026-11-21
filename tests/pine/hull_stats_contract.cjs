@@ -1,5 +1,8 @@
 // Code contracts only. All candles below are hand-built; no downloads or market study.
 // PineTS 0.13.1: PINETS_MODULE=/path/to/pinets node tests/pine/hull_stats_contract.cjs
+// The harness checks the real lower-TF request on each native TF and projected
+// counter snapshots separately. PineTS short-circuits secondary nested requests;
+// this is not a test of TradingView's engine or an exchange's historical tape.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -18,8 +21,8 @@ function aggregate(b, n) {
   }
   return out;
 }
-async function run(text, bars, tf='15', inputs={}, symbol=sym) {
-  const provider = {getMarketData:async(_s,t)=>aggregate(bars, +t/15), getSymbolInfo:async()=>symbol, configure(){}};
+async function run(text, bars, tf='15', inputs={}, symbol=sym, minutes=[]) {
+  const provider = {getMarketData:async(_s,t)=>+t<15?aggregate(minutes,+t):aggregate(bars, +t/15), getSymbolInfo:async()=>symbol, configure(){}};
   return new PineTS(provider,symbol.tickerid,tf,Math.floor(bars.length*15/+tf)).run(new Indicator(text,inputs));
 }
 const vals=(x,key)=>x.plots[key].data.map(q=>q.value);
@@ -58,15 +61,15 @@ async function levels() {
   const cases=[
     [100,100,100,100,true,false,0,4,0], [100,102,100,102,true,false,0,4,0],
     [100,102,100,100,true,false,0,4,-1], [99,106,99,105,true,true,0,4,-1],
-    [104,106,99,105,true,true,0,4,1], [101,105,100,104,true,true,0,4,-1],
+    [104,106,99,105,true,true,0,4,1], [101,105,100,104,true,true,0,4,2],
     [101,105,101,104,true,true,0,4,1], [101,102,101,102,true,true,-1,4,-2],
     [101,105,101,104,true,true,-1,4,1], [100,103,97,101,false,false,0,4,0],
     [100,105,97,101,false,false,0,4,1], [100,100,100,100,true,true,0,4,-1],
-    [100,101,100,100,true,false,0,1,1], [100,106,100,104,true,false,0,4,-1]
+    [100,101,100,100,true,false,0,1,1], [100,106,100,104,true,false,0,4,2]
   ];
   for (const d of [1,-1]) {
     const ohlc=cases.map(x=>x.slice(0,4));
-    const text=nativeCode+`\nplot(f_exit(${d},100,${choose(cases.map(x=>x[7]))},${choose(cases.map(x=>x[4]))},${choose(cases.map(x=>x[5]))},${choose(cases.map(x=>d*x[6]))}),"decision")\n`;
+    const text=nativeCode+`\n[probeExit,_,_,_]=f_exit(${d},100,${choose(cases.map(x=>x[7]))},${choose(cases.map(x=>x[4]))},${choose(cases.map(x=>x[5]))},false,${choose(cases.map(x=>d*x[6]))},array.new<MinutePrint>())\nplot(probeExit,"decision")\n`;
     assert.deepEqual(vals(await run(text,timed(d===1?ohlc:mirror(ohlc))), 'decision'),cases.map(x=>x[8]));
   }
   for (const [symbol,opts,want] of [
@@ -74,6 +77,11 @@ async function levels() {
     [{...sym,basecurrency:'EUR',mintick:.00001},{lots:.01,cash:1},100],
     [{...sym,type:'futures',mintick:.25,pointvalue:50},{lots:2,cash:51},3],
     [{...sym,currency:'JPY'},{lots:.2,cash:1.01,usdTick:2.5},3],
+    [{...sym},{lots:1,cash:.07,usdTick:.01},7], // 0.07 / 0.01 has a binary float tail
+    [{...sym},{lots:1,cash:.0701,usdTick:.01},8],
+    // Distinct broker tick, chart tick and display point; never infer a CFD contract from its name.
+    [{...sym,type:'cfd',mintick:.1},{lots:1,cash:5,usdTick:1,brokerTickSize:.2},10],
+    [{...sym,type:'cfd',mintick:.1},{lots:1,cash:.01,usdTick:2,brokerTickSize:.01},1],
   ]) {
     const ctx=await run(nativeCode+'\nplot(f_ticks(),"ticks")',timed([[100,101,99,100]]),'15',opts,symbol);
     assert.equal(vals(ctx,'ticks')[0],want);
@@ -81,15 +89,16 @@ async function levels() {
 }
 async function score() {
   const ohlc=[[99,101,98,99],[99,112,88,100],[100,108,90,105],[105,111,100,103],[103,105,97,100],[99,99,89,95],[95,99,93,98],[98,100,97,99],[99,120,77,100]];
-  const text=nativeCode+`\nint qSignal=${choose([1,1,0,-1,-1,1,-1,1,0])}\nint qBias=${choose([-1,1,1,1,-1,1,1,1,1])}\nRow q=f_score(qSignal,qBias,10,true)\n`+['wins','losses','beLosses','side','points'].map(k=>`plot(q.${k},"${k}")`).join('\n');
+  const text=nativeCode+`\nint qSignal=${choose([1,1,0,-1,-1,1,-1,1,0])}\nint qBias=${choose([-1,1,1,1,-1,1,1,1,1])}\nRow q=f_score(qSignal,qBias,10,true,array.new<MinutePrint>())\n`+['wins','losses','unknown','beLosses','side','points'].map(k=>`plot(q.${k},"${k}")`).join('\n');
   const x=await run(text,timed(ohlc),'15',{...controls,bePct:50,pointIn:.25,endAt:start+8*step});
   assert.deepEqual(vals(x,'wins'),     [0,0,0,0,0,1,1,1,1]);
-  assert.deepEqual(vals(x,'losses'),   [0,0,0,1,1,1,2,2,2]);
-  assert.deepEqual(vals(x,'beLosses'), [0,0,0,1,1,1,1,1,1]);
+  assert.deepEqual(vals(x,'losses'),   [0,0,0,0,0,0,1,1,1]);
+  assert.deepEqual(vals(x,'unknown'),  [0,0,0,1,1,1,1,1,1]);
+  assert.deepEqual(vals(x,'beLosses'), [0,0,0,0,0,0,0,0,0]);
   assert.deepEqual(vals(x,'side'),     [0,1,1,0,-1,1,0,1,1]);
   assert.equal(vals(x,'points').at(-1),40);
 }
-const fields=['wins','losses','beLosses','side','points','asianW','asianN','londonW','londonN','nyW','nyN','kzW','kzN'];
+const fields=['wins','losses','beLosses','side','points','asianW','asianN','londonW','londonN','nyW','nyN','kzW','kzN','unknown','asianU','londonU','nyU','kzU','mixedLoss','fineBars','coarseBars','heldSignals'];
 const plots=fields.map(k=>`plot(q.${k},"${k}")`).join('\n');
 const dateBar=(closeTime,[open=100,high=101,low=99,close=100]=[])=>({openTime:closeTime-step,closeTime,open,high,low,close,volume:1});
 const date=(iso)=>Date.parse(iso+'Z');
@@ -122,7 +131,7 @@ async function attribution(){
   const closeAt=['06:45','08:00','13:00','16:00','22:00','23:00','23:45'];
   const price=[[100,102,98,100],[100,111,99,105],[105,106,101,102],[102,113,101,111],[111,114,105,110],[110,120,108,118],[118,120,116,118]];
   const bars=closeAt.map((h,i)=>dateBar(date('2024-01-02T'+h),price[i]));
-  const text=nativeCode+`\nint signal0=${choose([1,-1,1,-1,1,0,1])}\nRow q=f_score(signal0,signal0,10,true)\n`+plots;
+  const text=nativeCode+`\nint signal0=${choose([1,-1,1,-1,1,0,1])}\nRow q=f_score(signal0,signal0,10,true,array.new<MinutePrint>())\n`+plots;
   const x=await run(text,bars,'15',{...controls,bePct:100});
   const want={wins:[0,1,1,2,2,3,3],losses:[0,0,1,1,2,2,2],side:[1,-1,1,-1,1,0,1],beLosses:[0,0,0,0,0,0,0],
     asianW:[0,1,1,1,1,1,1],asianN:[0,1,1,1,1,1,1],londonW:[0,0,0,1,1,1,1],londonN:[0,0,1,2,2,2,2],
@@ -149,22 +158,23 @@ async function timeframes(){
     });
     if(tf==='15')assert(firsts>0,'fixture must actually see a first aligned cross after MSS');
   }
-  const pair=(r,g)=>g==='all'?[r.wins,r.wins+r.losses]:[r[g+'W'],r[g+'N']];
-  const value=(w,n)=>n?(100*w/n).toFixed(1)+'% ('+n+')':'— (0)';
+  const pair=(r,g)=>g==='all'?[r.wins,r.wins+r.losses+r.unknown,r.unknown]:[r[g+'W'],r[g+'N'],r[g+'U']];
+  const value=(w,n,u)=>!n?'— (0)':(u?((Math.floor(1000*w/n)/10).toFixed(1)+'–'+(Math.ceil(1000*(w+u)/n)/10).toFixed(1)):(100*w/n).toFixed(1))+'% ('+n+')';
   for(const host of ['15','30','45','90']){
     const table=(await run(code,bars,host,cfg)).plots.__tables__.data[0].value[0];
-    assert.deepEqual([table.columns,table.rows],[5,8]);
+    assert.deepEqual([table.columns,table.rows],[5,10]);
     const txt=table.cells.map(row=>row.map(c=>c.text));
     assert.deepEqual(txt[0],['Win rate (n)','15m','30m','45m','All TFs']);
     assert.deepEqual(txt.slice(1,6).map(r=>r[0]),['Overall','Asian','London','New York','NY–London KZ']);
     ['all','asian','london','ny','kz'].forEach((key,j)=>{
-      const pairs=expected.map(r=>pair(r,key));
-      pairs.forEach(([w,n],i)=>assert.equal(txt[j+1][i+1],value(w,n),host+'/'+key+'/'+i));
-      assert.equal(txt[j+1][4],value(pairs.reduce((s,q)=>s+q[0],0),pairs.reduce((s,q)=>s+q[1],0)),key+' pooled');
+      const groups=expected.map(r=>pair(r,key));
+      groups.forEach((v,i)=>assert.equal(txt[j+1][i+1],value(...v),host+'/'+key+'/'+i));
+      assert.equal(txt[j+1][4],value(...[0,1,2].map(i=>groups.reduce((s,q)=>s+q[i],0))),key+' pooled');
     });
     expected.forEach((r,i)=>{
-      assert.equal(txt[6][i+1],r.wins+' / '+r.losses);
-      assert.equal(txt[7][i+1],r.points+' · '+(r.side===1?'BUY':r.side===-1?'SELL':'flat'));
+      assert.equal(txt[6][i+1],r.wins+' / '+r.losses+' / '+r.unknown);
+      assert.equal(txt[7][i+1],r.fineBars+r.coarseBars===0?'—':'0.0%');
+      assert.equal(txt[9][i+1].replace('?',''),r.side===1?'BUY':r.side===-1?'SELL':'flat');
     });
   }
   // PineTS does not implement general recursive security(); verify each chosen
@@ -181,16 +191,164 @@ async function timeframes(){
     });
   }
 }
-async function pooling(){
-  const stub=code.slice(0,code.lastIndexOf('if barstate.islast'));
-  const r=(w,l,ok)=>`Row.new(time_close, ${w}, ${l}, 0, 0, na, na, 10, ${ok}, true, 0, 0, 0, 0, 0, 0, 0, 0)`;
-  for(const [ok,expect] of [[true,'25.0% (12)'],[false,'n/a']]){
-    const text=stub+`if barstate.islast\n    f_panel(${r(1,0,true)},${r(1,8,true)},${r(1,1,ok)})\n`;
-    // Table-only fixture: no use of extra security contexts is needed here.
-    const x=await run(text.replace(/Row book = f_study\(\)[\s\S]*?(?=f_closed\()/,''),timed([[100,101,99,100]]));
+// Independent first-exit oracle. Enumerate all reachable print histories on a
+// small price grid (arbitrary jumps and repeated prints), group by observed OHLC,
+// then compare the Pine decision to the SET of possible outcomes, not one path.
+async function pathOracle(){
+  const grid=[-1,0,1,2,3], modes=[[false,false,false],[false,true,false],[true,false,false],[true,true,false],[true,true,true]];
+  const shapes=[];for(const o of grid)for(const l of grid)for(const h of grid)for(const c of grid)if(l<=Math.min(o,c)&&h>=Math.max(o,c))shapes.push([o,h,l,c]);
+  const cases=[],expected=[];
+  for(const d of [1,-1])for(const goal of [1,2,3])for(const [armed,left0,priorStop] of modes){
+    const all=new Map();
+    // status: 0=still held, 1=target, -1=protection. Quotes keep printing
+    // after an exit, so the eventual market H/L/C need not be exit levels.
+    function tick(p,s,left){return s!==0?s:p>=goal?1:armed&&(p<0||p===0&&left)?-1:0;}
+    for(const o of grid){
+      const queue=[[o,o,o,tick(o,0,left0),left0||o!==0]],seen=new Set();
+      for(let j=0;j<queue.length;j++){
+        const [h,l,c,s,left]=queue[j],k=queue[j].join('/');if(seen.has(k))continue;seen.add(k);
+        const shape=[o,h,l,c].join('/');if(!all.has(shape))all.set(shape,new Set());all.get(shape).add(s);
+        for(const p of grid)queue.push([Math.max(h,p),Math.min(l,p),p,tick(p,s,left),left||p!==0]);
+      }
+    }
+    for(const shape of shapes){
+      const paths=all.get(shape.join('/'));if(priorStop)paths.add(-1);
+      assert(!(paths.has(0)&&paths.has(1)), 'A seen TP cannot leave an open path');
+      const e=paths.has(0)?0:paths.size===2?2:[...paths][0];
+      const away=left0||shape[1]!==0||shape[2]!==0;
+      expected.push([e,Number(away),Number(paths.has(-1))]);
+      const row=shape.map(p=>100+p);cases.push(d===1?row:mirror([row])[0]);
+    }
+  }
+  const funcs=code.slice(code.indexOf('f_grid('),code.indexOf('// Reject partial,'));
+  const probe=`//@version=6\nindicator("QA")\nconst int TAKE=1\nconst int BE=-1\nconst int UNCLEAR=2\n`+funcs+`
+int stage = int(math.floor(bar_index / ${shapes.length}))
+int mode = stage % 5
+int goal = int(math.floor((stage % 15) / 5)) + 1
+[ex,away,maybe] = f_piece(stage < 15 ? 1 : -1,100,goal,mode >= 2,mode == 1 or mode >= 3,mode == 4,open,high,low,close)
+plot(ex,"x")
+plot(away ? 1 : 0,"left")
+plot(maybe ? 1 : 0,"maybe")`;
+  const x=await run(probe,timed(cases)),es=vals(x,'x'),as=vals(x,'left'),ms=vals(x,'maybe');
+  expected.forEach(([e,a,m],i)=>{assert.equal(es[i],e,'exit at synthetic state '+i);if(e===0)assert.deepEqual([as[i],ms[i]],[a,m],'held state '+i);});
+  return expected.length;
+}
+// Equal parent OHLC, different timed 1m paths. Never infer a path from the parent.
+async function fineAudit(){
+  const startAt = Date.UTC(2024,0,2,15), ms=60000;
+  const seed=[[100,110,90,100]];
+  const win=[[101,104,101,104],[104,106,99,105]];
+  const loss=[[101,103,99,101],[101,106,101,105]];
+  const tie=[[101,106,99,105]];
+  const results=nativeCode+`\narray<MinutePrint> zz=f_slices()\nint ss=SIGNALS\nRow q=f_score(ss,ss,4,true,zz)\n`+plots+'\nplot(q.exitCode,"exitCode")\nplot(q.possibleBE ? 1 : 0,"maybe")\nplot(q.entered ? 1 : 0,"entered")';
+  const cfg={...controls,bePct:0,inspectTF:'1'};
+  function tape(tf,d,patterns){
+    const rows=patterns.flatMap(part=>{
+      const end=part.at(-1)[3]; return part.concat(Array.from({length:tf-part.length},()=>[end,end,end,end]));
+    });
+    return (d===1?rows:mirror(rows)).map(([open,high,low,close],i)=>({openTime:startAt-tf*ms+i*ms,closeTime:startAt-tf*ms+(i+1)*ms,open,high,low,close,volume:1}));
+  }
+  async function exec(tf,d,patterns,signals,opts={},change=(m)=>m){
+    const mins=tape(tf,d,patterns),root=aggregate(mins,15);
+    const ctx=await run(results.replace('SIGNALS',choose(signals.map(v=>d*v))),root,String(tf),{...cfg,...opts},sym,change(mins));
+    return Object.fromEntries([...fields,'exitCode','maybe','entered'].map(k=>[k,vals(ctx,k)]));
+  }
+  for(const tf of [15,30,45])for(const d of [1,-1]){
+    for(const [seq,verdict] of [[win,1],[loss,-1],[tie,2]]) {
+      const x=await exec(tf,d,[seed,seq],[1,0]);
+      assert.deepEqual(x.entered,[1,0]); assert.deepEqual(x.exitCode,[0,verdict],`${tf}m ${d} timed path ${verdict}`);
+      assert.deepEqual(x.fineBars,[0,1]);assert.deepEqual(x.coarseBars,[0,0]);
+      for(const [k,v] of Object.entries({wins:+(verdict===1),losses:+(verdict<0),beLosses:+(verdict===-1),unknown:+(verdict===2),kzN:1,kzU:+(verdict===2),kzW:+(verdict===1),londonN:1,nyN:1,asianN:0}))assert.equal(x[k][1],v,k);
+    }
+  }
+  // Missing start/interior/end or a disagreement with the parent invalidates
+  // the WHOLE minute sequence before even the first apparent hit is trusted.
+  const tf=15;
+  for(const bad of [m=>[], m=>m.filter((_,i)=>i!==tf),m=>m.filter((_,i)=>i!==tf+7),m=>m.slice(0,-1),m=>m.map((v,i)=>i===tf+8?{...v,high:119}:v)]){
+    const x=await exec(tf,1,[seed,win],[1,0],{},bad);
+    assert.deepEqual(x.exitCode,[0,2]);assert.deepEqual(x.fineBars,[0,0]);assert.deepEqual(x.coarseBars,[0,1]);
+  }
+  for(const d of [1,-1]){
+    // This is the user's O=low=entry, high>TP example. A sub-bar gap at TP
+    // proves a win; a proven pre-TP return proves a loss. Identical native OHLC.
+    const straight=[[100,100,100,100],[104,108,104,106]];
+    const retest=[[100,102,100,100],[100,108,100,106]];
+    const one=[[100,108,100,106]];
+    for(const [p,e] of [[straight,1],[retest,-1],[one,2]]){
+      const x=await exec(15,d,[seed,p],[1,0]); assert.deepEqual(x.exitCode,[0,e]);
+    }
+    // Low at unchanged entry could be just the opening print. Do not force
+    // a loss, but do not erase the possible earlier BE and invent a later win.
+    const maybe=[[100,102,100,102]];
+    for(const [after,finalSig,e] of [[[[105,106,105,106]],0,2],[[[100,106,99,105]],0,-1],[[[102,103,101,102]],-1,-3]]){
+      const x=await exec(15,d,[seed,maybe,after],[1,1,finalSig]);
+      assert.deepEqual(x.maybe,[0,1,0]);assert.deepEqual(x.heldSignals,[0,1,1]);
+      assert.deepEqual(x.exitCode,[0,0,e]);assert.deepEqual(x.mixedLoss,[0,0,+(e===-3)]);
+      assert.equal(x.side.at(-1),finalSig*d || 0); // opposite can reverse on that close
+    }
+    const atEnd=await exec(15,d,[seed,maybe,win],[1,0,0],{endAt:startAt+15*ms});
+    assert.equal(atEnd.maybe.at(-1),1);assert.equal(atEnd.side.at(-1),d);
+    assert.equal(atEnd.wins.at(-1)+atEnd.losses.at(-1)+atEnd.unknown.at(-1),0);
+    // A 1m close at +3 cannot arm a 50% BE before the signal candle closes.
+    const subWick=await exec(15,d,[seed,[[100,103,99,103],[103,105,98,100]]],[1,0],{bePct:50});
+    assert.deepEqual(subWick.exitCode,[0,1]);
+    const armed=await exec(15,d,[seed,[[100,103,99,102]],[[100,105,99,105]]],[1,0,0],{bePct:50});
+    assert.deepEqual(armed.exitCode,[0,0,-1]);
+  }
+  // The alternate 5m audit really reads those candles; if both events fall in
+  // the same 5m slice, it correctly knows less than the 1m audit.
+  const coarseFive=await exec(15,1,[seed,win],[1,0],{inspectTF:'5'});
+  assert.deepEqual(coarseFive.fineBars,[0,1]); assert.deepEqual(coarseFive.exitCode,[0,2]);
+}
+async function priceExample(){
+  // Fabricated 25,000 feed. Explicit broker: $1 per 1.00 price move at one lot.
+  // Entry candle's extreme cannot close its own trade. Same next 15m candle,
+  // three different tapes. A different contract intentionally moves the goal.
+  const instrument={...sym,type:'cfd',tickerid:'QA:INDEX',basecurrency:'',mintick:.1,pricescale:10,minmove:1};
+  const probe=code.slice(0,code.lastIndexOf('if barstate.islast'))
+    .replace(/Row book = f_study\(\)[\s\S]*?(?=f_closed\()/,'int planted = bar_index == 0 ? 1 : 0\nRow book = f_score(planted, planted, f_ticks(), true, f_slices())\n');
+  const panelCode=probe+'\nif barstate.islast\n    f_panel(book,book,book)\nplot(book.entry,"ep")\nplot(book.target,"tp")\nplot(book.points,"pp")\nplot(book.exitCode,"verdict")\n';
+  const opts={usdTick:1,brokerTickSize:1,pointIn:.1,lots:1,cash:5,auditMarks:true};
+  const fill=Array.from({length:15},()=>[25000,25010,24990,25000]);
+  const tapes=[
+    [[[25000,25000,25000,25000],[25005,25008,25005,25006]],1],
+    [[[25000,25002,25000,25000],[25000,25008,25000,25006]],-1],
+    [[[25000,25008,25000,25006]],2],
+  ];
+  function minuteBars(r){return r.map(([open,high,low,close],i)=>({openTime:start+i*60000,closeTime:start+(i+1)*60000,open,high,low,close,volume:1}));}
+  for(const [piece,e] of tapes){
+    const mins=minuteBars(fill.concat(piece,Array.from({length:15-piece.length},()=>[25006,25006,25006,25006])));
+    const x=await run(panelCode,aggregate(mins,15),'15',opts,instrument,mins);
+    assert.deepEqual(vals(x,'ep'),[25000,25000]);assert.deepEqual(vals(x,'tp'),[25005,25005]);assert.deepEqual(vals(x,'pp'),[50,50]);
+    assert.deepEqual(vals(x,'verdict'),[0,e]);
     const cells=x.plots.__tables__.data[0].value[0].cells;
-    assert.equal(cells[1][4].text,expect); // 3/12, not (100 + 11.1 + 50) / 3
+    assert.equal(cells[7][1].text,'100.0%'); assert.match(cells[8][1].text,/^5(?:\.0+)? \/ 50$/);
+    assert.deepEqual(vals(x,'Test entry at close'),[25000,NaN]);assert.deepEqual(vals(x,'Target for that test entry'),[25005,NaN]);
+    assert.deepEqual(vals(x,'Test: unknown TP/BE order').map(Boolean),[false,e===2]);
+    assert.equal(cells[1][1].text,e===2?'0.0–100.0% (1)':e===1?'100.0% (1)':'0.0% (1)');
+  }
+  const mins=minuteBars(fill.concat(fill));
+  const x=await run(panelCode,aggregate(mins,15),'15',{...opts,usdTick:.5,pointIn:1},instrument,mins);
+  assert.equal(vals(x,'tp')[0],25010);assert.equal(vals(x,'pp')[0],10);
+  const table=(x)=>x.plots.__tables__.data[0].value[0].cells;
+  // Missing sizing at an otherwise eligible entry is NOT evidence of no trades.
+  for(const expr of ['int(na)','bar_index == 0 ? int(na) : 10']){
+    const bad=panelCode.replace('f_score(planted, planted, f_ticks(),','f_score(planted, planted, '+expr+',');
+    const c=table(await run(bad,aggregate(mins,15),'15',opts,instrument,mins));
+    assert.equal(c[1][1].text,'n/a');assert.equal(c[1][4].text,'n/a');assert.equal(c[8][1].text,'Set tick $');
+  }
+  const outside=table(await run(panelCode,aggregate(mins,15),'15',{...opts,startAt:start+86400000},instrument,mins));
+  assert.equal(outside[1][1].text,'n/a');assert.equal(outside[8][1].text,'n/a');
+}
+async function pooling(){
+  const stub=code.slice(0,code.lastIndexOf('if barstate.islast')).replace(/Row book = f_study\(\)[\s\S]*?(?=f_closed\()/,'Row book = Row.new()\n');
+  const r=(w,l,u,ok)=>`Row.new(time_close, ${w}, ${l}, 0, 0, na, na, 10, ${ok}, true, 0, 0, 0, 0, 0, 0, 0, 0, ${u}, 0, 0, 0, 0, 0, 0, 0, false, 0, time_close, time_close, false, 0)`;
+  for(const [ok,u,expect] of [[true,0,'25.0% (12)'],[true,1,'25.0–33.4% (12)'],[false,0,'n/a']]){
+    const text=stub+`if barstate.islast\n    f_panel(${r(1,0,0,true)},${r(1,8-u,u,true)},${r(1,1,0,ok)})\n`;
+    const x=await run(text,timed([[100,101,99,100]]));
+    const cells=x.plots.__tables__.data[0].value[0].cells;
+    assert.equal(cells[1][4].text,expect);
     assert.equal(cells[2][4].text,ok?'— (0)':'n/a');
   }
 }
-(async()=>{await defaultHullLength();await levels();await score();await clocks();await attribution();await timeframes();await pooling();console.log('PASS: synthetic Pine contracts for sessions, DST, immutable entry attribution, pooled counts, valid post-MSS crosses and native timeframe calculations.');})().catch(e=>{console.error(e.stack||e);process.exitCode=1;});
+(async()=>{await defaultHullLength();await levels();await score();await clocks();await attribution();const histories=await pathOracle();await fineAudit();await priceExample();await timeframes();await pooling();console.log('PASS: '+histories+' exhaustive discrete OHLC/state cases, Hull/16, timestamped lower-bar exits, ambiguous/open paths, coverage fallback, ordered reversals, session tags, pooling and bounds (fabricated candles only).');})().catch(e=>{console.error(e.stack||e);process.exitCode=1;});
