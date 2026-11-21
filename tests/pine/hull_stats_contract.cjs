@@ -55,7 +55,7 @@ async function levels() {
 }
 async function score() {
   const ohlc=[[99,101,98,99],[99,112,88,100],[100,108,90,105],[105,111,100,103],[103,105,97,100],[99,99,89,95],[95,99,93,98],[98,100,97,99],[99,120,77,100]];
-  const text=nativeCode+`\nint qSignal=${choose([1,1,0,-1,-1,1,-1,1,0])}\nint qBias=${choose([1,1,1,-1,-1,1,1,1,1])}\nbool qSkip=${choose([true,false,false,true,false,false,false,false,false])}\nRow q=f_score(qSignal,qBias,qSkip,10,true)\n`+['wins','losses','beLosses','side','points'].map(k=>`plot(q.${k},"${k}")`).join('\n');
+  const text=nativeCode+`\nint qSignal=${choose([1,1,0,-1,-1,1,-1,1,0])}\nint qBias=${choose([-1,1,1,1,-1,1,1,1,1])}\nRow q=f_score(qSignal,qBias,10,true)\n`+['wins','losses','beLosses','side','points'].map(k=>`plot(q.${k},"${k}")`).join('\n');
   const x=await run(text,timed(ohlc),'15',{...controls,bePct:50,pointIn:.25,endAt:start+8*step});
   assert.deepEqual(vals(x,'wins'),     [0,0,0,0,0,1,1,1,1]);
   assert.deepEqual(vals(x,'losses'),   [0,0,0,1,1,1,2,2,2]);
@@ -63,51 +63,108 @@ async function score() {
   assert.deepEqual(vals(x,'side'),     [0,1,1,0,-1,1,0,1,1]);
   assert.equal(vals(x,'points').at(-1),40);
 }
-async function timeframes() {
+const fields=['wins','losses','beLosses','side','points','asianW','asianN','londonW','londonN','nyW','nyN','kzW','kzN'];
+const plots=fields.map(k=>`plot(q.${k},"${k}")`).join('\n');
+const dateBar=(closeTime,[open=100,high=101,low=99,close=100]=[])=>({openTime:closeTime-step,closeTime,open,high,low,close,volume:1});
+const date=(iso)=>Date.parse(iso+'Z');
+
+async function clocks() {
+  // Time is a fill instant, not the open of its containing 15/30/45m bar.
+  const points=[
+    ['2024-01-02T00:00','1000'],['2024-01-02T06:59','1000'],['2024-01-02T07:00','0000'],
+    ['2024-01-02T08:00','0100'],['2024-01-02T12:59','0100'],['2024-01-02T13:00','0111'],
+    ['2024-01-02T15:59','0111'],['2024-01-02T16:00','0010'],['2024-01-02T22:00','0000'],
+    // US has switched; UK has not. London and NY overlap before the killzone starts.
+    ['2024-03-18T12:00','0110'],['2024-03-18T13:00','0111'],
+    // Both in daylight time: the same local windows occur an hour earlier in UTC.
+    ['2024-07-01T07:00','0100'],['2024-07-01T12:00','0111'],['2024-07-01T15:00','0010'],
+    ['2024-07-01T21:00','0000'],
+  ];
+  const probe=nativeCode+'\n[a0,l0,n0,k0]=f_tags(time_close)\n'+['a0','l0','n0','k0'].map(v=>`plot(${v} ? 1 : 0,"${v}")`).join('\n');
+  let x=await run(probe,points.map(([stamp])=>dateBar(date(stamp))));
+  const tags=(ctx,i)=>['a0','l0','n0','k0'].map(k=>vals(ctx,k)[i]).join('');
+  points.forEach(([stamp,mask],i)=>assert.equal(tags(x,i),mask,stamp));
+  // User-edited overnight / full-day windows; a wide KZ cannot label NY-only hours.
+  const custom=[['2024-01-02T00:00','1000'],['2024-01-02T02:00','0000'],['2024-01-02T13:00','0111'],['2024-01-02T16:00','0010'],['2024-01-02T22:00','1000']];
+  x=await run(probe,custom.map(([stamp])=>dateBar(date(stamp))),'15',{asianHours:'2200-0200',kzHours:'0000-0000'});
+  custom.forEach(([stamp,mask],i)=>assert.equal(tags(x,i),mask,stamp));
+}
+async function attribution(){
+  // Each OLD position resolves before a new one takes the same close. Includes
+  // an outside-session win, an unresolved trade, two profitable opposite-signal losses,
+  // and entries exactly at London open, overlap start, London close and NY close.
+  const closeAt=['06:45','08:00','13:00','16:00','22:00','23:00','23:45'];
+  const price=[[100,102,98,100],[100,111,99,105],[105,106,101,102],[102,113,101,111],[111,114,105,110],[110,120,108,118],[118,120,116,118]];
+  const bars=closeAt.map((h,i)=>dateBar(date('2024-01-02T'+h),price[i]));
+  const text=nativeCode+`\nint signal0=${choose([1,-1,1,-1,1,0,1])}\nRow q=f_score(signal0,signal0,10,true)\n`+plots;
+  const x=await run(text,bars,'15',{...controls,bePct:100});
+  const want={wins:[0,1,1,2,2,3,3],losses:[0,0,1,1,2,2,2],side:[1,-1,1,-1,1,0,1],beLosses:[0,0,0,0,0,0,0],
+    asianW:[0,1,1,1,1,1,1],asianN:[0,1,1,1,1,1,1],londonW:[0,0,0,1,1,1,1],londonN:[0,0,1,2,2,2,2],
+    nyW:[0,0,0,1,1,1,1],nyN:[0,0,0,1,2,2,2],kzW:[0,0,0,1,1,1,1],kzN:[0,0,0,1,1,1,1]};
+  for(const [key,v] of Object.entries(want))assert.deepEqual(vals(x,key),v,key);
+}
+async function timeframes(){
   const cycle=[100,103,99,102,104,105,107,105,103,108,109,111,102,101,100,98,106,101,99,97,96,107,108,110];
   let last=100;
-  const bars=timed(Array.from({length:150},(_,i)=>{let c=cycle[i%cycle.length], o=last;last=c;return [o,Math.max(c,o)+1,Math.min(c,o)-1,c]}));
-  const expected={};
-  for (const tf of ['15','30','45']) {
-    const text=nativeCode+'\nRow q = f_study()\nplot(q.wins,"win")\nplot(q.losses,"loss")\nplot(q.side,"side")\nplot(epoch,"epoch")\nplot(raw,"raw")\nplot(dir,"context")\nplot(skipped ? 1 : 0,"skip")\n';
-    const x=await run(text,bars,tf,controls);
-    expected[tf]=['win','loss','side'].map(k=>vals(x,k).at(-1));
-    let used=NaN;
-    const epochs=vals(x,'epoch'),bias=vals(x,'context'),excluded=vals(x,'skip'),b=vals(x,'BUY'),s=vals(x,'SELL');
+  const bars=timed(Array.from({length:150},(_,i)=>{let c=cycle[i%cycle.length],o=last;last=c;return [o,Math.max(c,o)+1,Math.min(c,o)-1,c]}));
+  const expected=[],cfg={...controls,bePct:50};
+  for(const tf of ['15','30','45']){
+    const text=nativeCode+'\nRow q=f_study()\n'+plots+'\nplot(raw,"raw")\nplot(native.eventCode,"ev")\nplot(dir,"ctx")';
+    const x=await run(text,bars,tf,cfg);
+    expected.push(Object.fromEntries(fields.map(k=>[k,vals(x,k).at(-1)])));
+    const bias=vals(x,'ctx'),ev=vals(x,'ev'),buy=vals(x,'BUY'),sell=vals(x,'SELL'),held=vals(x,'side');
+    let pending=false,firsts=0;
     vals(x,'raw').forEach((d,i)=>{
-      const candidate=d!==0 && d===bias[i];
-      const skip=candidate && Number.isFinite(epochs[i]) && epochs[i]!==used;
-      if(skip) used=epochs[i];
-      assert.equal(!!excluded[i],skip);
-      assert.equal(!!b[i],candidate && !skip && d===1);
-      assert.equal(!!s[i],candidate && !skip && d===-1);
+      if(Math.abs(ev[i])===2)pending=true;
+      const aligned=d!==0 && d===bias[i];
+      assert.equal(!!buy[i],aligned && d===1);
+      assert.equal(!!sell[i],aligned && d===-1);
+      if(aligned && pending){ if(!i || held[i-1]!==d)firsts++;pending=false;assert(buy[i]||sell[i]);assert.equal(held[i],d); }
     });
-    if(tf==='15')assert(excluded.includes(1));
+    if(tf==='15')assert(firsts>0,'fixture must actually see a first aligned cross after MSS');
   }
-  for (const tf of ['15','30','45','90']) {
-    const table=(await run(code,bars,tf,controls)).plots.__tables__.data[0].value[0];
-    assert.deepEqual([table.columns,table.rows],[7,4]);
-    table.cells.slice(1).forEach((row,i)=>{
-      const cells=row.map(cell=>cell.text), lane=['15','30','45'][i];
-      const [w,l,s]=expected[lane];
-      assert.deepEqual([cells[0], +cells[1], +cells[2], +cells[3], cells[6]],[lane+'m',w+l,w,l,s===1?'BUY':s===-1?'SELL':'—'],tf+' host / '+lane+' native');
-      if (w+l) assert.equal(parseFloat(cells[4]),+((100*w/(w+l)).toFixed(1)));
+  const pair=(r,g)=>g==='all'?[r.wins,r.wins+r.losses]:[r[g+'W'],r[g+'N']];
+  const value=(w,n)=>n?(100*w/n).toFixed(1)+'% ('+n+')':'— (0)';
+  for(const host of ['15','30','45','90']){
+    const table=(await run(code,bars,host,cfg)).plots.__tables__.data[0].value[0];
+    assert.deepEqual([table.columns,table.rows],[5,8]);
+    const txt=table.cells.map(row=>row.map(c=>c.text));
+    assert.deepEqual(txt[0],['Win rate (n)','15m','30m','45m','All TFs']);
+    assert.deepEqual(txt.slice(1,6).map(r=>r[0]),['Overall','Asian','London','New York','NY–London KZ']);
+    ['all','asian','london','ny','kz'].forEach((key,j)=>{
+      const pairs=expected.map(r=>pair(r,key));
+      pairs.forEach(([w,n],i)=>assert.equal(txt[j+1][i+1],value(w,n),host+'/'+key+'/'+i));
+      assert.equal(txt[j+1][4],value(pairs.reduce((s,q)=>s+q[0],0),pairs.reduce((s,q)=>s+q[1],0)),key+' pooled');
+    });
+    expected.forEach((r,i)=>{
+      assert.equal(txt[6][i+1],r.wins+' / '+r.losses);
+      assert.equal(txt[7][i+1],r.points+' · '+(r.side===1?'BUY':r.side===-1?'SELL':'flat'));
     });
   }
-  // PineTS does not implement general recursive security(); verify each override
-  // directly at its signal-TF boundary, in both directions, versus the drawing clock.
-  for(const [tf,override] of [['15','45'],['45','15']]) {
-    const extra='\nvar int qBias=0\nvar int qShift=na\nif not na(studyFrame) and studyFrame.closedAt <= studyAsOf\n    qBias:=studyFrame.bias\n    qShift:=studyFrame.lastMSS\nplot(qBias,"qb")\nplot(qShift,"qs")\nplot(dir,"cd")\nplot(epoch,"ce")\n';
-    const x=await run(nativeCode+extra,bars,tf,{...controls,tfIn:override});
-    assert.deepEqual(vals(x,'qb'),vals(x,'cd'));
-    assert.deepEqual(vals(x,'qs'),vals(x,'ce'));
-    const z=await run(nativeCode+'\nplot(native.bias,"b0")\nplot(native.lastMSS,"m0")',bars,override,controls);
-    const b=vals(z,'b0'),m=vals(z,'m0');
+  // PineTS does not implement general recursive security(); verify each chosen
+  // structure clock directly in both directions versus the native structure input.
+  for(const [tf,override] of [['15','45'],['45','15']]){
+    const extra='\nvar int qb=0\nvar int qs=na\nif not na(studyFrame) and studyFrame.closedAt <= studyAsOf\n    qb:=studyFrame.bias\n    qs:=studyFrame.closedAt\nplot(qb,"qb")\nplot(qs,"qs")\nplot(dir,"cd")\nplot(seen,"cs")';
+    const x=await run(nativeCode+extra,bars,tf,{...cfg,tfIn:override});
+    assert.deepEqual(vals(x,'qb'),vals(x,'cd'));assert.deepEqual(vals(x,'qs'),vals(x,'cs'));
+    const z=await run(nativeCode+'\nplot(native.bias,"b0")\nplot(native.closedAt,"t0")',bars,override,cfg);
+    const b=vals(z,'b0'),t=vals(z,'t0');
     vals(x,'qb').forEach((d,i)=>{
       const j=+tf<+override?Math.floor(i*(+tf)/(+override))-1:(i+1)*(+tf)/(+override)-1;
-      assert.equal(d,j<0?0:b[j]);
-      assert.equal(vals(x,'qs')[i],j<0?NaN:m[j]);
+      assert.equal(d,j<0?0:b[j]);assert.equal(vals(x,'qs')[i],j<0?NaN:t[j]);
     });
   }
 }
-(async()=>{await levels(); await score(); await timeframes(); console.log('PASS: synthetic pricing, long/short level ordering, BE arming, opposite exits, close-only sampling, first-after-MSS and native timeframe contracts.');})().catch(e=>{console.error(e.stack||e);process.exitCode=1;});
+async function pooling(){
+  const stub=code.slice(0,code.lastIndexOf('if barstate.islast'));
+  const r=(w,l,ok)=>`Row.new(time_close, ${w}, ${l}, 0, 0, na, na, 10, ${ok}, true, 0, 0, 0, 0, 0, 0, 0, 0)`;
+  for(const [ok,expect] of [[true,'25.0% (12)'],[false,'n/a']]){
+    const text=stub+`if barstate.islast\n    f_panel(${r(1,0,true)},${r(1,8,true)},${r(1,1,ok)})\n`;
+    // Table-only fixture: no use of extra security contexts is needed here.
+    const x=await run(text.replace(/Row book = f_study\(\)[\s\S]*?(?=f_closed\()/,''),timed([[100,101,99,100]]));
+    const cells=x.plots.__tables__.data[0].value[0].cells;
+    assert.equal(cells[1][4].text,expect); // 3/12, not (100 + 11.1 + 50) / 3
+    assert.equal(cells[2][4].text,ok?'— (0)':'n/a');
+  }
+}
+(async()=>{await levels();await score();await clocks();await attribution();await timeframes();await pooling();console.log('PASS: synthetic Pine contracts for sessions, DST, immutable entry attribution, pooled counts, valid post-MSS crosses and native timeframe calculations.');})().catch(e=>{console.error(e.stack||e);process.exitCode=1;});

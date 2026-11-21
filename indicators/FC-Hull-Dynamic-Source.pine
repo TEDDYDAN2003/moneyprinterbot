@@ -1,8 +1,8 @@
 //@version=6
-indicator("FC Dynamic Hull • 15 / 30 / 45", "FC Hull WR", overlay=false, dynamic_requests=true, max_bars_back=500, max_labels_count=500, max_lines_count=500)
+indicator("FC Dynamic Hull • Session Win Rates • 15 / 30 / 45", "FC Hull WR", overlay=false, dynamic_requests=true, max_bars_back=500, max_labels_count=500, max_lines_count=500)
 
 // Chart labels can appear intrabar. The table enters at confirmed native closes.
-// Skip the first aligned cross after a confirmed MSS/CHoCH, including on the flip close.
+// An aligned Hull cross may enter on or after a confirmed MSS/CHoCH; the shift alone is not an entry.
 // Raw opposite crosses still exit; an opposite close before TP/active BE is a loss.
 const string G = "Hull"
 int length = input.int(24, "Length", 2, 500, group=G)
@@ -15,7 +15,6 @@ bool swings = input.bool(true, "Show swings", group="Display")
 bool breaks = input.bool(true, "Show BOS / MSS", group="Display")
 int stripWidth = input.int(10, "Trend strip thickness", 1, 20, group="Display")
 string marks = input.string("Valid suggestions only", "Chart signals", options=["Valid suggestions only", "All Hull crosses"], group="Display", tooltip="All crosses is a reference view; it does not change entry alerts or the tester.")
-bool markSkip = input.bool(false, "Mark skipped first signal with ×", group="Display")
 const string T = "Win-rate table • one position per timeframe"
 float lots = input.float(0.10, "Lot size", minval=0.000001, group=T)
 float cash = input.float(10.0, "Target profit per trade (USD)", minval=0.01, group=T)
@@ -24,6 +23,13 @@ float pointIn = input.float(0.0, "Broker point size (0 = chart minimum tick)", m
 float bePct = input.float(0, "Arm break-even after close at % of TP (0 = immediate)", minval=0, maxval=100, step=1, group=T, tooltip="0: protect entry from the next candle. Above 0: arm after a confirmed favorable close reaches this fraction of the TP distance. The stop at entry applies from the following candle. A BE exit counts as a loss.")
 int startAt = input.time(0, "Test from", group=T, tooltip="Uses the available native history within the date window. Choose a common recent start to compare the same period.")
 int endAt = input.time(timestamp("31 Dec 2099 23:59 +0000"), "Test through", group=T)
+// Session labels are analytics only. They do not limit entries or exits.
+const string S = "Session statistics • entry time"
+string asianHours = input.session("0000-0700", "Asian (UTC)", group=S, tooltip="Start is included, end is excluded. Labels use the entry candle’s closing timestamp, not the exit bar. Overnight windows are supported.")
+string londonHours = input.session("0800-1600", "London (London time)", group=S, tooltip="Europe/London; follows UK daylight saving time.")
+string nyHours = input.session("0800-1700", "New York (New York time)", group=S, tooltip="America/New_York; follows US daylight saving time.")
+string kzHours = input.session("1300-1600", "NY–London killzone (London time)", group=S, tooltip="Counts entries inside this window while BOTH London and New York are open. Set 0000–0000 for their entire overlap. A trade can count in multiple session rows, but only once per timeframe in Overall.")
+
 color bull = #4CAF50
 color bear = #F23645
 color neutral = #9299A4
@@ -42,7 +48,6 @@ type Frame
     float pl
     int loClass
     bool replaceLo
-    int lastMSS
 
 // ── Market structure on native bars of the selected timeframe ──
 f_structure(simple int depth) =>
@@ -77,7 +82,6 @@ f_structure(simple int depth) =>
     var bool hasLegPullH = false
     var bool hasLegPullL = false
 
-    var int lastMSS = na
     int ev = 0
     int origin = na
     float level = na
@@ -104,8 +108,6 @@ f_structure(simple int depth) =>
             guard := na(pullH) ? lastH : pullH
             gt := na(pullH) ? lastHt : pullHt
 
-    if math.abs(ev) == 2
-        lastMSS := time_close
     if ev != 0
         dir := ev > 0 ? 1 : -1
         lastBreak := level
@@ -182,7 +184,7 @@ f_structure(simple int depth) =>
             pullL := pl
             pullLt := pt
 
-    Frame.new(time_close, dir, ev, origin, level, guard, pt, ph, hc, replaceHi, pl, lc, replaceLo, lastMSS)
+    Frame.new(time_close, dir, ev, origin, level, guard, pt, ph, hc, replaceHi, pl, lc, replaceLo)
 
 // Draw every confirmed chart/structure event, including nested lower-TF events.
 f_draw(Frame s, label activeHiLbl, label activeLoLbl) =>
@@ -237,9 +239,6 @@ f_hull(int bias) =>
     int raw = b > a and b[1] < prev ? 1 : b < a and b[1] > prev ? -1 : 0
     [raw, a, b, pick]
 
-f_first(int raw, int dir, int epoch, int used) =>
-    raw != 0 and raw == dir and not na(epoch) and (na(used) or used != epoch)
-
 // These context series are re-evaluated on each requested signal timeframe.
 // Chart (blank) means each row uses ITS OWN structure, not the host's direction.
 string structTF = tfIn == "" ? timeframe.period : tfIn
@@ -258,8 +257,7 @@ f_priorHigher() =>
             result := previous
     result
 Frame prevHigher = f_priorHigher()
-// On a finished signal bar, the last nested intrabar carries the most recent MSS
-// even if a BOS or quiet bar followed it. Drawings below still use ALL intrabars.
+// On a finished signal bar, use the last nested intrabar’s bias. Drawings use ALL intrabars.
 Frame lastLower = tfIn == "" ? na : request.security(syminfo.tickerid, lower ? structTF : timeframe.period, native, lookahead=barmerge.lookahead_off)
 Frame studyFrame = not nested ? na : higher ? prevHigher : lower ? lastLower : native
 int studyAsOf = higher ? time : time_close
@@ -272,7 +270,6 @@ if barstate.isfirst
     if startAt > endAt
         runtime.error("Test through must not precede Test from.")
 var int dir = 0
-var int epoch = na
 var int seen = na
 var label lastHLabel = na
 var label lastLLabel = na
@@ -293,21 +290,11 @@ for s in updates
         lastHLabel := h
         lastLLabel := l
         dir := s.bias
-        epoch := s.lastMSS
         seen := s.closedAt
 
 [raw, a, b, pick] = f_hull(dir)
-// On live candles, remember a skipped cross even if the tick that produced it disappears.
-// A matching cross on the confirmed flip candle counts. INIT and BOS do not reset this.
-varip int liveUsed = na
-varip int blockedAt = na
-if f_first(raw, dir, epoch, liveUsed)
-    liveUsed := epoch
-    blockedAt := time
-bool aligned = raw != 0 and raw == dir
-bool skipped = aligned and not na(epoch) and liveUsed == epoch and blockedAt == time
-bool buy = aligned and raw == 1 and not skipped
-bool sell = aligned and raw == -1 and not skipped
+bool buy = raw == 1 and dir == 1
+bool sell = raw == -1 and dir == -1
 color ink = na(a) ? neutral : b > a ? bull : bear
 pB = plot(b, "Hull B", color=ink, force_overlay=true)
 pL = plot(pick == 1 ? a : na, "Hull A Low", color=ink, style=plot.style_linebr, force_overlay=true)
@@ -319,7 +306,6 @@ fill(pF, pB, pick == 2 ? color.new(ink, 80) : na, fillgaps=false)
 bool allCrosses = marks == "All Hull crosses"
 plotshape(allCrosses ? raw == 1 : buy, "BUY", shape.labelup, location.belowbar, bull, text="BUY", textcolor=color.white, size=size.tiny, force_overlay=true)
 plotshape(allCrosses ? raw == -1 : sell, "SELL", shape.labeldown, location.abovebar, bear, text="SELL", textcolor=color.white, size=size.tiny, force_overlay=true)
-plotshape(markSkip and skipped, "First after MSS: skipped", shape.xcross, location.abovebar, neutral, size=size.tiny, force_overlay=true)
 alertcondition(buy, "Hull BUY entry", "BUY | {{ticker}} | {{interval}}")
 alertcondition(sell, "Hull SELL entry", "SELL | {{ticker}} | {{interval}}")
 alertcondition(raw == 1, "Raw BUY: exit short", "EXIT SHORT | {{ticker}} | {{interval}}")
@@ -344,6 +330,14 @@ type Row
     float points
     bool validTF
     bool priced
+    int asianW
+    int asianN
+    int londonW
+    int londonN
+    int nyW
+    int nyN
+    int kzW
+    int kzN
 
 // USD value of ONE exchange tick at ONE broker lot. Override when contracts differ.
 f_ticks() =>
@@ -370,14 +364,52 @@ f_exit(int d, float entry, int goalTicks, bool armed, bool leftFill, int rawSign
     bool hitBE = armed and (worst < 0 or (worst == 0 and (leftFill or op > 0 or (best > 0 and cp == 0 and not hitTP) or ambiguous)))
     op >= goalTicks ? 1 : hitBE ? -1 : hitTP ? 1 : rawSignal == -d ? -2 : 0
 
+// Test the actual fill instant in local wall-clock minutes. Using time(..., session)
+// would classify the chart bar's OPEN and mislabel close fills on a boundary.
+f_bound(simple string hours, simple int offset) =>
+    int(str.tonumber(str.substring(hours, offset, offset + 2))) * 60 + int(str.tonumber(str.substring(hours, offset + 2, offset + 4)))
+
+f_inside(int localMinute, simple string hours) =>
+    int first = f_bound(hours, 0)
+    int last = f_bound(hours, 5)
+    if first == last
+        true
+    else if first < last
+        localMinute >= first and localMinute < last
+    else
+        localMinute >= first or localMinute < last
+
+f_clock(int stamp, simple string tz) =>
+    hour(stamp, tz) * 60 + minute(stamp, tz)
+
+f_tags(int stamp) =>
+    int uk = f_clock(stamp, "Europe/London")
+    bool asia = f_inside(f_clock(stamp, "UTC"), asianHours)
+    bool london = f_inside(uk, londonHours)
+    bool ny = f_inside(f_clock(stamp, "America/New_York"), nyHours)
+    bool killzone = london and ny and f_inside(uk, kzHours)
+    [asia, london, ny, killzone]
+
 // This state lives inside the requested timeframe, not on the host chart.
-f_score(int signal, int bias, bool skip, int ticks, bool valid) =>
+f_score(int signal, int bias, int ticks, bool valid) =>
     bool inTest = time_close >= startAt and time_close <= endAt and valid
     float distancePts = ticks * syminfo.mintick / (pointIn > 0 ? pointIn : syminfo.mintick)
     var int d = 0
     var int wins = 0
     var int losses = 0
     var int be = 0
+    var int asianW = 0
+    var int asianN = 0
+    var int londonW = 0
+    var int londonN = 0
+    var int nyW = 0
+    var int nyN = 0
+    var int kzW = 0
+    var int kzN = 0
+    var bool fromAsia = false
+    var bool fromLondon = false
+    var bool fromNY = false
+    var bool fromKZ = false
     var float entry = na
     var float target = na
     var float points = na
@@ -387,9 +419,23 @@ f_score(int signal, int bias, bool skip, int ticks, bool valid) =>
     if inTest and d != 0
         int outcome = f_exit(d, entry, targetTicks, armed, leftFill, signal)
         if outcome != 0
-            wins += outcome == 1 ? 1 : 0
+            int win = outcome == 1 ? 1 : 0
+            wins += win
             losses += outcome < 0 ? 1 : 0
             be += outcome == -1 ? 1 : 0
+            // Book the OLD trade before a reversal can replace its entry tags.
+            if fromAsia
+                asianW += win
+                asianN += 1
+            if fromLondon
+                londonW += win
+                londonN += 1
+            if fromNY
+                nyW += win
+                nyN += 1
+            if fromKZ
+                kzW += win
+                kzN += 1
             d := 0
         else
             // An optional positive threshold arms on a close, never retroactively on its wick.
@@ -398,7 +444,12 @@ f_score(int signal, int bias, bool skip, int ticks, bool valid) =>
             leftFill := leftFill or high != entry or low != entry
     // Enter at this CLOSE, after exit checks: never use the entry candle's prior wick.
     // An eligible opposite close can reverse; it never upgrades the old trade to a win.
-    if inTest and d == 0 and signal != 0 and signal == bias and not skip and not na(ticks)
+    if inTest and d == 0 and signal != 0 and signal == bias and not na(ticks)
+        [tagA, tagL, tagN, tagK] = f_tags(time_close)
+        fromAsia := tagA
+        fromLondon := tagL
+        fromNY := tagN
+        fromKZ := tagK
         d := signal
         entry := close
         targetTicks := ticks
@@ -406,20 +457,14 @@ f_score(int signal, int bias, bool skip, int ticks, bool valid) =>
         points := distancePts
         leftFill := false
         armed := bePct == 0
-    Row.new(time_close, wins, losses, be, d, entry, target, na(points) ? distancePts : points, valid, not na(ticks))
+    Row.new(time_close, wins, losses, be, d, entry, target, na(points) ? distancePts : points, valid, not na(ticks), asianW, asianN, londonW, londonN, nyW, nyN, kzW, kzN)
 
 f_study() =>
     var int bias = 0
-    var int shift = na
     if not na(studyFrame) and studyFrame.closedAt <= studyAsOf
         bias := studyFrame.bias
-        shift := studyFrame.lastMSS
     [signal, _, _, _] = f_hull(bias)
-    var int used = na
-    bool skip = f_first(signal, bias, shift, used)
-    if skip
-        used := shift
-    f_score(signal, bias, skip, f_ticks(), nested)
+    f_score(signal, bias, f_ticks(), nested)
 
 // lookahead_off: on a larger host chart this samples the last native intrabar,
 // whose counters include ALL earlier native bars. Never display a developing row.
@@ -431,29 +476,90 @@ Row book = f_study()
 f_closed(Row current, Row previous, int asOf) =>
     not na(current) and current.endTime <= asOf ? current : not na(previous) and previous.endTime <= asOf ? previous : na
 
-var table panel = table.new(position.top_right, 7, 4, bgcolor=#18212C, frame_color=#465567, frame_width=1, force_overlay=true)
-f_cell(int col, int row, string value, color fg, string tip) =>
-    color bg = row == 0 ? #263547 : row % 2 == 1 ? #17212C : #1E2A37
-    table.cell(panel, col, row, value, text_color=fg, text_size=size.small, bgcolor=bg, tooltip=tip)
+// Counts are returned as numeric pairs, never as pre-rounded percentages.
+// Missing/non-nested data is distinct from a valid group with zero closed trades.
+f_ok(Row r) =>
+    not na(r) and r.validTF
 
-f_row(int y, string tf, Row r) =>
-    bool ok = not na(r) and r.validTF
-    int total = ok ? r.wins + r.losses : 0
-    string tip = not ok ? "No completed data, or the lower structure timeframe does not nest in this row." : na(r.entry) ? "No entry in the test window. TP pts shows the configured distance." : "BE losses: " + str.tostring(r.beLosses) + "  |  Opposite exits: " + str.tostring(r.losses - r.beLosses) + "\nLast entry: " + str.tostring(r.entry, format.mintick) + "  |  TP: " + str.tostring(r.target, format.mintick)
-    string pts = not ok ? (na(r) ? "—" : "TF mismatch") : not na(r.points) ? str.tostring(r.points, "#.##") : not r.priced ? "Set tick $" : "—"
-    int side = ok ? r.side : 0
-    f_cell(0, y, tf, color.white, tip)
-    f_cell(1, y, ok ? str.tostring(total) : "—", color.silver, tip)
-    f_cell(2, y, ok ? str.tostring(r.wins) : "—", bull, tip)
-    f_cell(3, y, ok ? str.tostring(r.losses) : "—", bear, tip)
-    f_cell(4, y, total > 0 ? str.tostring(100.0 * r.wins / total, "0.0") + "%" : "—", color.white, tip)
-    f_cell(5, y, pts, color.aqua, tip)
-    f_cell(6, y, side == 0 ? "—" : side == 1 ? "BUY" : "SELL", side == 0 ? color.silver : side == 1 ? bull : bear, tip)
+f_counts(Row r, int groupId) =>
+    int w = na
+    int nClosed = na
+    if f_ok(r)
+        w := switch groupId
+            0 => r.wins
+            1 => r.asianW
+            2 => r.londonW
+            3 => r.nyW
+            => r.kzW
+        nClosed := switch groupId
+            0 => r.wins + r.losses
+            1 => r.asianN
+            2 => r.londonN
+            3 => r.nyN
+            => r.kzN
+    [w, nClosed]
+
+const string countTip = "n = closed trades. Open trades are excluded. Sessions use entry time and may overlap; Overall counts each closed trade once per timeframe."
+const string poolTip = "All TFs pools the three independent tests: sum of wins / sum of closed trades, not an average of percentages or a deduplicated portfolio."
+var table panel = table.new(position.top_right, 5, 8, bgcolor=#18212C, frame_color=#465567, frame_width=1, force_overlay=true)
+
+f_cell(int col, int row, string value, string tip) =>
+    color bg = row == 0 ? #263547 : row == 1 ? #203B41 : col == 4 ? #263341 : row % 2 == 0 ? #17212C : #1E2A37
+    color fg = row == 0 or row == 1 ? color.white : col == 4 ? #A6DEDD : col == 0 ? color.silver : #E8EDF3
+    table.cell(panel, col, row, value, text_color=fg, text_size=size.small, bgcolor=bg, text_halign=col == 0 ? text.align_left : text.align_center, tooltip=tip)
+
+f_rateCell(int col, int row, int w, int nClosed, string tip) =>
+    string value = na(nClosed) ? "n/a" : nClosed == 0 ? "— (0)" : str.tostring(100.0 * w / nClosed, "0.0") + "% (" + str.tostring(nClosed) + ")"
+    string detail = na(nClosed) ? (col == 4 ? "A pooled rate needs valid data for all three timeframes." : "No completed data or incompatible structure timeframe.") : nClosed == 0 ? "No closed trades." : str.tostring(w) + " wins / " + str.tostring(nClosed - w) + " losses."
+    f_cell(col, row, value, tip + "\n" + detail)
+
+f_footer(int col, Row r) =>
+    bool ok = f_ok(r)
+    string side = not ok ? "—" : r.side == 1 ? "BUY" : r.side == -1 ? "SELL" : "flat"
+    string pts = not ok ? "—" : not na(r.points) ? str.tostring(r.points, "#.##") : not r.priced ? "Set tick $" : "—"
+    string info = not ok ? "No completed data, or the lower structure timeframe does not nest in this interval." : "BE losses: " + str.tostring(r.beLosses) + " | Opposite exits: " + str.tostring(r.losses - r.beLosses)
+    string prices = not ok ? info : na(r.entry) ? "No entry in range." : "Last entry: " + str.tostring(r.entry, format.mintick) + " | TP: " + str.tostring(r.target, format.mintick)
+    f_cell(col, 6, ok ? str.tostring(r.wins) + " / " + str.tostring(r.losses) : "n/a", info)
+    f_cell(col, 7, ok ? pts + " · " + side : "n/a", prices + "\nTP points at last entry (current distance if no entry); position at sample end.")
+
+f_panel(Row r15, Row r30, Row r45) =>
+    f_cell(0, 0, "Win rate (n)", countTip)
+    f_cell(1, 0, "15m", countTip)
+    f_cell(2, 0, "30m", countTip)
+    f_cell(3, 0, "45m", countTip)
+    f_cell(4, 0, "All TFs", poolTip)
+    for g = 0 to 4
+        string name = switch g
+            0 => "Overall"
+            1 => "Asian"
+            2 => "London"
+            3 => "New York"
+            => "NY–London KZ"
+        string window = switch g
+            0 => "All entries, including those outside the named sessions."
+            1 => asianHours + " UTC"
+            2 => londonHours + " Europe/London"
+            3 => nyHours + " America/New_York"
+            => kzHours + " Europe/London, inside the London/New York overlap."
+        int y = g + 1
+        [w15, n15] = f_counts(r15, g)
+        [w30, n30] = f_counts(r30, g)
+        [w45, n45] = f_counts(r45, g)
+        f_cell(0, y, name, window + "\n" + countTip)
+        f_rateCell(1, y, w15, n15, window)
+        f_rateCell(2, y, w30, n30, window)
+        f_rateCell(3, y, w45, n45, window)
+        f_rateCell(4, y, w15 + w30 + w45, n15 + n30 + n45, poolTip + "\n" + window)
+    f_cell(0, 6, "Wins / losses", "All resolved trades; a BE or an early opposite exit counts as a loss.")
+    f_cell(0, 7, "TP pts · Open", "Last entry’s target distance and position at sample end. No fees, spread or ladder.")
+    f_footer(1, r15)
+    f_footer(2, r30)
+    f_footer(3, r45)
+    bool complete = f_ok(r15) and f_ok(r30) and f_ok(r45)
+    string wl = complete ? str.tostring(r15.wins + r30.wins + r45.wins) + " / " + str.tostring(r15.losses + r30.losses + r45.losses) : "n/a"
+    int opens = complete ? (r15.side != 0 ? 1 : 0) + (r30.side != 0 ? 1 : 0) + (r45.side != 0 ? 1 : 0) : na
+    f_cell(4, 6, wl, poolTip)
+    f_cell(4, 7, complete ? str.tostring(opens) + " open" : "n/a", "Number of independent timeframe positions still open; not included in any rate.")
 
 if barstate.islast
-    titles = array.from("TF", "Closed", "W", "L", "Win %", "TP pts", "Open")
-    for i = 0 to 6
-        f_cell(i, 0, titles.get(i), color.white, "Closed candles only. TP pts = last entry’s distance (current distance if no entry yet). Open at the end of the sample is excluded. No fees, spread or ladder.")
-    f_row(1, "15m", f_closed(c15, p15, cutoff))
-    f_row(2, "30m", f_closed(c30, p30, cutoff))
-    f_row(3, "45m", f_closed(c45, p45, cutoff))
+    f_panel(f_closed(c15, p15, cutoff), f_closed(c30, p30, cutoff), f_closed(c45, p45, cutoff))
