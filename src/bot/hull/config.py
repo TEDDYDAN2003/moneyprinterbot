@@ -27,7 +27,7 @@ FIXED = "fixed_tp"
 TARGET_POLICY = "base_plus_entry_spread_v1"  # all newly opened Hull tickets, never retrofit saved goals
 DYNAMIC_HULL_LENGTH = 16  # shared base period for the active scanner
 LIVE_TIMING = "live_hull_cross"
-ENTRY_POLICY = "fc_dynamic_skip_first_mss_v2"
+ENTRY_POLICY = "fc_dynamic_failed_mss_return_v3"
 BATCH_ENTRY_POLICY = "first_eligible_while_lane_flat_v2"
 # Removed in Hull only. Older full-file demo configs may still contain the keys.
 RETIRED_LIMITS = ("drawdown_usd", "max_orders_minute")

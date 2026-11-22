@@ -4,6 +4,8 @@
 
 **Dynamic Hull:** M15/M30/M45 authorized as independent lanes in `hull.eligible_timeframes`, not authorization to start a scanner or send orders. `structure_timeframe: null`. A confirmed MSS closes only the originating symbol/timeframe; M45 is three aligned M15 candles. [Rules and private YAML migration](docs/HULL_STRUCTURE.md).
 
+**Hull first-cross rule:** skip an ordinary first aligned cross. Waive the skip only on a confirmed return to the lane's established direction if the intervening counter-MSS leg never made a continuation BOS. Require a fresh cross after the return close; no time limit, no counter-leg trade prerequisite. No change to immediate MSS exits, sessions, Wickless or chart-study rules.
+
 **Mandatory entry hours (both Python bots):** use the [shared instrument schedule](docs/ENTRY_SESSIONS.md), not the chart statistics buckets or a global killzone. Validate exact broker names; check `entry_sessions.version`, `sha256` and each symbol’s `entry_session` in preflight. A normally closed window is not a reason to widen hours. An unmapped symbol cannot enter. Never disable protection, arm a scanner or change selections to test this filter.
 
 For **MT5 only**, open **PowerShell in the bot folder** on your Windows MT5 PC (usually `$HOME\Downloads\xauusdm-directional-research`). You should see `config.yaml` and `HullJournal`. No environment activation is needed.
@@ -57,7 +59,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Invalid config. Do not arm.' }
 if ($LASTEXITCODE -ne 0) { throw 'Preflight failed. Do not arm.' }
 ```
 
-Verify the demo account, trading permissions, symbols, batch sizes, history on the approved timeframes, positions/orders and `review_before_demo`. Look for `new_ticket_target_policy: base_plus_entry_spread_v1`; each symbol’s `target_preview_by_side` shows the indicative BUY and SELL goals on the current quote. Verify `timeframes: [M15, M30, M45]`, `mss_exit: flatten_own_lane_on_confirmed_shift`, `batch_entry_policy: first_eligible_while_lane_flat_v2`, `entry_policy: fc_dynamic_skip_first_mss_v2`, `entry_timing: live_hull_cross`, and `choch_entry: never_standalone`. Do **not** arm with an unexplained warning.
+Verify the demo account, trading permissions, symbols, batch sizes, history on the approved timeframes, positions/orders and `review_before_demo`. Look for `new_ticket_target_policy: base_plus_entry_spread_v1`; each symbol’s `target_preview_by_side` shows the indicative BUY and SELL goals on the current quote. Verify `timeframes: [M15, M30, M45]`, `mss_exit: flatten_own_lane_on_confirmed_shift`, `batch_entry_policy: first_eligible_while_lane_flat_v2`, `entry_policy: fc_dynamic_failed_mss_return_v3`, `entry_timing: live_hull_cross`, and `choch_entry: never_standalone`. Do **not** arm with an unexplained warning.
 
 Want to watch first? Run `& $py -m bot.cli trade-all --config $cfg @profiles` **without** the arm flag. It must say `READ ONLY`. Stop **that observer** with Ctrl+C before step 4. If the account or profiles change, repeat preflight.
 
@@ -130,4 +132,4 @@ On an eligible lane, a fresh raw cross can appear on a forming candle. Structure
 
 A question about this guide is not authorization to trade. A normal start request means **observer only**. Follow the [standing startup rules](README.md#standing-instructions-for-the-desktop-agent). An agent must receive separate, explicit **`ARM DEMO`** for the verified profiles before using step A4. No live-money mode.
 
-A pull does not update a running process. Match its `started.summary.checkout_head_at_start` to `git rev-parse HEAD`; verify the source, `fc_dynamic_skip_first_mss_v2`, intended Hull settings (Dynamic, `indicator.hull_len: 16`), quote policy and per-ticket ladder preview. Never change lots, limits or stops to force a trade, or delete safety state. Logs: `reports/hull_runtime/<account-hash>/shadow.jsonl` (observer) and `demo.jsonl` (armed). [Exposure, funding and retired limits](docs/HULL_DEMO.md).
+A pull does not update a running process. Match its `started.summary.checkout_head_at_start` to `git rev-parse HEAD`; verify the source, `fc_dynamic_failed_mss_return_v3`, intended Hull settings (Dynamic, `indicator.hull_len: 16`), quote policy and per-ticket ladder preview. Never change lots, limits or stops to force a trade, or delete safety state. Logs: `reports/hull_runtime/<account-hash>/shadow.jsonl` (observer) and `demo.jsonl` (armed). [Exposure, funding and retired limits](docs/HULL_DEMO.md).

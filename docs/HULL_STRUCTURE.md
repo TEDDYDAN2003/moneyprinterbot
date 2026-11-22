@@ -16,7 +16,21 @@ For a **raw Hull cross**, the following table applies **only to the originating 
 | Bearish | Close owned shorts; no new long | Close owned longs first; a new SELL is eligible if flat |
 | Neutral | Close owned shorts only | Close owned longs only |
 
-**Bot only: after each confirmed MSS/CHoCH, skip exactly the first trend-aligned Hull cross on each signal lane.** A matching cross on the shift close counts as first. INIT/BOS do not arm or reset this rule; opposite raw signals still exit and do not spend it. The skipped bar stays blocked on every tick and at its close. A later distinct aligned cross is eligible, subject to normal order checks. A raw bot signal with an unusable initial stop is not an otherwise-valid candidate and does not use the skip. The first candidate is counted as a signal, not a fill; a desk/risk veto never refunds it.
+### First cross after an MSS: attempted reversal vs failed counter-move
+
+**Normally skip the first otherwise-valid Hull cross in the new direction.** An aligned cross on an ordinary MSS close counts as the skipped one. A new bias alone does not open a position. A countertrend cross or invalid initial stop does not spend the skip. A second, distinct aligned cross is eligible without a BOS requirement, subject to normal order checks.
+
+**Exception — a confirmed return to the established trend (`fc_dynamic_failed_mss_return_v3`).** Each symbol/timeframe remembers the direction established by its last confirmed INIT or continuation BOS. An MSS changes the lane's active bias and triggers its protective exit immediately, but does not itself prove continuation.
+
+| Closed structure, in order | First fresh Hull cross after the return close |
+|---|---|
+| Established bearish → bullish MSS → **no bullish BOS** → bearish MSS | First valid **SELL eligible** |
+| Established bullish → bearish MSS → **no bearish BOS** → bullish MSS | First valid **BUY eligible** |
+| The intervening leg **did** print a continuation BOS before shifting back | New reversal: **skip** the first otherwise-valid aligned cross as usual |
+
+The bot need not have seen, skipped or traded a BUY during the failed bullish leg (or a SELL during the failed bearish leg). There is **no bar-count limit**. Do not use a later low/high, subsequent BOS, or the eventual price move as evidence that existed at the entry. The return requires the normal confirmed MSS: a wick or an equal close at the guard does not count. A cross on the **return close itself** is exit-only; a fresh verified tick **after** that close or a later confirmed cross can qualify. No need to wait for a second SELL/BUY or a new BOS in the restored direction. Repeated shifts without any intervening BOS cannot make *both* directions exempt.
+
+The waiver is a **signal decision, not a fill**. `structure_break.is_failed_mss_return` identifies the return when it is observed. `label_decision`, `batch_preview` and `demo_result` include `mss_skip_exception: failed_counter_mss_return` on the first released candidate, with `failed_counter_mss_s` (counter-leg start) and `return_mss_s` (confirmed return), in UTC epoch seconds. Check `outcome` and broker receipts: a closed session, non-flat lane, missing executable quote, risk veto, etc. still block an entry. No missed signal is queued for later. A normal skipped bar cannot be promoted by another tick, its closing update, a restart or a v2 journal migration. If a missing interval or truncated history prevents proving the failed leg, matching bias alone does **not** grant a waiver. Keep the account state and use the normal flat-account upgrade procedure; no private YAML or reset is required for this change.
 
 No midpoint, discount/premium, swing-zone, EMA or later-BOS requirement at the signal **or** on the quote used for a ticket. INIT/BOS, a wick touch and bias alone do not trigger a signal exit or entry. MSS alone is an exit only. The execution desk still requires a valid original SL and all existing order protections for **new** entries.
 

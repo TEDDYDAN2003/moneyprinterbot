@@ -43,6 +43,7 @@ class Reading:
     cross_high: int = 0
     trigger: LiveTick | None = None
     skip_after_mss: bool | None = None
+    waived_first_cross: bool = False
 
     @property
     def confirmed_mss(self):
@@ -89,6 +90,12 @@ class Reading:
         reason = self.candidate_reason
         if (
             reason == "ready"
+            and self.structure.failed_return
+            and self.signal_msc <= self.structure.epoch * 1000
+        ):
+            return "mss_close_exit_only"
+        if (
+            reason == "ready"
             and self.structure.epoch is not None
             and self.skip_after_mss is not False
         ):
@@ -106,18 +113,30 @@ class Reading:
             "entry_setup": "trend_hull_cross" if self.entry_side else None,
             "entry_side": self.entry_side,
             "entry_reason": self.entry_reason,
+            "mss_skip_exception": "failed_counter_mss_return"
+            if self.waived_first_cross and self.entry_side
+            else None,
+            "failed_counter_mss_s": self.structure.failed_counter_mss_s,
+            "return_mss_s": self.structure.epoch
+            if self.structure.failed_return
+            else None,
         }
 
 
 class FirstCrossGate:
-    """One first trend-aligned signal per confirmed structure shift, not per tick/fill."""
+    """Reserve each epoch's first candidate once. Only a proven failed counter-MSS
+    waives its ordinary veto. Structure, eligibility and actual orders are separate.
+    """
 
     def __init__(self):
         self.bind({}, None)
 
     def bind(self, record, persist):
         self.record, self.persist = record, persist
-        self.saved = record.get("epoch"), record.get("bar")
+        self.saved = self._stamp()
+
+    def _stamp(self):
+        return tuple(self.record.get(k) for k in ("epoch", "bar", "waived_from"))
 
     def apply(self, r, *, observe):
         s = r.structure
@@ -132,7 +151,10 @@ class FirstCrossGate:
             and s.bias == self.record.get("bias")
         ):
             epoch = known
-            r = replace(r, structure=replace(s, last_mss_s=known))
+            # Recover a skip watermark, never invent a failed-leg proof from a
+            # matching direction alone when replay cannot establish the sequence.
+            s = replace(s, last_mss_s=known)
+            r = replace(r, structure=s)
         if epoch is None:
             return r
         newer = known is None or epoch > known
@@ -141,18 +163,36 @@ class FirstCrossGate:
         if newer and observe:
             self.record.update(
                 epoch=epoch, bias=s.bias, bar=None
-            )  # armed, not consumed
+            )  # pending; the structural event itself is not an entry
+            self.record.pop("waived_from", None)
         if r.candidate_reason != "ready":
             return r
-        # A reload cannot roll back live state. Same-bar rechecks never promote
-        # the skipped signal. Actual order admission/fills are intentionally later.
-        skip = older or bar is None or r.close_s <= bar
+        if s.failed_return and r.signal_msc <= epoch * 1000:
+            return replace(r, skip_after_mss=True, waived_first_cross=False)
+        # Keep v2 reservations: a previously skipped candidate may NOT turn
+        # into a trade on another tick, on its close or during a history reload.
+        # The journal marker permits re-verification of the same waived signal,
+        # never a waiver without matching confirmed structural evidence.
+        first = bar is None or r.close_s == bar
+        waive = (
+            not older
+            and first
+            and s.failed_return
+            and s.closed_s * 1000 <= r.signal_msc  # no later structure as evidence
+            and (newer or self.record.get("bias") == s.bias)
+            and (
+                bar is None or self.record.get("waived_from") == s.failed_counter_mss_s
+            )
+        )
+        skip = older or ((bar is None or r.close_s <= bar) and not waive)
         if observe and not older and bar is None:
             self.record["bar"] = r.close_s
-        return replace(r, skip_after_mss=skip)
+            if waive:
+                self.record["waived_from"] = s.failed_counter_mss_s
+        return replace(r, skip_after_mss=skip, waived_first_cross=waive)
 
     def flush(self):
-        stamp = self.record.get("epoch"), self.record.get("bar")
+        stamp = self._stamp()
         if self.persist is not None and stamp != self.saved:
             self.persist()
             self.saved = stamp

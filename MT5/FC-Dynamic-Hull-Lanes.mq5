@@ -1,7 +1,7 @@
 // FC Dynamic Hull / independent lane monitor. Custom indicator, NOT an EA.
 // Reads chart prices only. Never sends requests to the trade server.
 #property strict
-#property version "1.00"
+#property version "1.10"
 #property indicator_chart_window
 #property indicator_buffers 2
 #property indicator_plots 2
@@ -31,12 +31,13 @@ input bool AlertFreshMSS=false; // Freshly observed closed shifts only; never on
 
 // BEGIN PORTABLE CORE -- also executed by the fabricated-candle contract.
 struct HullState {
-   int bias,count; datetime closed,epoch,skipBar,lastUp,lastDn;
+   int bias,count,established; datetime closed,epoch,skipBar,failedCounter,lastUp,lastDn;
+   bool firstWaived;
    double hi,lo,lastH,lastL,pullH,pullL,guard,tip,broken;
    datetime hiT,loT,pullHT,pullLT,legT,originT,windowT,guardT,tipT,lastHT,lastLT;
    double oldLow,oldHigh,oldB,prevC,atr,sumTR;
 };
-struct Result {int bias,ev,raw,eligible; bool skip; double lowA,highA,a,b,sl;};
+struct Result {int bias,ev,raw,eligible; bool skip,waived,exitClose; double lowA,highA,a,b,sl;};
 
 double Field(const MqlRates &x,const int f){return f==1?x.low:f==-1?x.high:x.close;}
 double W(const MqlRates &q[],const int i,const int n,const int f){
@@ -87,9 +88,15 @@ int StructureStep(HullState &s,const MqlRates &q[],const int i){
    }
    s.bias=d;return ev;
 }
-void Step(HullState &s,const MqlRates &q[],const int i,const int tf,const bool commit,Result &r){
+void Step(HullState &s,const MqlRates &q[],const int i,const int tf,const bool commit,Result &r,const long liveMS=0){
    ZeroMemory(r); datetime end=q[i].time+tf*60;
-   if(commit){r.ev=StructureStep(s,q,i); if(r.ev==2||r.ev==-2){s.epoch=end;s.skipBar=0;}
+   if(commit){
+      if(s.closed!=q[i].time){s.established=0;s.failedCounter=0;} // unknown interval: no failed-leg proof
+      int oldBias=s.bias;r.ev=StructureStep(s,q,i);
+      if(MathAbs(r.ev)==2){
+         s.failedCounter=(s.established==s.bias&&oldBias==-s.bias)?s.epoch:0;
+         s.epoch=end;s.skipBar=0;s.firstWaived=false;
+      }else if(MathAbs(r.ev)==3||MathAbs(r.ev)==1)s.established=s.bias;
       double tr=q[i].high-q[i].low;
       if(s.count>0)tr=MathMax(tr,MathMax(MathAbs(q[i].high-s.prevC),MathAbs(q[i].low-s.prevC)));
       s.count++;if(s.count<=AtrLength){s.sumTR+=tr;if(s.count==AtrLength)s.atr=s.sumTR/AtrLength;}
@@ -107,8 +114,15 @@ void Step(HullState &s,const MqlRates &q[],const int i,const int tf,const bool c
          if(anchor==0||r.raw*(v-anchor)<0)anchor=v;}
       if(anchor>0&&s.count>=AtrLength)r.sl=anchor-r.raw*(AtrBuffer*s.atr+ExtraPips*PipSize);
       if(r.raw==r.bias&&r.sl>0&&r.raw*(q[i].close-r.sl)>0){
-         if(s.epoch!=0&&s.skipBar==0)s.skipBar=end;
-         r.skip=s.epoch!=0&&end<=s.skipBar;r.eligible=r.skip?0:r.raw;
+         bool back=s.failedCounter>0&&s.failedCounter<s.epoch&&s.established==s.bias;
+         long when=commit?(long)end*1000:liveMS;
+         r.exitClose=back&&when<=(long)s.epoch*1000;
+         if(!r.exitClose){
+            if(s.epoch!=0&&s.skipBar==0){s.skipBar=end;s.firstWaived=back;}
+            r.waived=back&&s.firstWaived&&end==s.skipBar;
+            r.skip=s.epoch!=0&&end<=s.skipBar&&!r.waived;
+            r.eligible=r.skip?0:r.raw;
+         }
       }
       if(commit){if(r.raw==1)s.lastUp=q[i].time;else s.lastDn=q[i].time;}
    }
@@ -201,7 +215,7 @@ public:
                if(AlertFreshMSS&&!warm&&state.closed>previousSample&&tick.time-state.closed<=tf*60)
                   Alert(_Symbol," M",tf," confirmed MSS: close this lane only | ",Stamp(state.closed));
             }
-            if(last.eligible!=0&&(!warm||j>=n-400))Mark(rows[j].close,state.closed,Side(last.eligible),last.eligible==1?clrSeaGreen:clrIndianRed);
+            if(last.eligible!=0&&(!warm||j>=n-400))Mark(rows[j].close,state.closed,Side(last.eligible)+(last.waived?" (resume)":""),last.eligible==1?clrSeaGreen:clrIndianRed);
          }
          // Keep indicator state across shifts; drop only old raw samples, not pivot/ATR/skip state.
          int used=ArraySize(tape),keep=MathMax(150,MathMax(2*Swing+4,Pullback+4));if(used>keep)ArrayRemove(tape,0,used-keep);
@@ -212,8 +226,8 @@ public:
       int num=Fetch(tf,true,1,current,part);
       if(num==1&&Good(current[0])&&current[0].time==state.closed&&tick.time>=part&&tick.time<part+PeriodSeconds(base)&&current[0].close==tick.bid){
          MqlTick check;if(SymbolInfoTick(_Symbol,check)&&check.time_msc==tick.time_msc&&check.bid==tick.bid&&check.ask==tick.ask){
-            int k=ArraySize(tape);ArrayResize(tape,k+1,256);tape[k]=current[0];Result r;Step(state,tape,k,tf,false,r);ArrayResize(tape,k);
-            live=r.eligible!=0?Side(r.eligible)+" setup (live)":r.skip?"first cross skipped":r.raw!=0?"raw "+Side(r.raw)+" (exit only)":"no cross";
+            int k=ArraySize(tape);ArrayResize(tape,k+1,256);tape[k]=current[0];Result r;Step(state,tape,k,tf,false,r,tick.time_msc);ArrayResize(tape,k);
+            live=r.eligible!=0?Side(r.eligible)+(r.waived?" resume (live)":" setup (live)"):r.exitClose?"MSS close (exit only)":r.skip?"first cross skipped":r.raw!=0?"raw "+Side(r.raw)+" (exit only)":"no cross";
          }else live="quote changed";
       }
       text=Phase(state.bias)+" | "+live+" | last MSS: "+Stamp(lastMss);previousSample=tick.time;return redraw;

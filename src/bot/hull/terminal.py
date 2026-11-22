@@ -171,6 +171,7 @@ def dispatch(d, name, labels, *, data_ok, history_ok, rewarmed, shifts=()):
                     outcome=why,
                     signal_session=d.session_gate(name).report(rows[-1].signal_s),
                     **rows[-1].clock_fields(),
+                    **rows[-1].entry_audit(),
                 )
             continue
         latest = max((r.signal_msc for r in rows), default=-1)
@@ -207,6 +208,7 @@ def dispatch(d, name, labels, *, data_ok, history_ok, rewarmed, shifts=()):
                 raw_selected_tf=tf,
                 close_s=r.close_s,
                 **r.clock_fields(),
+                **r.entry_audit(),
                 signal_session=d.session_gate(name).report(r.signal_s),
                 outcome=why,
             )
@@ -352,7 +354,8 @@ def run(
             "ownership": "verified_position_id_and_broker_symbol_and_signal_timeframe",
             "m45_clock": "3 consecutive M15 bars anchored to the broker D1 open",
             "choch_entry": "never_standalone",
-            "post_mss_entry": "skip_first_qualified_cross_per_lane",
+            "post_mss_entry": "skip_first_except_failed_counter_mss_return",
+            "failed_mss_return": "confirmed_MSS_back_to_established_bias_without_counter_BOS; fresh_cross_after_close_only",
             "price_zone_filter": False,
             **source_build(),
             "specs": specs,
@@ -473,7 +476,8 @@ def run(
             bundles = {name: make_lanes(h, frames, p) for name, (_, p) in syms.items()}
 
             # Context settings are part of the identity: history in another lane
-            # cannot consume this lane's skip. Store on the existing account journal.
+            # cannot consume this lane's skip. Keep the v2 journal namespace:
+            # a previously skipped candle must not become tradable on upgrade.
             policy_key = hashlib.sha256(
                 h.indicator.model_dump_json(exclude={"exit_on_mss"}).encode()
             ).hexdigest()[:16]
@@ -585,6 +589,10 @@ def run(
                                 tf=tf,
                                 close_s=v.closed_s,
                                 event_code=v.event_code,
+                                established_bias=v.established_bias,
+                                failed_counter_mss_s=v.failed_counter_mss_s,
+                                is_failed_mss_return=abs(v.event_code) == 2
+                                and v.failed_return,
                                 bias=v.bias,
                                 broken_level=v.broken.price,
                                 protected_level=v.guard.price if v.guard else None,

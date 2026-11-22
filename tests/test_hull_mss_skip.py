@@ -59,7 +59,7 @@ def test_only_one_valid_cross_per_mss_even_at_flip_close_or_repeated_ticks(d):
         assert (
             g.apply(candidate(-d, T + 120 + 60 * k, s), observe=True).entry_side == -d
         )
-    # Even without a continuation BOS the next leg has its own one-shot.
+    # The intervening direction printed a BOS above. Its next reversal has the ordinary one-shot veto.
     flip2 = Structure(T + 300, d, 2 * d)
     assert g.apply(candidate(d, T + 300, flip2), observe=True).entry_side == 0
     assert g.apply(candidate(d, T + 360, flip2), observe=True).entry_side == d

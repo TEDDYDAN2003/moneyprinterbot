@@ -249,6 +249,8 @@ def test_preflight_resolves_only_requested_symbols_and_never_sends(
     assert (
         answer["timeframes"] == ["M15", "M30"]
         and answer["signal_policy"] == "fc_dynamic_source_internal_v1"
+        and answer["entry_policy"] == "fc_dynamic_failed_mss_return_v3"
+        and answer["post_mss_entry"] == "skip_first_except_failed_counter_mss_return"
         and answer["entry_timing"] == "live_hull_cross"
         and answer["entry_quote_policy"] == "current_live_tick_or_confirmed_close_v1"
         and answer["entry_sessions"]["version"] == "symbol-entry-sessions/v1"

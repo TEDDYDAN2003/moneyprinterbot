@@ -777,6 +777,7 @@ class Desk:
                 raw_selected_tf=w.raw_tf,
                 close_s=w.reading.close_s,
                 **w.reading.clock_fields(),
+                **w.reading.entry_audit(),
                 outcome=reason,
                 signal_session=self.session_gate(name).report(w.reading.signal_s),
                 polls=w.polls,
@@ -875,6 +876,7 @@ class Desk:
                         goal_per_leg=plan.goal_usd,  # indicative first leg, not a promise for siblings
                         risk_batch=n * plan.risk_usd,
                         **d.clock_fields(),
+                        **d.entry_audit(),
                         **asdict(plan),
                     )
                     if not self.armed:
@@ -990,6 +992,7 @@ class Desk:
                     signal=d.signal_s,
                     request=req,
                     **d.clock_fields(),
+                    **d.entry_audit(),
                     send_check_utc=utc(checked),
                     entry_session=self.session_gate(name).report(checked),
                     send_tick_time_msc=int(q3.time_msc),

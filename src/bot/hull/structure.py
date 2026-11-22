@@ -34,10 +34,27 @@ class Structure:
     lo_class: int = 0
     replace_lo: bool = False
     last_mss_s: int | None = None
+    # Direction last established by a confirmed INIT/continuation BOS. An MSS
+    # changes bias immediately but does not by itself establish follow-through.
+    established_bias: int = 0
+    failed_counter_mss_s: int | None = (
+        None  # origin of counter-leg rejected by this epoch's MSS
+    )
 
     @property
     def epoch(self):
         return self.closed_s if abs(self.event_code) == 2 else self.last_mss_s
+
+    @property
+    def failed_return(self) -> bool:
+        return (
+            self.bias in (-1, 1)
+            and self.established_bias == self.bias
+            and self.failed_counter_mss_s is not None
+            and self.epoch is not None
+            and self.closed_s is not None
+            and self.failed_counter_mss_s < self.epoch <= self.closed_s
+        )
 
     @property
     def phase(self):
@@ -193,6 +210,18 @@ class InternalStructure:
                     lc, rl = 1, self.has_pull_l
                     self.has_pull_l, self.has_hi = True, False
                 self.pull_l = pl
+        # Classify the *return* close, never predict that the first MSS will fail.
+        # No candle counter and no dependence on Hull signals, fills or sessions.
+        prior = self.view
+        contiguous = prior.closed_s == bar.t
+        established = prior.established_bias if contiguous else 0
+        failed = prior.failed_counter_mss_s if contiguous else None
+        if abs(ev) == 2:
+            # A BOS in the intervening direction would already have promoted it
+            # to established. Repeated unconfirmed flips cannot free both sides.
+            failed = prior.epoch if established == d and prior.bias == -d else None
+        elif abs(ev) in (1, 3):
+            established = d
         self.view = Structure(
             closed,
             d,
@@ -205,6 +234,8 @@ class InternalStructure:
             pl,
             lc,
             rl,
-            closed if abs(ev) == 2 else self.view.epoch,
+            closed if abs(ev) == 2 else prior.epoch,
+            established,
+            failed,
         )
         return self.view
