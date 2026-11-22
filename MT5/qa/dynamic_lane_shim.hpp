@@ -6,6 +6,10 @@ struct MqlRates{datetime time=0; double open=0,high=0,low=0,close=0;};struct Mql
 #define MathMax max
 #define MathMin min
 #define MathAbs abs
+#define MathRound round
+#define MathFloor floor
+#define MathCeil ceil
+const int SYMBOL_TRADE_TICK_SIZE=1000;double SymbolInfoDouble(string,int k){assert(k==SYMBOL_TRADE_TICK_SIZE);return .01;}
 #define MathIsValidNumber isfinite
 const string _Symbol="FIX";const double EMPTY_VALUE=DBL_MAX;const int PERIOD_M15=15,PERIOD_M30=30,PERIOD_D1=1440,SYMBOL_CHART_MODE_BID=0,INIT_SUCCEEDED=0,INIT_FAILED=-1,INIT_PARAMETERS_INCORRECT=-2;
 map<int,vector<MqlRates>> feed;set<string> objects;int alerts=0;MqlTick tick;
@@ -17,4 +21,5 @@ int CopyRates(string,int tf,datetime start,datetime end,vector<MqlRates>&rows){a
 datetime iTime(string,int tf,int shift){int k=Index(tf)-shift;return k<0?0:feed[tf][k].time;}int PeriodSeconds(int tf){return tf*60;}
 template<class...T>bool SetIndexBuffer(T&&...x){return true;}template<class...T>void IndicatorSetString(T...x){}template<class...T>void ObjectSetInteger(T...x){}template<class...T>void ObjectSetString(T...x){}
 template<class...T>void Print(T...x){}template<class...T>void Alert(T...x){alerts++;}template<class...T>bool ObjectCreate(int,string n,T...x){objects.insert(n);return true;}int ObjectFind(int,string n){return objects.count(n)?0:-1;}void ObjectDelete(int,string n){objects.erase(n);}void ObjectsDeleteAll(int,string p){for(auto it=objects.begin();it!=objects.end();)if(it->find(p)==0)it=objects.erase(it);else ++it;}
+const int _Digits=3;string DoubleToString(double x,int d){ostringstream s;s<<fixed<<setprecision(d)<<x;return s.str();}
 int GetTickCount64(){return 17;}int SymbolInfoInteger(string,int){return 0;}bool SymbolInfoTick(string,MqlTick &x){x=tick;return true;}string IntegerToString(long long x){return to_string(x);}int StringLen(string x){return x.size();}string TimeToString(datetime t,int){return to_string(t);}

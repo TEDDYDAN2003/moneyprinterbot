@@ -131,7 +131,7 @@ def test_rejected_quote_snapshot_never_spends_first_or_swallows_later_raw_exit()
     lane = Stream(1, Indicator(), 0.01)
     lane.baseline_due = False
     v = Structure(T, 1, 2)
-    lane.project = lambda *args: candidate(1, T + 60, v)
+    lane.project = lambda _mt, _name, q: replace(candidate(1, T + 60, v), trigger=q)
     tick, other = mt.q, NS(**(vars(mt.q) | {"time_msc": mt.q.time_msc + 1}))
     it = iter([tick, other])
     mt.symbol_info_tick = lambda n: next(it)
@@ -141,7 +141,10 @@ def test_rejected_quote_snapshot_never_spends_first_or_swallows_later_raw_exit()
     rows, ok = sample(mt, NAME, [lane], lambda: T + 0.2, 4)
     assert ok and len(rows) == 1 and rows[0].label == 1 and rows[0].entry_side == 0
     assert sample(mt, NAME, [lane], lambda: T + 0.2, 4) == ([], True)
-    lane.project = lambda *args: candidate(-1, T + 60, v)
+    assert (
+        lane.h.gate.record == {}
+    )  # even a *coherent* live signal cannot spend a closed skip
+    lane.project = lambda _mt, _name, q: replace(candidate(-1, T + 60, v), trigger=q)
     rows, ok = sample(mt, NAME, [lane], lambda: T + 0.2, 4)
     assert (
         ok

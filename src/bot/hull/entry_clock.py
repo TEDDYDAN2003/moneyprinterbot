@@ -9,7 +9,6 @@ from datetime import UTC, datetime
 from .orders import Block
 
 QUOTE_POLICY = "first_fresh_post_close_tick_v1"
-LIVE_QUOTE_POLICY = "current_live_tick_or_confirmed_close_v1"
 WAITING = "waiting_first_post_close_tick"
 FAST_POLL_S = 0.25
 
@@ -37,19 +36,13 @@ class QuoteCheck:
     tick_limit: float
     tick_status: str
     reason: str
-    live_bar_end: int | None = None
 
     @property
     def waitable(self):
-        return (
-            self.live_bar_end is None
-            and self.checked < self.signal + self.entry_limit
-            and self.reason
-            in (
-                "quote_missing",
-                "quote_precedes_signal_close",
-                "quote_too_old",
-            )
+        return self.checked < self.signal + self.entry_limit and self.reason in (
+            "quote_missing",
+            "quote_precedes_signal_close",
+            "quote_too_old",
         )
 
     def audit(self, tf):
@@ -59,21 +52,17 @@ class QuoteCheck:
             tick_utc = (
                 None  # retain the raw number even for a nonsensical broker timestamp
             )
-        end = self.live_bar_end or self.signal
+        end = self.signal
         return {
-            "entry_timing": "live_hull_cross"
-            if self.live_bar_end
-            else "confirmed_close",
+            "entry_timing": "confirmed_close",
             "trigger_utc": utc(self.signal),
             "trigger_msc": round(self.signal * 1000),
             "bar_open_utc": utc(end - tf * 60),
             "bar_end_utc": utc(end),
-            "signal_close_utc": None if self.live_bar_end else utc(self.signal),
+            "signal_close_utc": utc(self.signal),
             "checked_at_utc": utc(self.checked),
             "checked_unix_s": self.checked,
-            "deadline_utc": utc(
-                min(self.signal + self.entry_limit, self.live_bar_end or math.inf)
-            ),
+            "deadline_utc": utc(self.signal + self.entry_limit),
             "tick_time_msc": self.tick_msc,
             "tick_utc": tick_utc,
             "bid": self.bid,
@@ -100,7 +89,6 @@ def check_quote(
     ask,
     *,
     monotonic_expired=False,
-    live_bar_end=None,
 ):
     """Only confirmed labels may wait for a missing, pre-close or aged-out first tick.
 
@@ -117,11 +105,7 @@ def check_quote(
     elif ms / 1000 > now:
         status = "quote_clock_ahead"
     elif ms / 1000 < signal:
-        status = (
-            "quote_precedes_live_trigger"
-            if live_bar_end
-            else "quote_precedes_signal_close"
-        )
+        status = "quote_precedes_signal_close"
     elif now - ms / 1000 > limits.max_quote_age_s:
         status = "quote_too_old"
     else:
@@ -129,8 +113,6 @@ def check_quote(
     reason = (
         "signal_clock_ahead"
         if now < signal
-        else "live_signal_bar_ended"
-        if live_bar_end is not None and now >= live_bar_end
         else "entry_window_expired"
         if now > signal + limits.max_entry_age_s or monotonic_expired
         else status
@@ -145,7 +127,6 @@ def check_quote(
         limits.max_quote_age_s,
         status,
         reason,
-        live_bar_end,
     )
 
 

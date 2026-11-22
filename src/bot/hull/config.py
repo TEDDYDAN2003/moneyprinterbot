@@ -26,7 +26,8 @@ LADDER = "profit_ladder_70_30_v1"
 FIXED = "fixed_tp"
 TARGET_POLICY = "base_plus_entry_spread_v1"  # all newly opened Hull tickets, never retrofit saved goals
 DYNAMIC_HULL_LENGTH = 16  # shared base period for the active scanner
-LIVE_TIMING = "live_hull_cross"
+CLOSE_TIMING = "confirmed_cross_next_bar"
+STOP_POLICY = "confirmed_cross_candle_wick_v1"
 ENTRY_POLICY = "fc_dynamic_failed_mss_return_v3"
 BATCH_ENTRY_POLICY = "first_eligible_while_lane_flat_v2"
 # Removed in Hull only. Older full-file demo configs may still contain the keys.
@@ -46,7 +47,8 @@ class Indicator(Strict):
     structure_timeframe: str | None = None
     exit_opposite: Literal[True] = True
     exit_on_mss: Literal[True] = True
-    stop: Literal["local_pullback", "confirmed_pivot"] = "local_pullback"
+    # Older anchors remain available to standalone reference calculations only.
+    stop: Literal["cross_candle", "local_pullback", "confirmed_pivot"] = "cross_candle"
     pullback_bars: int = Field(7, ge=1, le=100)
     swing_len: int = Field(3, ge=1, le=50)
     atr_length: int = Field(14, ge=1, le=500)
@@ -104,7 +106,7 @@ class Limits(Strict):
 
 
 class HullConfig(Strict):
-    entry_timing: Literal["live_hull_cross"] = LIVE_TIMING
+    entry_timing: Literal["confirmed_cross_next_bar"] = CLOSE_TIMING
     eligible_timeframes: tuple[str, ...] = ()  # no default trading authorization
     exit_policy: Literal["profit_ladder_70_30_v1", "fixed_tp"] = LADDER
     indicator: Indicator = Indicator()
@@ -122,6 +124,11 @@ class HullConfig(Strict):
             raise ValueError(
                 f"The active Hull bot requires hull.indicator.hull_len: {DYNAMIC_HULL_LENGTH} "
                 f"(got {v.hull_len}). Update this field in your local config."
+            )
+        if v.stop != "cross_candle":
+            raise ValueError(
+                "The active Hull bot requires hull.indicator.stop: cross_candle. "
+                "Update the private YAML; do not change stops on existing tickets."
             )
         return v
 

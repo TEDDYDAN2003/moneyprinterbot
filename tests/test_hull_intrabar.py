@@ -8,6 +8,7 @@ from types import SimpleNamespace as NS
 
 import pytest
 from hull_mt import MT, ROOT, T, scanner_clock
+
 from bot.config.loader import load_yaml
 from bot.hull.config import HullConfig, Indicator, selection
 from bot.hull.curves import LiveTick
@@ -59,11 +60,11 @@ def fixture(invert=False, path=PATH):
 
 
 def rate(b):
-    return dict(time=b.t, open=b.o, high=b.h, low=b.l, close=b.c)
+    return {"time": b.t, "open": b.o, "high": b.h, "low": b.l, "close": b.c}
 
 
 @pytest.mark.parametrize("invert", [False, True])
-@pytest.mark.parametrize("stop", ["local_pullback", "confirmed_pivot"])
+@pytest.mark.parametrize("stop", ["cross_candle", "local_pullback", "confirmed_pivot"])
 def test_native_forming_cross_is_live_but_cannot_modify_closed_trend_anchor_or_atr(
     invert, stop
 ):
@@ -88,10 +89,10 @@ def test_native_forming_cross_is_live_but_cannot_modify_closed_trend_anchor_or_a
     b = Bar(T, cur, max(cur, px), min(cur, px), px)
     q = LiveTick(T * 1000 + 300, px, px + 0.01)
     r = h.preview(b, q)
-    assert r.label == r.side == -sign and r.structure == rows[-1].structure
-    assert r.entry_side == 0 and r.entry_reason == "first_trend_cross_after_mss"
-    assert r.atr == rows[-1].atr and r.anchor_s < T and r.trigger == q
-    assert r.raw_sl == pytest.approx(r.anchor - r.label * 0.1 * r.atr)
+    assert r.label == -sign and r.side == 0 and r.structure == rows[-1].structure
+    assert r.entry_side == 0 and r.entry_reason == "await_cross_candle_close"
+    assert r.atr == rows[-1].atr and r.anchor_s is None and r.trigger == q
+    assert r.raw_sl is None and r.anchor is None
     assert h.preview(replace(b, c=cur), replace(q, bid=cur, ask=cur + 0.01)).label == 0
     assert pickle.dumps(h) == before
 
@@ -164,13 +165,14 @@ def test_initial_live_snapshot_and_repeated_markers_are_not_new_orders():
     assert sample(mt, NAME, [lane], lambda: T + 0.2, 4) == ([], True)
     mt.q.time_msc += 10
     assert sample(mt, NAME, [lane], lambda: T + 0.2, 4) == ([], True)
-    # Even closing the same real cross cannot rearm the latching signal.
-    assert not lane.note(lane.h.update(Bar(T, 16, 16, 15, 15)))
+    # A separately confirmed close must not be swallowed by a live protective latch.
+    closed = lane.h.update(Bar(T, 16, 16, 15, 15))
+    assert lane.note(closed) and not lane.note(closed)
 
 
 @pytest.mark.parametrize("invert", [False, True])
 @pytest.mark.parametrize("already_skipped", [False, True])
-def test_observer_uses_verified_live_chart_candle_not_next_bar_close(
+def test_scanner_live_cross_is_recorded_only_as_protection(
     invert, already_skipped, tmp_path, monkeypatch
 ):
     # Two observations in one forming candle. Run the actual scanner in READ ONLY,
@@ -222,24 +224,24 @@ def test_observer_uses_verified_live_chart_candle_not_next_bar_close(
         .splitlines()
     ]
     (raw,) = [r for r in events if r["event"] == "live_hull_cross"]
-    assert raw["label"] == raw["side"] == (1 if invert else -1)
-    assert raw["entry_side"] == (raw["label"] if already_skipped else 0)
-    assert raw["entry_reason"] == (
-        "ready" if already_skipped else "first_trend_cross_after_mss"
+    assert (
+        raw["label"] == (1 if invert else -1) and raw["side"] == raw["entry_side"] == 0
     )
+    assert raw["entry_reason"] == "await_cross_candle_close" and raw["raw_sl"] is None
     assert (
         raw["trigger_msc"] < raw["close_s"] * 1000
-        and raw["entry_timing"] == "live_hull_cross"
+        and raw["entry_timing"] == "live_exit_only"
     )
-    assert [r["outcome"] for r in events if r["event"] == "label_decision"] == [
-        "shadow_plan_only" if already_skipped else "first_trend_cross_after_mss"
-    ]
+    assert not any(
+        r["event"] in ("batch_preview", "demo_result", "label_decision") for r in events
+    )
     assert not mt.requests
 
 
 def test_opposite_on_reprice_interrupts_remaining_legs_immediately():
-    from bot.hull.feed import verify_before_leg
     from hull_mt import sig
+
+    from bot.hull.feed import verify_before_leg
 
     lane = Stream(1, Indicator(hull_len=4, swing_len=1, atr_length=2), 0.01)
     for b in fixture():

@@ -21,12 +21,13 @@ from .config import (
     LADDER,
     NATIVE_TF,
     RETIRED_LIMITS,
+    STOP_POLICY,
     TARGET_POLICY,
     TF_NAME,
 )
 from .curves import LiveTick
 from .desk import Desk, identity_check, resolve
-from .entry_clock import LIVE_QUOTE_POLICY, WAITING, poll_delay
+from .entry_clock import QUOTE_POLICY, WAITING, poll_delay
 from .feed import Stream, StructureTape, sample, verify_before_leg
 from .ladder import cash_levels
 from .orders import Block, Grid, spread_goal
@@ -120,7 +121,7 @@ def dispatch(d, name, labels, *, data_ok, history_ok, rewarmed, shifts=()):
         key=lambda r: r.close_s,
     ):
         d.close_mss(name, r)
-    events, exited = {}, set()
+    events, exited, live_seen = {}, set(), {}
     for r in sorted(labels, key=lambda v: v.signal_msc):
         if (
             not r.label
@@ -130,7 +131,11 @@ def dispatch(d, name, labels, *, data_ok, history_ok, rewarmed, shifts=()):
         ):
             continue
         w = d.waiting.get((name, r.tf))
-        if w and (r.signal_msc, r.label) == (w.reading.signal_msc, w.reading.label):
+        if (
+            not r.trigger
+            and w
+            and (r.signal_msc, r.label) == (w.reading.signal_msc, w.reading.label)
+        ):
             continue
         matched = d.close_opposite(name, r)
         if matched:
@@ -144,7 +149,12 @@ def dispatch(d, name, labels, *, data_ok, history_ok, rewarmed, shifts=()):
                 raw_side=r.label,
                 **r.clock_fields(),
             )
-        events.setdefault(r.tf, []).append(r)
+        if r.trigger is not None:
+            # Protect immediately, but never compete as an entry with the just-closed
+            # candle. A newer opposing observation invalidates that lane's candidate.
+            live_seen[r.tf, r.label] = r.signal_msc
+        else:
+            events.setdefault(r.tf, []).append(r)
     frames = set(events) | {tf for sym, tf in d.waiting if sym == name}
     for tf in sorted(frames):
         w = d.waiting.get((name, tf))
@@ -185,7 +195,9 @@ def dispatch(d, name, labels, *, data_ok, history_ok, rewarmed, shifts=()):
             continue
         valid = [r for r in peers if r.entry_side]
         r = (valid or peers)[-1]
-        if len({v.label for v in peers}) > 1:
+        if live_seen.get((tf, -r.label), -1) >= r.signal_msc:
+            why = "opposite_after_confirmed_cross"
+        elif len({v.label for v in peers}) > 1:
             why = "conflicting_signals_same_lane_tick"
         elif (tf, r.signal_msc, r.entry_side) in exited:
             why = "same_side_held_at_opposite_exit"
@@ -196,6 +208,7 @@ def dispatch(d, name, labels, *, data_ok, history_ok, rewarmed, shifts=()):
         else:
             why = r.entry_reason
         if w and why in (
+            "opposite_after_confirmed_cross",
             "conflicting_signals_same_lane_tick",
             "same_side_held_at_opposite_exit",
         ):
@@ -249,7 +262,7 @@ def target_preview(mt, name, p, q, grid, h, now):
     return result
 
 
-def make_lanes(h, frames, p):
+def make_lanes(h, frames, p, tick_size):
     tf = NATIVE_TF.get(h.indicator.structure_timeframe)
     ext = (
         StructureTape(tf, h.indicator.swing_len, max(frames), h.indicator.pullback_bars)
@@ -257,7 +270,10 @@ def make_lanes(h, frames, p):
         else None
     )
     return ext, {
-        f: Stream(f, h.indicator, p.pip_size, ext if f != tf else None) for f in frames
+        f: Stream(
+            f, h.indicator, p.pip_size, ext if f != tf else None, tick_size=tick_size
+        )
+        for f in frames
     }
 
 
@@ -348,7 +364,9 @@ def run(
             "signal_policy": h.indicator.signal_policy,
             "batch_entry_policy": BATCH_ENTRY_POLICY,
             "entry_timing": h.entry_timing,
-            "entry_quote_policy": LIVE_QUOTE_POLICY,
+            "entry_quote_policy": QUOTE_POLICY,
+            "new_ticket_stop_policy": STOP_POLICY,
+            "live_cross_role": "protective_exit_only",
             "opposite_exit": "lane_raw_cross_before_entry_checks",
             "mss_exit": "flatten_own_lane_on_confirmed_shift",
             "ownership": "verified_position_id_and_broker_symbol_and_signal_timeframe",
@@ -400,7 +418,7 @@ def run(
                         issues.append(
                             f"{name} {side}: target preview unavailable: {preview['status']}"
                         )
-                ext, lanes = make_lanes(h, frames, p)
+                ext, lanes = make_lanes(h, frames, p, specs[name]["tick"])
                 now = time.time()
                 if not specs[name]["bid_chart_verified"]:
                     issues.append(
@@ -473,11 +491,15 @@ def run(
                 mt, cfg, h, syms, identity, state, path, emit, armed, sessions=sessions
             )
             locks.callback(d.cancel_all_waits)
-            bundles = {name: make_lanes(h, frames, p) for name, (_, p) in syms.items()}
+            bundles = {
+                name: make_lanes(h, frames, p, specs[name]["tick"])
+                for name, (_, p) in syms.items()
+            }
 
             # Context settings are part of the identity: history in another lane
-            # cannot consume this lane's skip. Keep the v2 journal namespace:
-            # a previously skipped candle must not become tradable on upgrade.
+            # cannot consume this lane's skip. The new stop mode gets its own
+            # confirmed-only reconstruction. Desk still honors pre-upgrade order
+            # reservations; no ticket state is migrated or replayed.
             policy_key = hashlib.sha256(
                 h.indicator.model_dump_json(exclude={"exit_on_mss"}).encode()
             ).hexdigest()[:16]

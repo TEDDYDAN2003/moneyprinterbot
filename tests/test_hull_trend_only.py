@@ -7,6 +7,7 @@ from types import SimpleNamespace as NS
 import pytest
 from hull_mt import ROOT, T, sig
 from pydantic import ValidationError
+
 from bot.config.loader import load_yaml
 from bot.hull.config import HullConfig, Indicator, selection
 from bot.hull.curves import LiveTick
@@ -15,7 +16,7 @@ from bot.hull.structure import Structure
 from bot.hull.terminal import dispatch, run
 
 NAME = "XAUUSDm"
-OK = dict(data_ok=True, history_ok=True, rewarmed=False)
+OK = {"data_ok": True, "history_ok": True, "rewarmed": False}
 
 
 def test_shipped_and_missing_length_both_drive_a_and_b_from_16():
@@ -68,7 +69,7 @@ def test_empty_allowlist_and_cli_override_cannot_initialize_mt5(monkeypatch):
                 "indicator": {"structure_timeframe": "M2"},
             }
         )
-    for clock in ("confirmed_close_only", "live_continuation_v1"):
+    for clock in ("live_hull_cross", "confirmed_close_only", "live_continuation_v1"):
         with pytest.raises(ValidationError):
             HullConfig.model_validate(cfg["hull"] | {"entry_timing": clock})
     with pytest.raises(ValidationError):
@@ -78,7 +79,7 @@ def test_empty_allowlist_and_cli_override_cannot_initialize_mt5(monkeypatch):
 @pytest.mark.parametrize("side", [-1, 1])
 @pytest.mark.parametrize("event", [0, 1, 3])
 def test_trend_cross_no_midpoint_bos_or_retest_required(hull_desk, side, event):
-    mt, d, events = hull_desk("medium", armed=False)
+    mt, d, _events = hull_desk("medium", armed=False)
     # No range/extreme exists. Price need not visit a discount/premium half at signal or quote.
     r = replace(
         sig(1999 if side == 1 else 2001, side),
@@ -97,18 +98,18 @@ def test_trend_cross_no_midpoint_bos_or_retest_required(hull_desk, side, event):
 
 
 def position(mt, d, side, ticket, **changes):
-    p = dict(
-        symbol=NAME,
-        magic=d.h.magic,
-        type=0 if side == 1 else 1,
-        ticket=ticket,
-        price_open=2000.0,
-        sl=1998 if side == 1 else 2002,
-        tp=2002 if side == 1 else 1998,
-        volume=0.01,
-        profit=0.0,
-        time_msc=(T - 20) * 1000,
-    )
+    p = {
+        "symbol": NAME,
+        "magic": d.h.magic,
+        "type": 0 if side == 1 else 1,
+        "ticket": ticket,
+        "price_open": 2000.0,
+        "sl": 1998 if side == 1 else 2002,
+        "tp": 2002 if side == 1 else 1998,
+        "volume": 0.01,
+        "profit": 0.0,
+        "time_msc": (T - 20) * 1000,
+    }
     p.update(changes)
     pos = NS(**p)
     mt.positions.append(pos)
@@ -169,11 +170,11 @@ def test_exit_latches_until_new_quote_and_never_blindly_resends(hull_desk):
 
 
 def test_simultaneous_opposite_entries_remain_independent(hull_desk):
-    mt, d, log = hull_desk("medium")
+    mt, d, _log = hull_desk("medium")
     position(mt, d, -1, 98)
     d.verify_signal = lambda *_: True
-    a = replace(sig(), trigger=LiveTick.read(mt.q), close_s=T + 60)
-    b = replace(sig(2001, -1), tf=5, trigger=a.trigger, close_s=T + 300)
+    a = sig()
+    b = replace(sig(2001, -1), tf=5)
     dispatch(d, NAME, [a, b], **OK)
     assert mt.requests[0]["position"] == 98
     assert (
@@ -182,20 +183,30 @@ def test_simultaneous_opposite_entries_remain_independent(hull_desk):
     )
 
 
-def test_live_repricing_vanish_and_restart_reservation(hull_desk):
+def test_no_live_reservation_but_rejected_confirmed_entry_stays_consumed_on_restart(
+    hull_desk, monkeypatch
+):
     mt, d, _ = hull_desk()
     r = replace(sig(), trigger=LiveTick.read(mt.q), close_s=T + 60)
-    d.verify_signal = lambda *args: False
-    assert d.batch(NAME, r) == "live_cross_or_trend_no_longer_verified"
-    assert not d.waiting and not mt.requests
+    d.verify_signal = lambda *_: False
+    assert d.batch(NAME, r) == "await_cross_candle_close" and not d.state.get(
+        "dynamic_entry_bars"
+    )
+    monkeypatch.setattr("bot.hull.desk.time.time", lambda: T + 60.2)
+    mt.q.time_msc = (T + 60) * 1000 + 100
+    closed = replace(r, trigger=None)
+    assert (
+        d.batch(NAME, closed) == "next_bar_quote_or_context_unverified"
+        and not mt.requests
+    )
     _, restart, _ = hull_desk(state=d.state, mt=mt)
-    assert restart.batch(NAME, replace(r, trigger=None)) == "already_consumed"
+    assert restart.batch(NAME, closed) == "already_consumed" and not restart.waiting
 
 
 def test_sibling_raw_exit_cannot_touch_occupied_lane(hull_desk):
     mt, d, log = hull_desk()
     position(mt, d, 1, 61)
-    eligible = replace(sig(), trigger=LiveTick.read(mt.q), close_s=T + 60)
+    eligible = sig()
     exit_only = replace(raw(mt, -1), tf=5, close_s=T + 300)
     dispatch(d, NAME, [eligible, exit_only], **OK)
     assert [p.ticket for p in mt.positions] == [61] and not mt.requests

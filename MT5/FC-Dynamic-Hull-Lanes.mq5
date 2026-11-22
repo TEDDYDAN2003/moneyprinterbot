@@ -1,7 +1,7 @@
 // FC Dynamic Hull / independent lane monitor. Custom indicator, NOT an EA.
 // Reads chart prices only. Never sends requests to the trade server.
 #property strict
-#property version "1.10"
+#property version "1.20"
 #property indicator_chart_window
 #property indicator_buffers 2
 #property indicator_plots 2
@@ -19,8 +19,6 @@ enum FC_FOCUS { Focus_M15=15, Focus_M30=30, Focus_M45=45 };
 input FC_FOCUS Focus=Focus_M15; // Hull lines from this lane; panel always shows all three
 input int Swing=3;              // Confirmed swing bars on each side
 input bool NeutralWait=false;   // False = use High while neutral (no entry)
-input bool PivotStop=false;     // False = original local pullback; true = confirmed pivot
-input int Pullback=7;
 input int AtrLength=14;
 input double AtrBuffer=0.1;
 input double ExtraPips=0.0;
@@ -31,12 +29,13 @@ input bool AlertFreshMSS=false; // Freshly observed closed shifts only; never on
 
 // BEGIN PORTABLE CORE -- also executed by the fabricated-candle contract.
 struct HullState {
-   int bias,count,established; datetime closed,epoch,skipBar,failedCounter,lastUp,lastDn;
+   int bias,count,established; datetime closed,epoch,skipBar,failedCounter;
    bool firstWaived;
    double hi,lo,lastH,lastL,pullH,pullL,guard,tip,broken;
    datetime hiT,loT,pullHT,pullLT,legT,originT,windowT,guardT,tipT,lastHT,lastLT;
    double oldLow,oldHigh,oldB,prevC,atr,sumTR;
 };
+double TradeTick=0.0; // from SYMBOL_TRADE_TICK_SIZE; never infer it from pip size
 struct Result {int bias,ev,raw,eligible; bool skip,waived,exitClose; double lowA,highA,a,b,sl;};
 
 double Field(const MqlRates &x,const int f){return f==1?x.low:f==-1?x.high:x.close;}
@@ -88,7 +87,7 @@ int StructureStep(HullState &s,const MqlRates &q[],const int i){
    }
    s.bias=d;return ev;
 }
-void Step(HullState &s,const MqlRates &q[],const int i,const int tf,const bool commit,Result &r,const long liveMS=0){
+void Step(HullState &s,const MqlRates &q[],const int i,const int tf,const bool commit,Result &r){
    ZeroMemory(r); datetime end=q[i].time+tf*60;
    if(commit){
       if(s.closed!=q[i].time){s.established=0;s.failedCounter=0;} // unknown interval: no failed-leg proof
@@ -108,15 +107,18 @@ void Step(HullState &s,const MqlRates &q[],const int i,const int tf,const bool c
    if(pick!=0&&s.count>=(commit?20:19)){
       if(r.b>r.a&&s.oldB<old)r.raw=1;else if(r.b<r.a&&s.oldB>old)r.raw=-1;
    }
-   if(r.raw!=0){double anchor=0; datetime since=r.raw==1?s.lastDn:s.lastUp;
-      if(PivotStop)anchor=r.raw==1?s.lastL:s.lastH;
-      else for(int k=i-1;k>=0&&i-k<=Pullback&&q[k].time>=since;k--){double v=r.raw==1?q[k].low:q[k].high;
-         if(anchor==0||r.raw*(v-anchor)<0)anchor=v;}
-      if(anchor>0&&s.count>=AtrLength)r.sl=anchor-r.raw*(AtrBuffer*s.atr+ExtraPips*PipSize);
+   // A live raw cross is an exit notification only. No forming wick, entry,
+   // first-cross skip or waiver before the native candle actually closes.
+   if(commit&&r.raw!=0){double anchor=r.raw==1?q[i].low:q[i].high;
+      if(anchor>0&&s.count>=AtrLength&&TradeTick>0){
+         double units=(anchor-r.raw*MathMax(TradeTick,AtrBuffer*s.atr+ExtraPips*PipSize))/TradeTick;
+         double nearTick=MathRound(units);
+         if(MathAbs(units-nearTick)<=4*DBL_EPSILON*MathMax(1.0,MathAbs(units)))units=nearTick;
+         r.sl=(r.raw==1?MathFloor(units):MathCeil(units))*TradeTick;
+      }
       if(r.raw==r.bias&&r.sl>0&&r.raw*(q[i].close-r.sl)>0){
          bool back=s.failedCounter>0&&s.failedCounter<s.epoch&&s.established==s.bias;
-         long when=commit?(long)end*1000:liveMS;
-         r.exitClose=back&&when<=(long)s.epoch*1000;
+         r.exitClose=back&&end<=s.epoch;
          if(!r.exitClose){
             if(s.epoch!=0&&s.skipBar==0){s.skipBar=end;s.firstWaived=back;}
             r.waived=back&&s.firstWaived&&end==s.skipBar;
@@ -124,7 +126,6 @@ void Step(HullState &s,const MqlRates &q[],const int i,const int tf,const bool c
             r.eligible=r.skip?0:r.raw;
          }
       }
-      if(commit){if(r.raw==1)s.lastUp=q[i].time;else s.lastDn=q[i].time;}
    }
    if(commit){s.closed=end;s.prevC=q[i].close;s.oldLow=r.lowA;s.oldHigh=r.highA;s.oldB=r.b;}
 }
@@ -182,7 +183,7 @@ public:
    void Init(const int period){tf=period;Reset();}
    void Reset(){ZeroMemory(state);ZeroMemory(last);ArrayResize(tape,0);sourceOpen=0;lastMss=0;previousSample=0;text="Waiting for rates";
       for(int j=0;j<ArraySize(marks);j++)ObjectDelete(0,marks[j]);ArrayResize(marks,0);if(tf==(int)Focus)ArrayResize(trace,0);}
-   void Mark(const double px,const datetime end,const string word,const color ink){
+   void Mark(const double px,const datetime end,const string word,const color ink,const double setupSL=0.0){
       if(MarksPerLane==0||(OnlyFocusMarks&&tf!=(int)Focus))return;
       string n=prefix+IntegerToString(tf)+"_"+IntegerToString(end)+"_"+word;
       if(ObjectFind(0,n)>=0)return;
@@ -190,7 +191,7 @@ public:
       ObjectSetString(0,n,OBJPROP_TEXT,"M"+IntegerToString(tf)+" "+word);ObjectSetInteger(0,n,OBJPROP_COLOR,ink);
       ObjectSetInteger(0,n,OBJPROP_ANCHOR,tf==30?ANCHOR_LEFT_UPPER:tf==45?ANCHOR_RIGHT_UPPER:ANCHOR_LEFT_LOWER);
       ObjectSetInteger(0,n,OBJPROP_FONTSIZE,8);ObjectSetInteger(0,n,OBJPROP_SELECTABLE,false);ObjectSetInteger(0,n,OBJPROP_HIDDEN,true);
-      ObjectSetString(0,n,OBJPROP_TOOLTIP,_Symbol+" M"+IntegerToString(tf)+" | "+word+" | confirmed "+Stamp(end)+" (broker time); signal, not fill.");
+      ObjectSetString(0,n,OBJPROP_TOOLTIP,_Symbol+" M"+IntegerToString(tf)+" | "+word+" | confirmed "+Stamp(end)+" (broker time)"+(setupSL>0?" | setup SL: "+DoubleToString(setupSL,_Digits):"")+"; signal, not fill.");
       int k=ArraySize(marks);if(k>=MarksPerLane){ObjectDelete(0,marks[0]);ArrayRemove(marks,0,1);k--;}
       ArrayResize(marks,k+1);marks[k]=n;
    }
@@ -201,7 +202,7 @@ public:
       if(latest!=sourceOpen||state.count==0){
          bool warm=state.count==0||tick.time-state.closed>3*tf*60;
          MqlRates rows[];datetime tail;int n=Fetch(tf,false,warm?1200:4,rows,tail);
-         int required=MathMax(22,MathMax(AtrLength+1,MathMax(2*Swing+2,Pullback+1)));
+         int required=MathMax(22,MathMax(AtrLength+1,2*Swing+2));
          if(n<(warm?required:1)){text="Insufficient closed history";return false;}
          if(warm)Reset();
          for(int j=0;j<n;j++){
@@ -215,10 +216,10 @@ public:
                if(AlertFreshMSS&&!warm&&state.closed>previousSample&&tick.time-state.closed<=tf*60)
                   Alert(_Symbol," M",tf," confirmed MSS: close this lane only | ",Stamp(state.closed));
             }
-            if(last.eligible!=0&&(!warm||j>=n-400))Mark(rows[j].close,state.closed,Side(last.eligible)+(last.waived?" (resume)":""),last.eligible==1?clrSeaGreen:clrIndianRed);
+            if(last.eligible!=0&&(!warm||j>=n-400))Mark(rows[j].close,state.closed,Side(last.eligible)+(last.waived?" (resume)":""),last.eligible==1?clrSeaGreen:clrIndianRed,last.sl);
          }
          // Keep indicator state across shifts; drop only old raw samples, not pivot/ATR/skip state.
-         int used=ArraySize(tape),keep=MathMax(150,MathMax(2*Swing+4,Pullback+4));if(used>keep)ArrayRemove(tape,0,used-keep);
+         int used=ArraySize(tape),keep=MathMax(150,2*Swing+4);if(used>keep)ArrayRemove(tape,0,used-keep);
          // If the new source bar is visible but shift-1 rates lag, try again next tick.
          if(state.closed>0&&latest>=state.closed&&latest-state.closed<tf*60)sourceOpen=latest;
       }
@@ -226,20 +227,22 @@ public:
       int num=Fetch(tf,true,1,current,part);
       if(num==1&&Good(current[0])&&current[0].time==state.closed&&tick.time>=part&&tick.time<part+PeriodSeconds(base)&&current[0].close==tick.bid){
          MqlTick check;if(SymbolInfoTick(_Symbol,check)&&check.time_msc==tick.time_msc&&check.bid==tick.bid&&check.ask==tick.ask){
-            int k=ArraySize(tape);ArrayResize(tape,k+1,256);tape[k]=current[0];Result r;Step(state,tape,k,tf,false,r,tick.time_msc);ArrayResize(tape,k);
-            live=r.eligible!=0?Side(r.eligible)+(r.waived?" resume (live)":" setup (live)"):r.exitClose?"MSS close (exit only)":r.skip?"first cross skipped":r.raw!=0?"raw "+Side(r.raw)+" (exit only)":"no cross";
+            int k=ArraySize(tape);ArrayResize(tape,k+1,256);tape[k]=current[0];Result r;Step(state,tape,k,tf,false,r);ArrayResize(tape,k);
+            live=r.raw!=0?"raw "+Side(r.raw)+" (live / exits only)":"no live cross";
          }else live="quote changed";
       }
       text=Phase(state.bias)+" | "+live+" | last MSS: "+Stamp(lastMss);previousSample=tick.time;return redraw;
    }
 };
 LaneView lanes[3];
-int OnInit(){if(Swing<1||Swing>50||Pullback<1||Pullback>100||AtrLength<1||AtrLength>500||AtrBuffer<0||ExtraPips<0||PipSize<=0||MarksPerLane<0||MarksPerLane>200)return INIT_PARAMETERS_INCORRECT;
+int OnInit(){if(Swing<1||Swing>50||AtrLength<1||AtrLength>500||AtrBuffer<0||ExtraPips<0||PipSize<=0||MarksPerLane<0||MarksPerLane>200)return INIT_PARAMETERS_INCORRECT;
+   TradeTick=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE);
+   if(!MathIsValidNumber(TradeTick)||TradeTick<=0){Print("No verified symbol trade tick size");return INIT_FAILED;}
    if(SymbolInfoInteger(_Symbol,SYMBOL_CHART_MODE)!=SYMBOL_CHART_MODE_BID){Print("FC Hull needs a bid-price chart matching the bot");return INIT_FAILED;}
    prefix="FCDH_"+IntegerToString((long)GetTickCount64())+"_";while(ObjectFind(0,prefix+"panel0")>=0)prefix+="x";
    if(!SetIndexBuffer(0,ALine,INDICATOR_DATA)||!SetIndexBuffer(1,BLine,INDICATOR_DATA))return INIT_FAILED;
    ArraySetAsSeries(ALine,false);ArraySetAsSeries(BLine,false);IndicatorSetString(INDICATOR_SHORTNAME,"FC Hull 16 • lane monitor");
-   Panel(0,"HULL 16   /   READ-ONLY   /   MSS exits its own lane",clrSlateGray);
+   Panel(0,"HULL 16   /   CLOSE → NEXT BAR   /   READ-ONLY",clrSlateGray);
    lanes[0].Init(15);lanes[1].Init(30);lanes[2].Init(45);return INIT_SUCCEEDED;}
 void OnDeinit(const int reason){if(StringLen(prefix)>0)ObjectsDeleteAll(0,prefix);}
 int OnCalculate(const int total,const int prev,const datetime &time[],const double &open[],const double &high[],const double &low[],const double &close[],const long &vol[],const long &realvol[],const int &spread[]){

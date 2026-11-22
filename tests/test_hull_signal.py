@@ -2,9 +2,9 @@ import json
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from bot.hull.config import Indicator
-from pydantic import ValidationError
 from bot.hull.signal import Hull
 from bot.zones.engine import Bar
 
@@ -42,7 +42,9 @@ def test_literal_javascript_reference_all_closed_rows(ix):
 
 @pytest.mark.parametrize("tf", [1, 2, 5])
 def test_pullback_uses_previous_counterleg_local_extreme_not_future_or_signal(tf):
-    p = Indicator()
+    p = Indicator(
+        stop="local_pullback"
+    )  # standalone historical calculation, not active execution
     eng = Hull(tf, p, 0.01)
     bars = tape(tf)
     last = {1: None, -1: None}

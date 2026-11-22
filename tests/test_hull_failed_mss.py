@@ -79,7 +79,7 @@ def bars(side, tf, *, bos=False, stall=0, gap=False, end=T):
 
 
 def read(side, tf, **opts):
-    h = Hull(tf, P, 0.01)
+    h = Hull(tf, P, 0.01, tick_size=0.001)
     return [h.update(b) for b in bars(side, tf, **opts)]
 
 
@@ -166,7 +166,7 @@ def test_no_bar_limit_but_missing_counter_history_is_not_evidence(side):
 
 @pytest.mark.parametrize("side", [-1, 1])
 def test_whipsaws_never_waive_wrong_direction_and_bos_not_needed_to_resume(side):
-    h = Hull(15, P, 0.01)
+    h = Hull(15, P, 0.01, tick_size=0.001)
     for b in bars(side, 15):
         r = h.update(b)
     assert r.waived_first_cross
@@ -182,7 +182,7 @@ def test_whipsaws_never_waive_wrong_direction_and_bos_not_needed_to_resume(side)
         assert new.failed_counter_mss_s == (old.epoch if back else None)
         # The new candle's verified direction-aligned cross after the shift, not the MSS close.
         gate = FirstCrossGate()
-        later = ready(new.bias, r.close_s + 900, new, ms=r.close_s * 1000 + 1)
+        later = ready(new.bias, r.close_s + 900, new)
         assert gate.apply(later, observe=True).entry_side == (side if back else 0)
 
 
@@ -194,7 +194,7 @@ def test_only_fresh_valid_cross_after_return_not_wick_wrong_side_or_same_close(
     rows = read(side, 15)
     away, back = [r.structure for r in rows if r.confirmed_mss]
     g = FirstCrossGate()
-    x = ready(-side, away.closed_s + 900, away, ms=away.closed_s * 1000 + 1)
+    x = ready(-side, away.closed_s + 900, away)
     if counter_signal:
         assert g.apply(x, observe=True).entry_reason == "first_trend_cross_after_mss"
         assert (
@@ -202,7 +202,6 @@ def test_only_fresh_valid_cross_after_return_not_wick_wrong_side_or_same_close(
                 replace(
                     x,
                     close_s=x.close_s + 900,
-                    trigger=replace(x.trigger, ms=x.trigger.ms + 900000),
                 ),
                 observe=True,
             ).entry_side
@@ -221,9 +220,18 @@ def test_only_fresh_valid_cross_after_return_not_wick_wrong_side_or_same_close(
     first = replace(
         at, close_s=at.close_s + 900, trigger=LiveTick(at.close_s * 1000, 2000, 2000.1)
     )
-    assert g.apply(first, observe=True).entry_reason == "mss_close_exit_only"
+    assert g.apply(first, observe=True).entry_reason == "await_cross_candle_close"
     assert g.record["bar"] is None
-    first = replace(first, trigger=replace(first.trigger, ms=first.trigger.ms + 1))
+    assert (
+        g.apply(
+            replace(first, trigger=replace(first.trigger, ms=first.trigger.ms + 1)),
+            observe=True,
+        ).entry_side
+        == 0
+    )
+    first = replace(
+        first, trigger=None
+    )  # a later confirmed close, not a second live observation
     bad = replace(first, side=0, raw_sl=None, reason="no_known_swing_or_atr")
     assert (
         g.apply(bad, observe=True).entry_reason == "no_known_swing_or_atr"
@@ -236,7 +244,7 @@ def test_only_fresh_valid_cross_after_return_not_wick_wrong_side_or_same_close(
         preview.entry_side == side and g.record["bar"] is None
     )  # a projection does not reserve
     assert g.apply(first, observe=True) == preview
-    for again in (first, replace(first, trigger=None)):
+    for again in (first, replace(first, structure=replace(first.structure))):
         assert g.apply(
             again, observe=True
         ).waived_first_cross  # re-verification, not another order
@@ -286,7 +294,7 @@ def test_restart_reserved_decisions_and_legacy_skip_cannot_be_refunded(side):
 
 @pytest.mark.parametrize("side", [-1, 1])
 @pytest.mark.parametrize("mode", ["observe", "mock_demo", "outside", "wide_spread"])
-def test_fresh_resumption_through_verified_live_tick_and_real_desk(
+def test_fresh_resumption_through_confirmed_wick_and_next_quote_real_desk(
     hull_desk, monkeypatch, side, mode
 ):
     end = (
@@ -294,7 +302,7 @@ def test_fresh_resumption_through_verified_live_tick_and_real_desk(
     )  # quiet price fixture, same signal other hour
     mt, d, log = hull_desk("medium", armed=mode != "observe")
     d.h = d.h.model_copy(update={"eligible_timeframes": ("M15", "M30", "M45")})
-    lane = Stream(15, P, 0.01)
+    lane = Stream(15, P, 0.01, tick_size=mt.i.trade_tick_size)
     path = bars(side, 15, end=end)
     history = [lane.h.update(b) for b in path[:-1]]
     back = [r for r in history if r.confirmed_mss][-1]
@@ -346,11 +354,30 @@ def test_fresh_resumption_through_verified_live_tick_and_real_desk(
 
     d.verify_signal = verify
     readings, ok = sample(mt, NAME, [lane], lambda: wall[0], 4)
-    (first,) = readings
+    (developing,) = readings
     assert (
-        ok and first.trigger and first.entry_side == side and first.waived_first_cross
+        ok
+        and developing.trigger
+        and developing.label == side
+        and developing.entry_side == 0
     )
+    assert developing.raw_sl is None and not developing.waived_first_cross
     dispatch(d, NAME, readings, data_ok=True, history_ok=True, rewarmed=False)
+    assert not mt.positions and not mt.requests and not d.waiting
+    first = lane.h.update(last)
+    assert lane.note(first) and first.entry_side == side and first.waived_first_cross
+    wall[0] = end + 0.2
+    mt.q.time_msc = end * 1000 + 100
+    mt.copy_rates_from_pos = lambda *_: [
+        {
+            "time": end,
+            "open": mt.q.bid,
+            "high": mt.q.bid,
+            "low": mt.q.bid,
+            "close": mt.q.bid,
+        }
+    ]
+    dispatch(d, NAME, [first], data_ok=True, history_ok=True, rewarmed=False)
     (decision,) = [v for e, v in log if e == "label_decision"]
     expected = {
         "observe": "shadow_plan_only",
@@ -385,7 +412,7 @@ def test_default_swing_three_and_clean_restart_on_same_native_sequence(side, bos
     path = [replace(b, t=T + (j - len(path)) * 900) for j, b in enumerate(path)]
 
     def load(gate):
-        h = Hull(15, Indicator(), 0.01, gate)
+        h = Hull(15, Indicator(), 0.01, gate, tick_size=0.001)
         return [h.update(b) for b in path]
 
     g = FirstCrossGate()
@@ -415,7 +442,7 @@ def test_default_swing_three_and_clean_restart_on_same_native_sequence(side, bos
 
 @pytest.mark.parametrize("side", [-1, 1])
 def test_original_direction_bos_after_return_does_not_rearm_before_first_cross(side):
-    h = Hull(15, P, 0.01)
+    h = Hull(15, P, 0.01, tick_size=0.001)
     for b in bars(side, 15):
         back = h.update(b)
         if back.confirmed_mss and back.structure.failed_return:
@@ -434,5 +461,5 @@ def test_original_direction_bos_after_return_does_not_rearm_before_first_cross(s
         and r.structure.epoch == back.close_s
         and h.gate.record["bar"] is None
     )
-    after = ready(side, r.close_s + 900, r.structure, ms=r.close_s * 1000 + 125)
+    after = ready(side, r.close_s + 900, r.structure)
     assert h.gate.apply(after, observe=True).waived_first_cross

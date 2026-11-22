@@ -163,6 +163,35 @@ def target(grid, side, lots, entry, usd, cash, *, cash_per_price=None):
     return grid.price(start + side * hi), values[hi]
 
 
+def cross_candle_stop(anchor, side, pad, tick_size):
+    """Freeze a legal price beyond the *completed* bid candle. A pip/point is not a trade tick."""
+    if (
+        side not in (-1, 1)
+        or tick_size is None
+        or not math.isfinite(tick_size)
+        or tick_size <= 0
+        or not math.isfinite(anchor)
+        or anchor <= 0
+        or not math.isfinite(pad)
+        or pad < 0
+    ):
+        return None
+    tick = Decimal(str(tick_size))
+    level = Decimal(str(anchor)) - side * max(tick, Decimal(str(pad)))
+    # Wilder ATR and its multiplier arrive as floats: e.g. 3 * .1 can read
+    # .30000000000000004. Do not invent an extra tick at a numeric tie.
+    units = level / tick
+    nearest = units.to_integral_value()
+    if abs(units - nearest) <= Decimal("8.881784197001252e-16") * max(1, abs(units)):
+        units = nearest
+    outward = ROUND_FLOOR if side == 1 else ROUND_CEILING
+    one_out = (Decimal(str(anchor)) / tick - side).to_integral_value(rounding=outward)
+    units = (min if side == 1 else max)(
+        one_out, units.to_integral_value(rounding=outward)
+    )
+    return float(units * tick)
+
+
 def protected_prices(d, p, grid, bid, ask):
     """Validate signal, spread, volume and initial stop on THIS quote."""
     if not d.entry_side or d.raw_sl is None:
@@ -176,9 +205,20 @@ def protected_prices(d, p, grid, bid, ask):
     entry, mark = (ask, bid) if side == 1 else (bid, ask)
     # Use the actual chart-derived price; never replace with a cash stop or add a hidden spread buffer.
     sl = grid.price(grid.index(d.raw_sl, side == -1))
+    # The archived, standalone v4 replay has no frozen trade-grid field.
+    if getattr(d, "stop_tick_size", None) is not None and (
+        grid.tick != d.stop_tick_size or sl != d.raw_sl
+    ):
+        raise Block(
+            "cross_candle_stop_grid_changed"
+        )  # never re-anchor or widen a frozen SL
     dist = max(grid.gap, grid.tick)
     if sl <= 0 or side * (mark - sl) < dist - grid.tick * 1e-6:
-        raise Block("swing_breached_or_too_close")
+        raise Block(
+            "initial_stop_breached_or_too_close"
+            if hasattr(d, "stop_tick_size")
+            else "swing_breached_or_too_close"
+        )
     return entry, mark, sl, dist
 
 

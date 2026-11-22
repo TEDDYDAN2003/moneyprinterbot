@@ -120,7 +120,8 @@ def test_protection_entry_age_foreign_positions_and_kill_ownership(hull_desk):
     mt, d, _ = hull_desk()
     mt.i.trade_stops_level = 200
     assert (
-        d.batch("XAUUSDm", sig()) == "swing_breached_or_too_close" and not mt.requests
+        d.batch("XAUUSDm", sig()) == "initial_stop_breached_or_too_close"
+        and not mt.requests
     )
     mt, d, _ = hull_desk()
     mt.orders.append(1)
@@ -251,8 +252,10 @@ def test_preflight_resolves_only_requested_symbols_and_never_sends(
         and answer["signal_policy"] == "fc_dynamic_source_internal_v1"
         and answer["entry_policy"] == "fc_dynamic_failed_mss_return_v3"
         and answer["post_mss_entry"] == "skip_first_except_failed_counter_mss_return"
-        and answer["entry_timing"] == "live_hull_cross"
-        and answer["entry_quote_policy"] == "current_live_tick_or_confirmed_close_v1"
+        and answer["entry_timing"] == "confirmed_cross_next_bar"
+        and answer["new_ticket_stop_policy"] == "confirmed_cross_candle_wick_v1"
+        and answer["live_cross_role"] == "protective_exit_only"
+        and answer["entry_quote_policy"] == "first_fresh_post_close_tick_v1"
         and answer["entry_sessions"]["version"] == "symbol-entry-sessions/v1"
         and answer["specs"]["XAUUSDm"]["entry_session"]["windows"]
         == ["london_ny_overlap"]

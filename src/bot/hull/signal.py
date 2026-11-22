@@ -1,4 +1,4 @@
-"""The pasted FC DynHull on native chart candles, with the original execution stop.
+"""The pasted FC DynHull on native chart candles, with confirmed-cross execution.
 
 `label` is the raw Pine BUY/SELL, even if no valid stop or entry exists. A projection
 is never appended to closed indicator/structure/stop history.
@@ -11,9 +11,10 @@ from dataclasses import dataclass, field, replace
 
 from bot.zones.engine import Bar
 
-from .config import ENTRY_POLICY, TF_NAME, Indicator
+from .config import ENTRY_POLICY, STOP_POLICY, TF_NAME, Indicator
 from .curves import WMA, Baseline, LiveTick
 from .entry_clock import utc
+from .orders import cross_candle_stop
 from .structure import InternalStructure, Structure
 
 
@@ -44,6 +45,7 @@ class Reading:
     trigger: LiveTick | None = None
     skip_after_mss: bool | None = None
     waived_first_cross: bool = False
+    stop_tick_size: float | None = None  # verified trade grid at signal, not pip size
 
     @property
     def confirmed_mss(self):
@@ -65,7 +67,7 @@ class Reading:
 
     def clock_fields(self):
         return {
-            "entry_timing": "live_hull_cross" if self.trigger else "confirmed_close",
+            "entry_timing": "live_exit_only" if self.trigger else "confirmed_close",
             "trigger_msc": self.signal_msc,
             "trigger_utc": utc(self.signal_s),
             "bar_open_utc": utc(self.close_s - self.tf * 60),
@@ -81,6 +83,8 @@ class Reading:
             return "neutral_structure"
         if self.label != self.structure.bias:
             return "opposite_signal_exit_only"
+        if self.trigger is not None:
+            return "await_cross_candle_close"
         if self.side != self.label or self.raw_sl is None:
             return self.reason if self.reason != "ready" else "no_valid_initial_stop"
         return "ready"
@@ -109,6 +113,16 @@ class Reading:
     def entry_audit(self):
         return {
             "entry_policy": ENTRY_POLICY,
+            "initial_stop_policy": STOP_POLICY
+            if self.stop_tick_size is not None
+            else None,
+            "cross_candle_open_s": self.anchor_s
+            if self.stop_tick_size is not None
+            else None,
+            "cross_candle_wick": self.anchor
+            if self.stop_tick_size is not None
+            else None,
+            "frozen_cross_sl": self.raw_sl if self.stop_tick_size is not None else None,
             "structure_phase": self.structure.phase,
             "entry_setup": "trend_hull_cross" if self.entry_side else None,
             "entry_side": self.entry_side,
@@ -139,6 +153,8 @@ class FirstCrossGate:
         return tuple(self.record.get(k) for k in ("epoch", "bar", "waived_from"))
 
     def apply(self, r, *, observe):
+        if r.trigger is not None:
+            return r  # raw exits only; never arm, waive or spend a confirmed-entry reservation
         s = r.structure
         epoch, known = s.epoch, self.record.get("epoch")
         # After a restart, the shift can predate a finite history reload. Restore
@@ -199,10 +215,12 @@ class FirstCrossGate:
 
 
 class Hull:
-    def __init__(self, tf: int, p: Indicator, pip_size: float, gate=None):
+    def __init__(
+        self, tf: int, p: Indicator, pip_size: float, gate=None, *, tick_size=None
+    ):
         if tf not in TF_NAME:
             raise ValueError("Unsupported Hull timeframe")
-        self.tf, self.p, self.pip = tf, p, pip_size
+        self.tf, self.p, self.pip, self.tick_size = tf, p, pip_size, tick_size
         self.gate = gate if gate is not None else FirstCrossGate()
         n = p.hull_len
         h = max(1, n // 2)
@@ -271,7 +289,9 @@ class Hull:
         # The crossover returned by each Baseline uses THAT curve's own prior A.
         # Never OR the outputs and never compare High now to Low on the prior bar.
         a, label = curves.get(active, (None, 0))
-        prior = list(self.hist) if label else []
+        prior = (
+            list(self.hist) if commit and label and p.stop == "local_pullback" else []
+        )
         if commit:
             tr = (
                 c.h - c.l
@@ -285,13 +305,18 @@ class Hull:
                     self.atr = self.tr_sum / p.atr_length
             else:
                 self.atr = (self.atr * (p.atr_length - 1) + tr) / p.atr_length
-            self.hist.append(c)
+            if p.stop == "local_pullback":
+                self.hist.append(c)
         anchor = when = sl = window = None
         count = 0
         side = 0
         reason = "no_cross"
-        if label:
-            if p.stop == "local_pullback":
+        if label and commit:
+            if p.stop == "cross_candle":
+                # Shift 1 is final on this lane, including all three M15 pieces of M45.
+                anchor, when = (c.l if label == 1 else c.h), c.t
+                window = c.t  # zero *prior* bars contribute to this wick
+            elif p.stop == "local_pullback":
                 since = self.last_cross[-label]
                 prior = [q for q in prior if since is None or q.t >= since]
                 if prior:
@@ -309,22 +334,27 @@ class Hull:
                 if chosen:
                     anchor, when = chosen.price, chosen.bar_s
             if anchor is not None and self.atr is not None:
-                sl = anchor - label * (
-                    p.atr_buffer * self.atr + p.extra_pips * self.pip
+                pad = p.atr_buffer * self.atr + p.extra_pips * self.pip
+                sl = (
+                    cross_candle_stop(anchor, label, pad, self.tick_size)
+                    if p.stop == "cross_candle"
+                    else anchor - label * pad
                 )
             if sl is None:
-                reason = "no_known_swing_or_atr"
-            elif sl <= 0 or label * (c.c - sl) <= 0:
                 reason = (
-                    "swing_already_lost_at_close"
-                    if commit
-                    else "swing_already_lost_at_trigger"
+                    "cross_stop_data_unavailable"
+                    if p.stop == "cross_candle"
+                    else "no_known_swing_or_atr"
                 )
+            elif sl <= 0 or label * (c.c - sl) <= 0:
+                reason = "initial_stop_invalid_at_close"
             else:
                 side = label
                 reason = "ready"
-            if commit:
+            if p.stop == "local_pullback":
                 self.last_cross[label] = c.t
+        elif label:
+            reason = "await_cross_candle_close"
         if commit:
             self.prev, self.last_b = c, b
         r = Reading(
@@ -351,5 +381,8 @@ class Hull:
             curves.get("low", (None, 0))[1],
             curves.get("high", (None, 0))[1],
             tick,
+            stop_tick_size=self.tick_size
+            if anchor is not None and p.stop == "cross_candle"
+            else None,
         )
         return self.gate.apply(r, observe=observe_first)

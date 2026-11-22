@@ -161,7 +161,6 @@ class Desk:
             getattr(q, "bid", None),
             getattr(q, "ask", None),
             monotonic_expired=time.monotonic() > window.end_mono,
-            live_bar_end=d.close_s if d.trigger else None,
         )
         if check.reason != "ready":
             # Even a missing quote cannot park a signal across the closing edge.
@@ -174,13 +173,13 @@ class Desk:
         gate = self.session_gate(name)
         q = self.mt.symbol_info_tick(name)
         check = self._quote_clock(gate, window, q, stage)
-        if self.verify_signal is not None or d.trigger is not None:
+        if self.verify_signal is not None:
             # Verification can service a *protective* raw opposite / MSS between
             # legs. Never discard a usable closing-edge tick before it does so.
-            verified = self.verify_signal is not None and self.verify_signal(name, d, q)
+            verified = self.verify_signal(name, d, q)
             gate.require(stage, decision=check.checked, quote=check.tick_msc / 1000)
             if not verified:
-                raise Block("live_cross_or_trend_no_longer_verified")
+                raise Block("next_bar_quote_or_context_unverified")
             check = self._quote_clock(gate, window, q, stage)
         gate.require(stage, decision=check.checked, quote=check.tick_msc / 1000)
         if stage == "first_plan":
@@ -288,8 +287,7 @@ class Desk:
         p = self.syms[name][1]
         a = self.account()
         now = time.time()
-        # signal_s = the observed live cross tick OR the confirmed candle close,
-        # never the projected end of a forming candle. Independent of p.session.
+        # Entries use the confirmed cross close, not an earlier intrabar projection.
         self.session_gate(name).require(stage, signal=d.signal_s)
         if p.session == "configured" and (why := self.hours.status(now)[0]):
             raise Block(why)
@@ -893,11 +891,7 @@ class Desk:
                     "magic": self.h.magic,
                     "type_time": self.mt.ORDER_TIME_GTC,
                     "type_filling": _filling_mode(self.mt, i),
-                    "comment": (
-                        f"i{d.tf}_{d.trigger.ms}_{sent + 1}"
-                        if d.trigger
-                        else f"h{d.tf}_{d.close_s}_{sent + 1}"
-                    ),
+                    "comment": f"h{d.tf}_{d.close_s}_{sent + 1}",
                 }
                 chk = self.mt.order_check(req)
                 a = self.account()

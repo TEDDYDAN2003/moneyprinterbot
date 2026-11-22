@@ -4,7 +4,7 @@
 
 **Dynamic Hull:** M15/M30/M45 authorized as independent lanes in `hull.eligible_timeframes`, not authorization to start a scanner or send orders. `structure_timeframe: null`. A confirmed MSS closes only the originating symbol/timeframe; M45 is three aligned M15 candles. [Rules and private YAML migration](docs/HULL_STRUCTURE.md).
 
-**Hull first-cross rule:** skip an ordinary first aligned cross. Waive the skip only on a confirmed return to the lane's established direction if the intervening counter-MSS leg never made a continuation BOS. Require a fresh cross after the return close; no time limit, no counter-leg trade prerequisite. No change to immediate MSS exits, sessions, Wickless or chart-study rules.
+**Hull first-cross rule:** skip an ordinary first aligned cross. Waive the skip only on a confirmed return to the lane's established direction if the intervening counter-MSS leg never made a continuation BOS. Require a fresh **confirmed** cross after the return close; no time limit, no counter-leg trade prerequisite. No change to immediate MSS exits, sessions, Wickless or chart-study rules.
 
 **Mandatory entry hours (both Python bots):** use the [shared instrument schedule](docs/ENTRY_SESSIONS.md), not the chart statistics buckets or a global killzone. Validate exact broker names; check `entry_sessions.version`, `sha256` and each symbol’s `entry_session` in preflight. A normally closed window is not a reason to widen hours. An unmapped symbol cannot enter. Never disable protection, arm a scanner or change selections to test this filter.
 
@@ -59,7 +59,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Invalid config. Do not arm.' }
 if ($LASTEXITCODE -ne 0) { throw 'Preflight failed. Do not arm.' }
 ```
 
-Verify the demo account, trading permissions, symbols, batch sizes, history on the approved timeframes, positions/orders and `review_before_demo`. Look for `new_ticket_target_policy: base_plus_entry_spread_v1`; each symbol’s `target_preview_by_side` shows the indicative BUY and SELL goals on the current quote. Verify `timeframes: [M15, M30, M45]`, `mss_exit: flatten_own_lane_on_confirmed_shift`, `batch_entry_policy: first_eligible_while_lane_flat_v2`, `entry_policy: fc_dynamic_failed_mss_return_v3`, `entry_timing: live_hull_cross`, and `choch_entry: never_standalone`. Do **not** arm with an unexplained warning.
+Verify the demo account, trading permissions, symbols, batch sizes, history on the approved timeframes, positions/orders and `review_before_demo`. Look for `new_ticket_target_policy: base_plus_entry_spread_v1`; each symbol’s `target_preview_by_side` shows the indicative BUY and SELL goals on the current quote. Verify `timeframes: [M15, M30, M45]`, `mss_exit: flatten_own_lane_on_confirmed_shift`, `batch_entry_policy: first_eligible_while_lane_flat_v2`, `entry_policy: fc_dynamic_failed_mss_return_v3`, `entry_timing: confirmed_cross_next_bar`, `new_ticket_stop_policy: confirmed_cross_candle_wick_v1`, and `choch_entry: never_standalone`. Do **not** arm with an unexplained warning.
 
 Want to watch first? Run `& $py -m bot.cli trade-all --config $cfg @profiles` **without** the arm flag. It must say `READ ONLY`. Stop **that observer** with Ctrl+C before step 4. If the account or profiles change, repeat preflight.
 
@@ -122,11 +122,11 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" 
    if (-not (Test-Path .\config.demo.local.yaml)) { Copy-Item .\config.yaml .\config.demo.local.yaml }
    notepad .\config.demo.local.yaml
    ```
-   In its **existing `run:` section**, set `mode: demo`. In `hull` verify `eligible_timeframes: [M15, M30, M45]`; in `hull.indicator` verify `hull_len: 16`, `source: dynamic`, `structure_timeframe: null`, `exit_opposite: true` and `exit_on_mss: true`. Save the private copy; do not guess the timeframe of legacy tickets or erase state. Leave the tracked `config.yaml` in `paper` mode. Go to [A](#a-start-the-demo-manually).
+   In its **existing `run:` section**, set `mode: demo`. In `hull` set `entry_timing: confirmed_cross_next_bar` and verify `eligible_timeframes: [M15, M30, M45]`; in `hull.indicator` set `stop: cross_candle` and verify `hull_len: 16`, `source: dynamic`, `structure_timeframe: null`, `exit_opposite: true` and `exit_on_mss: true`. Save the private copy; do not guess the timeframe of legacy tickets or erase state. Leave the tracked `config.yaml` in `paper` mode. Go to [A](#a-start-the-demo-manually).
 
 ## When does the signal appear?
 
-On an eligible lane, a fresh raw cross can appear on a forming candle. Structure changes only on a confirmed structure close. Bullish BUY / bearish SELL may enter if flat and protected; a raw opposite cross exits the owned opposing side regardless of entry eligibility. A confirmed MSS alone closes its own symbol/timeframe batch, never another timeframe and never an automatic entry. [Exact rules](docs/HULL_STRUCTURE.md).
+On an eligible lane, a fresh raw cross can appear on a forming candle. Structure changes only on a confirmed structure close. That forming cross is **exit-only**. A bullish BUY / bearish SELL must still be present at the completed cross-candle close. Only then may the next candle’s first fresh quote open a protected batch, with SL beyond that finished wick; a raw opposite cross exits the owned opposing side regardless of entry eligibility. A confirmed MSS alone closes its own symbol/timeframe batch, never another timeframe and never an automatic entry. [Exact rules](docs/HULL_STRUCTURE.md).
 
 ## Desktop agent rules
 

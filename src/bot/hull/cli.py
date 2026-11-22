@@ -75,7 +75,8 @@ def handle(args):
     if args.command == "hull-replay":
         # Refuse to misrepresent a closed-label replay as the new live strategy.
         if (
-            cfg["hull"].get("entry_timing") == "live_hull_cross"
+            cfg["hull"].get("entry_timing")
+            in ("confirmed_cross_next_bar", "live_hull_cross")
             or "eligible_timeframes" in cfg["hull"]
         ):
             raise ValueError(

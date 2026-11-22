@@ -90,12 +90,17 @@ class StructureTape:
 
 
 class Stream:
-    def __init__(self, tf, cfg, pip, external: StructureTape | None = None):
+    def __init__(
+        self, tf, cfg, pip, external: StructureTape | None = None, *, tick_size=None
+    ):
         self.tf, self.cfg, self.pip, self.ext = tf, cfg, pip, external
-        self.h = Hull(tf, cfg, pip)
+        self.tick_size = tick_size
+        self.h = Hull(tf, cfg, pip, tick_size=tick_size)
+        self.rebaseline_close = False
+        self.history_fence = 0  # never trade a close that predates attachment/recovery
         self.last_label = None
         self.shifts = []  # incremental confirmed exits, independent of Hull labels
-        self.observed = {}  # (bar end -> keys); raw notification != entry permission
+        self.observed = {}  # live protective notification and confirmed cross have separate keys
         self.baseline_due = True
         self.roll_checked = 0
         self.last_sample = self.last_tick_ms = None
@@ -103,7 +108,7 @@ class Stream:
             cfg.hull_len + int(cfg.hull_len**0.5) + 2,
             cfg.atr_length + 1,
             2 * cfg.swing_len + 2,
-            cfg.pullback_bars + 1,
+            cfg.pullback_bars + 1 if cfg.stop == "local_pullback" else 1,
         )
 
     def refresh(self, mt, name, now):
@@ -115,10 +120,14 @@ class Stream:
         )
         if rows is None or len(rows) < (self.min_bars if reload else 1):
             self.baseline_due = True
+            self.rebaseline_close = True
+            self.history_fence = max(self.history_fence, now)
             return None, "history_unavailable"
         if reload:
             self.h, self.last_label = (
-                Hull(self.tf, self.cfg, self.pip, self.h.gate),
+                Hull(
+                    self.tf, self.cfg, self.pip, self.h.gate, tick_size=self.tick_size
+                ),
                 None,
             )
         updates, last, gap, decision = 0, -1, False, None
@@ -146,9 +155,13 @@ class Stream:
                 self.last_label = decision
             updates += 1
         self.h.gate.flush()
-        if reload or gap or updates > 1 or (updates and self.baseline_due):
+        if reload or gap or updates > 1 or self.rebaseline_close:
+            self.rebaseline_close = False
             self.baseline_due = True
+            self.history_fence = max(self.history_fence, now)
             return None, "warmup_only"
+        if decision and decision.close_s <= self.history_fence:
+            return None, "warmup_only"  # delayed publication of a pre-attachment close
         if (
             decision
             and self.ext
@@ -226,10 +239,10 @@ class Stream:
         return self.h.preview(b, tick, context=context)
 
     def note(self, r, *, baseline=False):
-        """One raw event per (chart candle, direction, selected source, bias, MSS).
+        """One event per (phase, chart candle, direction, selected source, bias, MSS).
 
-        A verified cross at attachment is not a new signal. An observed live
-        event cannot fire again just because its candle subsequently closes.
+        A projection is for protective exits only. It must neither reserve an
+        entry nor swallow the independently observed, freshly confirmed cross.
         A real cross on a flip is still a raw exit even when entry is skipped.
         """
         self.observed = {
@@ -238,7 +251,13 @@ class Stream:
         if not r.label:
             return False
         keys = self.observed.setdefault(r.close_s, set())
-        key = r.label, r.active_source, r.structure.bias, r.structure.epoch
+        key = (
+            r.trigger is None,
+            r.label,
+            r.active_source,
+            r.structure.bias,
+            r.structure.epoch,
+        )
         fresh = key not in keys
         keys.add(key)
         return fresh and not baseline
@@ -259,7 +278,7 @@ def sample(mt, name, lanes, clock, max_age):
         return [], False
     out, complete = [], True
     for s, r in readings:
-        if not r or now >= r.close_s:
+        if not r or r.trigger != q or now >= r.close_s:
             complete = False
             continue
         if s.last_tick_ms is not None and q.ms < s.last_tick_ms:
@@ -267,8 +286,6 @@ def sample(mt, name, lanes, clock, max_age):
             s.baseline_due = True
             continue
         resumed = s.last_sample is not None and not 0 <= now - s.last_sample <= max_age
-        r = s.h.gate.apply(r, observe=True)  # coherent broker snapshot only
-        s.h.gate.flush()
         if s.note(r, baseline=s.baseline_due or resumed):
             out.append(r)
         s.baseline_due = False
@@ -292,20 +309,26 @@ def verify_before_leg(mt, name, lanes, signal, quote, clock, max_age, on_opposit
         LiveTick.read(mt.symbol_info_tick(name)) != q
         or not 0 <= now - q.ms / 1000 <= max_age
         or r is None
+        or r.trigger != q
         or now >= r.close_s
         or (lane.last_tick_ms is not None and q.ms < lane.last_tick_ms)
     ):
         return False
-    r = lane.h.gate.apply(r, observe=True)
-    lane.h.gate.flush()
     if r.label == -signal.label:
         if lane.note(r, baseline=lane.baseline_due):
             on_opposite(r)
         return False
     if r.structure.bias != signal.label or r.structure.epoch != signal.structure.epoch:
         return False
-    return not signal.trigger or (
-        r.close_s == signal.close_s
-        and r.entry_side == signal.entry_side
+    # Only the immediate successor candle may supply an executable quote.
+    # Do not demand a second cross there, or let its high/low revise the SL.
+    return (
+        signal.trigger is None
+        and q.ms >= signal.close_s * 1000
+        and r.close_s == signal.close_s + signal.tf * 60
         and r.active_source == signal.active_source
+        and signal.anchor_s == lane.h.prev.t
+        and signal.anchor == (lane.h.prev.l if signal.label == 1 else lane.h.prev.h)
+        and signal.stop_tick_size is not None
+        and signal.stop_tick_size == lane.tick_size
     )

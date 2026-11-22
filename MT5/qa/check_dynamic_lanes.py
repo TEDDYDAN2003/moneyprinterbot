@@ -44,19 +44,21 @@ s = re.sub(
 )
 body = r"""
 void dump(HullState &st,Result &r){cout<<r.bias<<' '<<r.ev<<' '<<r.raw<<' '<<r.eligible<<' '<<r.skip<<' '<<r.lowA<<' '<<r.highA<<' '<<r.b<<' '<<r.sl<<' '<<st.guard<<' '<<st.epoch<<' '<<st.established<<' '<<st.failedCounter<<' '<<r.waived<<' '<<r.exitClose<<'\n';}
-void edge(int d){ // deliberate stop-ready live cross at the return close, then one ms later
+void edge(int d){ // every projection is protective-only; only the *later close* may waive
  HullState st{};vector<MqlRates> q;for(int i=0;i<30;i++)q.push_back({90000+900*i,100,101,99,100});
  int i=q.size()-1; st.count=i;st.bias=st.established=d;st.closed=st.epoch=q[i].time;st.failedCounter=st.epoch-4*900;
  st.oldLow=st.lastL=99;st.oldHigh=st.lastH=101;st.oldB=d==1?98:102;st.atr=1;Result r;
- Step(st,q,i,15,false,r,(long)st.epoch*1000);assert(r.raw==d&&r.exitClose&&!r.eligible&&!st.skipBar);
- for(int ms:{1,10,100}){Step(st,q,i,15,false,r,(long)st.epoch*1000+ms);assert(r.raw==d&&r.waived&&r.eligible==d&&!r.skip&&st.skipBar==st.epoch+900);}
+ for(int j=0;j<4;j++){Step(st,q,i,15,false,r);assert(r.raw==d&&!r.eligible&&!r.waived&&!r.skip&&!r.sl&&!st.skipBar);}
+ double saved=AtrBuffer;AtrBuffer=0;Step(st,q,i,15,true,r);AtrBuffer=saved;
+ assert(r.raw==d&&r.waived&&r.eligible==d&&st.skipBar==q[i].time+900);
+ assert(abs(r.sl-((d==1?99:101)-d*TradeTick))<1e-10);
 }
-int main(int argc,char**argv){int tf=stoi(argv[1]),depth=stoi(argv[2]);Swing=depth;PivotStop=stoi(argv[3]);NeutralWait=stoi(argv[4]);edge(1);edge(-1);
+int main(int argc,char**argv){int tf=stoi(argv[1]),depth=stoi(argv[2]);Swing=depth;TradeTick=stod(argv[3]);NeutralWait=stoi(argv[4]);edge(1);edge(-1);
  vector<MqlRates> q;MqlRates x;while(cin>>x.time>>x.open>>x.high>>x.low>>x.close)q.push_back(x);HullState st{};cout<<setprecision(17);
  if(tf){for(int i=0;i<(int)q.size();i++){Result r;
    if(argc>5&&i){MqlRates full=q[i];q[i].low=q[i].high=q[i].close=q[i].open;
-      for(int ms:{0,1}){Step(st,q,i,tf,false,r,(long)q[i].time*1000+ms);dump(st,r);}q[i]=full;
-      Step(st,q,i,tf,false,r,(long)(q[i].time+tf*60)*1000-1);dump(st,r);}
+      for(int ms:{0,1}){Step(st,q,i,tf,false,r);dump(st,r);}q[i]=full;
+      Step(st,q,i,tf,false,r);dump(st,r);}
    Step(st,q,i,tf,true,r);dump(st,r);}return 0;}
  feed[15]=q;datetime start=q.front().time;assert(start%2700!=0);for(int j=0;j<(int)q.size();j+=96)feed[1440].push_back(q[j]);
  for(int j=0;j+1<(int)q.size();j+=2)feed[30].push_back({q[j].time,q[j].open,max(q[j].high,q[j+1].high),min(q[j].low,q[j+1].low),q[j+1].close});
@@ -107,20 +109,19 @@ with tempfile.TemporaryDirectory() as td:
                 )
             )
         text = "".join(f"{b.t} {b.o} {b.h} {b.l} {b.c}\n" for b in bars)
-        for depth, pivot, wait in [(3, 0, 0), (1, 1, 1)]:
+        for depth, trade_tick, wait in [(3, 0.01, 0), (1, 0.25, 1)]:
             cfg = Indicator(
                 swing_len=depth,
-                stop="confirmed_pivot" if pivot else "local_pullback",
                 neutral_mode="wait" if wait else "high",
             )
             for mixed in (False, True):
-                m = Hull(tf, cfg, 0.01)
+                m = Hull(tf, cfg, 0.01, tick_size=trade_tick)
                 out = subprocess.check_output(
                     [
                         str(exe),
                         str(tf),
                         str(depth),
-                        str(pivot),
+                        str(trade_tick),
                         str(wait),
                         *(["ticks"] if mixed else []),
                     ],
@@ -179,11 +180,11 @@ with tempfile.TemporaryDirectory() as td:
                             waived_sides.add(r.entry_side)
         if tf == 15:
             subprocess.run(
-                [str(exe), "0", "3", "0", "0"], input=text, text=True, check=True
+                [str(exe), "0", "3", "0.01", "0"], input=text, text=True, check=True
             )
     assert (
         0 < returns < hits and waived > 0 and waived_sides == {-1, 1} and live_cases > 0
     )
     print(
-        f"PASS: actual MQ5 calculation / Python parity: {cases} synthetic native closes, {hits} MSS events ({returns} failed counter-move returns, {waived} first crosses waived); {live_cases} live projections and exact return-close fences both ways; M45 OHLC, 3-lane OnCalculate, no attach/duplicate alert. C++ shim, NOT MetaEditor."
+        f"PASS: actual MQ5 calculation / Python parity: {cases} synthetic native closes, {hits} MSS events ({returns} failed counter-move returns, {waived} first crosses waived); {live_cases} exit-only live projections; frozen closed-wick stops on two trade grids; M45 OHLC, 3-lane OnCalculate, no attach/duplicate alert. C++ shim, NOT MetaEditor."
     )

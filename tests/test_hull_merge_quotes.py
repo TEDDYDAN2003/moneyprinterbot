@@ -34,9 +34,13 @@ def test_final_price_can_move_one_tick_but_exact_sent_request_was_checked(
 
     mt.order_check = check
     if live:
-        desk.verify_signal = lambda name, r, q: (
-            True
-        )  # confirmed by fake native projection
+        desk.verify_signal = lambda *args: True  # even if the projection verifies
+        assert (
+            desk.batch(NAME, r) == "await_cross_candle_close"
+            and not checks
+            and not mt.requests
+        )
+        return
     assert desk.batch(NAME, r) == "demo_batch_sent"
     assert len(mt.requests) == len(mt.positions) == 4
     assert len(checks) == 5 and checks[1:] == mt.requests
@@ -55,12 +59,12 @@ def test_final_price_can_move_one_tick_but_exact_sent_request_was_checked(
     "case,outcome",
     [
         ("spread", "spread_cap"),
-        ("stop", "swing_breached_or_too_close"),
+        ("stop", "initial_stop_breached_or_too_close"),
         ("risk", "portfolio_risk_limit"),
         ("orders", "pending_orders_present"),
         ("funding", "insufficient_free_margin"),
         ("broker", "broker_precheck_rejected"),
-        ("projection", "live_cross_or_trend_no_longer_verified"),
+        ("projection", "next_bar_quote_or_context_unverified"),
         ("two_ticks", "final_quote_or_safety_changed"),
         ("moved_again", "final_quote_or_safety_changed"),
     ],
@@ -70,7 +74,9 @@ def test_one_tick_is_not_a_safety_bypass_or_a_reprice_loop(hull_desk, case, outc
     first = mt.q
     r = sig(1999.999 if case == "stop" else 1999.95)
     if case == "projection":
-        r = replace(r, close_s=T + 60, trigger=LiveTick.read(first))
+        desk.verify_signal = lambda *_: (
+            False
+        )  # a closed candidate still needs an executable current context
     if case == "spread":
         key, p = desk.syms[NAME]
         desk.syms[NAME] = key, p.model_copy(update={"max_spread": 0.1})

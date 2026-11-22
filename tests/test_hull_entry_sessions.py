@@ -117,15 +117,21 @@ def test_live_trigger_not_future_projected_bar_end_or_newly_open_submission(
     now = edge + 0.2 if direction == "into" else edge - 0.1
     wall_at(monkeypatch, now)
     mt.q.time_msc = int(now * 1000)
-    why = d.batch(NAME, r)
+    assert d.batch(NAME, r) == "await_cross_candle_close" and not mt.requests
+    # A *confirmed* cross just outside the window does not become valid on a
+    # post-close quote inside it; a confirmed close exactly at the open qualifies.
+    wall_at(monkeypatch, edge + 0.2)
+    mt.q.time_msc = edge * 1000 + 100
+    confirmed = signal_at(edge, 45)
+    why = d.batch(NAME, confirmed)
     assert why == (
         es.OUTSIDE
-        if direction == "into"
+        if direction == "out_of"
         else "demo_batch_sent"
         if armed
         else "shadow_plan_only"
     )
-    assert len(mt.requests) == (4 if direction == "out_of" and armed else 0)
+    assert len(mt.requests) == (4 if armed and direction == "into" else 0)
 
 
 def test_first_quote_wait_cannot_resume_across_end_or_catch_up_tomorrow(
@@ -157,7 +163,7 @@ def test_edge_during_broker_precheck_write_ahead_or_partial_batch(
     mt, d, log = hull_desk("medium")
     d.h = d.h.model_copy(update={"eligible_timeframes": ("M45",)})
     mt.q.time_msc = END * 1000 - 1750
-    r = replace(signal_at(END + 1800, 45), trigger=LiveTick.read(mt.q))
+    r = signal_at(END - 2, 45)  # synthetic close within the clock-edge test window
     d.verify_signal = lambda *_: True
     clock = wall_at(monkeypatch, END - 1.5)
 
@@ -271,7 +277,7 @@ def test_opposite_seen_between_legs_at_session_end_still_closes_filled_leg(
     mt, d, log = hull_desk("medium")
     d.h = d.h.model_copy(update={"eligible_timeframes": ("M45",)})
     mt.q.time_msc = END * 1000 - 1750
-    r = replace(signal_at(END + 1800, 45), trigger=LiveTick.read(mt.q))
+    r = signal_at(END - 2, 45)  # synthetic close within the clock-edge test window
     clock = wall_at(monkeypatch, END - 1.5)
     send = mt.order_send
 
@@ -287,7 +293,7 @@ def test_opposite_seen_between_legs_at_session_end_still_closes_filled_leg(
     def verify(name, reading, q):
         if q.time_msc >= END * 1000:
             opposite = replace(
-                signal_at(reading.close_s, 45, -1), trigger=LiveTick.read(q)
+                signal_at(reading.close_s + 2700, 45, -1), trigger=LiveTick.read(q)
             )
             assert d.close_opposite(name, opposite) == 1
             return False

@@ -8,18 +8,24 @@ Use the [exact Dynamic Hull rules and configuration migration](HULL_STRUCTURE.md
 
 ## How to read an entry timeline
 
-`live_hull_cross` records the tick time in `trigger_msc`, its bid/ask, the scheduled candle end in `close_s`, the selected source and the confirmed bias. For a forming candle, these are **not** the same time. `closed_label` is a fresh completed-candle signal. `entry_side` tells whether the raw signal can open a position; `opposite_signal_exit_only` is not permission to reverse. A live signal must still be present at the executable quote and is never queued into a later candle. A confirmed close can wait briefly for its first fresh post-close quote inside the existing deadline. `exit_request` is a request; actual filled deals/ticket snapshots are authoritative. Inspect `opposite_exit_review` if an acknowledgment is unclear. Do not delete ticket state to retry.
+**Entries: close → next candle.** `closed_label` records the completed native cross; `trigger_msc` is its close, not the fill. For example, an M15 BUY on the 10:00–10:15 candle can be submitted on the first usable quote observed at or after 10:15:00 in the immediate successor candle. The executable BUY opens at ask, SELL at bid. This is **not** a guaranteed opening price, and it does **not** wait for the *next* candle to close. The shipped timing budget is 8 seconds after signal close and 4 seconds for quote age. A missing/pre-close/stale first quote may wait briefly within that original deadline; an out-of-window, unsafe or expired opportunity is not carried forward.
+
+`live_hull_cross` is still logged at its actual tick, with `entry_timing: live_exit_only` and `entry_side: 0`. It can close opposing owned tickets but never open an order, reserve the next candle, spend the MSS skip or suppress a separately confirmed close. A cross that disappears by the close produces **no entry**. An MSS still flattens its own lane. Inspect `label_decision.outcome`; an exit request or an entry setup is not a broker fill.
 
 ## Which candle supplies the stop?
 
-The blue arrows in your screenshots indicate the preceding local pullback, not necessarily a textbook HL/LH. The default `local_pullback` turns that into a checkable rule:
+**Use the completed candle on which the Hull crossed, on the same symbol and timeframe.** Never use the entry candle's developing wick, the earlier seven-bar pullback or a previous swing. For M45 the wick is the extreme of **all three** consecutive M15 components, not just the third. Each new ticket carries the initial SL and TP in the opening request.
 
-1. On the **same signal timeframe**, take the last **up to seven completed candles before the signal candle**. If the preceding opposite Hull crossover from the selected signal stream is more recent, start there. The stop algorithm is unchanged; changing the signal stream can change which candles enter that window. This uses the prior Hull direction to identify the leg; it is not an EMA entry filter.
-2. BUY → the **lowest low** in that window. SELL → the **highest high**. Newest wins a price tie. No future candles, global high/low or confirmation by three *later* bars. A screenshot cannot uniquely specify a lookback; `hull.indicator.pullback_bars` changes it explicitly.
-3. Freeze that wick at the decision. Use the script's Wilder ATR14 buffer: `buy SL = low − 0.1 × ATR`, `sell SL = high + 0.1 × ATR`; optional extra pips default to zero. Round outward to a legal price tick. Amount `atr_buffer: 0` puts the stop on the wick (outward tick rounding still applies). There is **no $5 stop or fixed per-position dollar limit**. Never widen the stop after entry or squeeze it toward the entry to pass a risk check.
-4. `confirmed_pivot` is available if you want the *original chart simulator's* alternative: latest 3-left/3-right confirmed pivot with newer equal extremes preferred. This is **not** the screenshot-driven local-pullback default.
+| Signal | Wick on the broker’s bid chart | Initial SL |
+|---|---|---|
+| BUY | Cross candle **low** | Low minus buffer, round **down** to a legal trade tick |
+| SELL | Cross candle **high** | High plus buffer, round **up** to a legal trade tick |
 
-The order SL is the computed chart price, **not** that price plus an unreported spread allowance. Longs exit on bid; shorts exit on ask. A spread expansion can stop a short even if the bid chart doesn't revisit its high. If SL is already breached or too close for the broker, skip. The bot still prices the loss at that stop even when no portfolio dollar cap is set.
+`buffer = max(trade_tick_size, atr_buffer × Wilder ATR at the cross close + extra_pips × pip_size)`. Defaults: ATR14, `atr_buffer: 0.1`, `extra_pips: 0`. Even a zero ATR buffer leaves at least **one full broker trade tick** outside the wick. A tick is not necessarily one point or one pip. Example: BUY wick 2000.37, ATR 0.80, trade tick 0.05 → buffer 0.08 → 2000.29 rounded **down to 2000.25**. This is a price example, not a trade recommendation.
+
+The stop is frozen at confirmation for **every leg** and any unsent reprice. A BUY stop is checked against executable bid; a SELL stop against ask. No hidden spread allowance. If the price gaps through the stop, it is too close for the broker, the trade grid changes, or another order check fails, skip the unsent trade/legs. Do not pull the stop in, push it out, substitute a cash or swing stop, or top up a partial batch. An accepted profit-ladder move may later *tighten* the stop as before. No open tickets are re-anchored on upgrade.
+
+Preflight: `entry_timing: confirmed_cross_next_bar`, `entry_quote_policy: first_fresh_post_close_tick_v1`, `new_ticket_stop_policy: confirmed_cross_candle_wick_v1`. Compare `closed_label.anchor_s` / `cross_candle_open_s`, `cross_candle_wick`, `atr`, `stop_tick_size` and `frozen_cross_sl` with `batch_preview.sl`, `risk_batch` and the actual broker request. A large signal candle can still mean large loss exposure. This change neither enables a dollar cap nor guarantees lower realized losses; check existing `hull.limits.max_open_risk_usd`, spread, batch size, slippage and fees in demo.
 
 ## Profit ladder for new tickets
 
@@ -27,7 +33,7 @@ The order SL is the computed chart price, **not** that price plus an unreported 
 
 For a **$10 base + $13 cash spread**, the goal is **+$23 gross**, not +$10 net. The broker TP is the first tradable price reaching that goal from the fill. Price-grid rounding can put the modeled profit slightly above $23. The spread is already reflected in executable P/L: do not deduct the $13 again from broker profit. Commission, swap, fees, slippage and changes in currency conversion can change the realized result. A larger goal can go unfilled.
 
-Each leg gets its own goal, even within one batch. It is frozen at send: if the fill slips, re-anchor the TP to the verified fill, not to a newly sampled spread. The initial swing SL is unchanged. With the default `profit_ladder_70_30_v1`, all rungs use **that frozen goal**, not the rounded TP profit or the latest spread. Older and already-open tickets are not migrated or adopted; a restart or profile change does not reset their recorded goals.
+Each leg gets its own goal, even within one batch. It is frozen at send: if the fill slips, re-anchor the TP to the verified fill, not to a newly sampled spread. The confirmed cross-candle SL is not moved to follow the fill. With the default `profit_ladder_70_30_v1`, all rungs use **that frozen goal**, not the rounded TP profit or the latest spread. Older and already-open tickets are not migrated or adopted; a restart or profile change does not reset their recorded goals.
 
 | Executable gross profit vs. original goal | New SL profit level | New broker TP | Example with a $23 frozen goal: trigger → SL / TP |
 |---:|---:|---:|---|

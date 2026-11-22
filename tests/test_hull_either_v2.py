@@ -10,16 +10,16 @@ from types import SimpleNamespace as NS
 
 import numpy as np
 import pytest
+from hull_cases import v4_sig
 from hull_mt import ROOT, T, sig
 
 from bot.config.loader import load_yaml
 from bot.hull.config import BATCH_ENTRY_POLICY, LADDER, HullConfig, Indicator
 from bot.hull.orders import Grid
+from bot.hull.terminal import dispatch
+from bot.hull.v4.config import Indicator as V4Indicator
 from bot.hull.v4.replay import Account
 from bot.hull.v4.signal import Hull
-from bot.hull.v4.config import Indicator as V4Indicator
-from hull_cases import v4_sig
-from bot.hull.terminal import dispatch
 from bot.zones.engine import Bar
 from bot.zones.feed import Minute
 from bot.zones.hours import Hours
@@ -290,7 +290,7 @@ def test_versioned_defaults_only_indicator_input_changes_and_legacy_opt_in():
         p.atr_buffer,
         p.extra_pips,
         h.exit_policy,
-    ) == (True, "local_pullback", 7, 14, 0.1, 0, LADDER)
+    ) == (True, "cross_candle", 7, 14, 0.1, 0, LADDER)
     assert BATCH_ENTRY_POLICY == "first_eligible_while_lane_flat_v2"
     fixed = Indicator(source="hl2")
     assert (
