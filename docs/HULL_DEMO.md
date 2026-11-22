@@ -76,7 +76,7 @@ The default applies to every selected Hull profile. There is **no bot-imposed ce
 
 **No Hull drawdown halt or per-minute send limit.** A drop of $75 (or more) below a previous equity peak no longer blocks the next funded entry or the rest of an eligible batch. Entry requests and per-ticket ladder amendments no longer compete for 40 slots per minute. Eight eligible slow profiles could request 80 entries in a minute, plus ladder updates; MT5 can still throttle or reject them. Orders are sequential, require valid positive equity and are never guaranteed to fill. Losses can accumulate without an automatic drawdown stop.
 
-**Broker funding is still mandatory.** Before entry (and again for the remaining tickets), the bot subtracts the full requested count × MT5’s single-ticket margin estimate from current free margin. A funded batch can leave less than 60% of equity free, even zero; an unfunded batch cannot proceed. In armed demo mode each ticket also needs an accepted MT5 `order_check` with valid projected free margin. Only a confirmed broker result establishes a fill. The archived v4 replay is not a Dynamic Hull execution model.
+**Broker funding is still mandatory.** Before entry (and again for the remaining tickets), the bot subtracts the full requested count × MT5’s single-ticket margin estimate from current free margin. A funded batch can leave less than 60% of equity free, even zero; an unfunded batch cannot proceed. In armed demo mode each ticket also needs an accepted MT5 `order_check` with valid projected free margin. Only a confirmed broker result establishes a fill. Chart-study results are not Dynamic Hull executions.
 
 | New log reason | What to check |
 |---|---|
@@ -87,7 +87,7 @@ The default applies to every selected Hull profile. There is **no bot-imposed ce
 
 For the first three reasons, `margin_veto` identifies the stage (`first_plan`, `next_leg`, `pre_send` or `order_check`), number of legs checked, equity, current/projected free margin and required reserve in USD. An unknown value is `null`. A batch preview is **not** a promise of a fill.
 
-**Updating an existing Windows demo config:** `git pull` does not edit the ignored `config.demo.local.yaml`. Positive values for **the four optional keys below** still take effect. To adopt their defaults, edit just these four keys **inside the existing `hull.limits` mapping** (or remove just those keys to inherit their code defaults). Do not add a duplicate mapping, replace the file or edit the separate top-level `risk` / `zones` settings.
+**Updating an existing Windows demo config:** `git pull` does not edit the ignored `config.demo.local.yaml`. Positive values for **the four optional keys below** still take effect. To adopt their defaults, edit just these four keys **inside the existing `hull.limits` mapping** (or remove just those keys to inherit their code defaults). Do not add a duplicate mapping, replace the file or assume legacy top-level `risk` / `zones` fields are Hull controls.
 
 ```yaml
 # Within hull.limits only; keep its other settings.

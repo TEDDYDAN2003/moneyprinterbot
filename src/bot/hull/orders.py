@@ -205,8 +205,7 @@ def protected_prices(d, p, grid, bid, ask):
     entry, mark = (ask, bid) if side == 1 else (bid, ask)
     # Use the actual chart-derived price; never replace with a cash stop or add a hidden spread buffer.
     sl = grid.price(grid.index(d.raw_sl, side == -1))
-    # The archived, standalone v4 replay has no frozen trade-grid field.
-    if getattr(d, "stop_tick_size", None) is not None and (
+    if d.stop_tick_size is not None and (
         grid.tick != d.stop_tick_size or sl != d.raw_sl
     ):
         raise Block(
@@ -214,11 +213,7 @@ def protected_prices(d, p, grid, bid, ask):
         )  # never re-anchor or widen a frozen SL
     dist = max(grid.gap, grid.tick)
     if sl <= 0 or side * (mark - sl) < dist - grid.tick * 1e-6:
-        raise Block(
-            "initial_stop_breached_or_too_close"
-            if hasattr(d, "stop_tick_size")
-            else "swing_breached_or_too_close"
-        )
+        raise Block("initial_stop_breached_or_too_close")
     return entry, mark, sl, dist
 
 

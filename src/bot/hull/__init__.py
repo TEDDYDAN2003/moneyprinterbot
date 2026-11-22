@@ -1,1 +1,1 @@
-"""Dynamic-source Hull companion. Historical closed-only studies live in v4/."""
+"""Dynamic Hull 16: confirmed cross, next-candle quote, frozen candle-wick stop."""

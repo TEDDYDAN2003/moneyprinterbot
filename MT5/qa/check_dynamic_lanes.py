@@ -9,10 +9,10 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from bot.hull.bar import Bar
 from bot.hull.config import Indicator
 from bot.hull.curves import LiveTick
 from bot.hull.signal import Hull
-from bot.zones.engine import Bar
 
 root = Path(__file__).resolve().parents[1]
 source = (root / "FC-Dynamic-Hull-Lanes.mq5").read_text()

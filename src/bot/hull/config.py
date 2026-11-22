@@ -47,8 +47,8 @@ class Indicator(Strict):
     structure_timeframe: str | None = None
     exit_opposite: Literal[True] = True
     exit_on_mss: Literal[True] = True
-    # Older anchors remain available to standalone reference calculations only.
-    stop: Literal["cross_candle", "local_pullback", "confirmed_pivot"] = "cross_candle"
+    # Legacy lookback stays parseable to preserve private configs and the state-key hash.
+    stop: Literal["cross_candle"] = "cross_candle"
     pullback_bars: int = Field(7, ge=1, le=100)
     swing_len: int = Field(3, ge=1, le=50)
     atr_length: int = Field(14, ge=1, le=500)
@@ -124,11 +124,6 @@ class HullConfig(Strict):
             raise ValueError(
                 f"The active Hull bot requires hull.indicator.hull_len: {DYNAMIC_HULL_LENGTH} "
                 f"(got {v.hull_len}). Update this field in your local config."
-            )
-        if v.stop != "cross_candle":
-            raise ValueError(
-                "The active Hull bot requires hull.indicator.stop: cross_candle. "
-                "Update the private YAML; do not change stops on existing tickets."
             )
         return v
 

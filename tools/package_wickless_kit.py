@@ -32,7 +32,7 @@ def pack(out, base):
         "indicators/Wickless-M15-Rejection.pine",
         "WicklessDesk/index.html",
         "tests/test_entry_sessions.py",
-        "tests/hull_cases.py",
+        "config.yaml",  # shared test fixtures read the paper template
         "tests/hull_mt.py",
         "MT5/qa/package.json",
         "MT5/qa/package-lock.json",

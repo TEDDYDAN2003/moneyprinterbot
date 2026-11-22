@@ -1,6 +1,0 @@
-{
-  "name": "XAUUSDm Wickless Structure Trading Bot",
-  "description": "1-minute Gold (XAUUSDm) Wickless Structure trading bot for MetaTrader 5 Desktop with tick-level execution, dollar-based TP/SL auto-closing, Telegram remote control, and historical backtester/optimizer.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}

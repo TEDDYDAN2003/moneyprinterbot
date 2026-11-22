@@ -7,13 +7,13 @@ from types import SimpleNamespace as NS
 import pytest
 from hull_mt import T, sig
 
+from bot.hull.bar import Bar
 from bot.hull.config import ENTRY_POLICY, Indicator
 from bot.hull.curves import LiveTick
 from bot.hull.feed import Stream, sample, verify_before_leg
 from bot.hull.signal import FirstCrossGate, Hull
 from bot.hull.structure import Structure
 from bot.hull.terminal import dispatch
-from bot.zones.engine import Bar
 
 NAME = "XAUUSDm"
 P = Indicator(

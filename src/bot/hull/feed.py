@@ -6,8 +6,8 @@ from bisect import bisect_right
 from copy import deepcopy
 from math import ceil
 
-from bot.execution.demo_runner import DemoSafetyError
-from bot.zones.engine import Bar
+from bot.broker import DemoSafetyError
+from bot.hull.bar import Bar
 
 from .config import TF_NAME
 from .curves import LiveTick
@@ -32,7 +32,7 @@ class StructureTape:
 
     Higher TF: last native close at/before chart OPEN. Lower TF: last finished
     native close at/before chart close or trigger tick. Never project a forming
-    structure bar. The tail must cover the chart's pullback-stop lookback.
+    structure bar. Keep enough context across chart/structure intervals.
     """
 
     def __init__(self, tf, depth, max_chart_tf, stop_bars):
@@ -108,7 +108,6 @@ class Stream:
             cfg.hull_len + int(cfg.hull_len**0.5) + 2,
             cfg.atr_length + 1,
             2 * cfg.swing_len + 2,
-            cfg.pullback_bars + 1 if cfg.stop == "local_pullback" else 1,
         )
 
     def refresh(self, mt, name, now):

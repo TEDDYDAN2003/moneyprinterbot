@@ -8,8 +8,8 @@ import pytest
 from hull_mt import ROOT, T, sig
 from pydantic import ValidationError
 
+from bot.broker import DemoSafetyError
 from bot.config.loader import load_yaml
-from bot.execution.demo_runner import DemoSafetyError
 from bot.hull.config import HullConfig, Limits
 from bot.hull.orders import Exposure, Plan, room
 
@@ -32,7 +32,7 @@ def test_shipped_and_omitted_settings_match_and_do_not_change_old_explicit_confi
     for limits in (h.limits, Limits()):
         assert {k: getattr(limits, k) for k in OFF} == OFF
         assert {"drawdown_usd", "max_orders_minute"}.isdisjoint(limits.model_dump())
-    assert cfg["risk"]["min_free_margin_pct"] == 60  # not used by the Hull executor
+    assert "risk" not in cfg  # no competing retired risk controls in the template
     old = {
         "max_positions": 60,
         "max_total_lots": 54.0,

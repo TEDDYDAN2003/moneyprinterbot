@@ -1,6 +1,6 @@
-from bot.config.loader import load_yaml
+from bot.config.schema import RootConfig
 
-from .config import NATIVE_TF, SIGNAL_TF, HullConfig, selection
+from .config import SIGNAL_TF, selection
 
 
 def register(sub):
@@ -13,10 +13,6 @@ def register(sub):
         (
             "hull-preflight",
             "inspect demo terminal, symbol metadata and sizing; no orders",
-        ),
-        (
-            "hull-replay",
-            "archived v4 offline benchmark ONLY; not the Dynamic Hull bot",
         ),
     ]:
         p = sub.add_parser(
@@ -40,7 +36,7 @@ def register(sub):
         )
         p.add_argument(
             "--timeframe",
-            choices=tuple(NATIVE_TF) if name == "hull-replay" else tuple(SIGNAL_TF),
+            choices=tuple(SIGNAL_TF),
             help="optional single approved lane; cannot override an empty allowlist",
         )
         if name in ("trade", "trade-all"):
@@ -54,62 +50,22 @@ def register(sub):
                 help="normal poll interval (0.25–10 s); poll faster around native closes, first quotes and active ladders",
             )
             p.add_argument("--max-iterations", type=int)
-        if name == "hull-replay":
-            p.add_argument("--ticks", nargs="+", required=True)
-            p.add_argument("--tick-size", type=float, required=True)
-            p.add_argument("--contract-size", type=float, required=True)
-            p.add_argument(
-                "--conversion", choices=("quote_usd", "base_usd"), required=True
-            )
-            p.add_argument("--start", required=True)
-            p.add_argument("--end", required=True)
-            p.add_argument("--out", default="reports/hull_replay")
 
 
-def handle(args):
-    cfg = load_yaml(args.config)
-    if "hull" not in cfg:
-        raise ValueError(
-            "Missing hull section. No fallback to the retired M15/zone executor."
-        )
-    if args.command == "hull-replay":
-        # Refuse to misrepresent a closed-label replay as the new live strategy.
-        if (
-            cfg["hull"].get("entry_timing")
-            in ("confirmed_cross_next_bar", "live_hull_cross")
-            or "eligible_timeframes" in cfg["hull"]
-        ):
-            raise ValueError(
-                "hull-replay is archived v4 only; not a Dynamic Hull backtest"
-            )
-        from .v4.config import FRAMES
-        from .v4.config import HullConfig as V4
-        from .v4.replay import run_replay
+def handle(args, cfg, model: RootConfig):
+    from .terminal import run
 
-        h = V4.model_validate(cfg["hull"])
-        p = selection(
-            h, args.symbols, args.profile, args.lots, args.target_usd, args.rate
-        )
-        frames = (NATIVE_TF[args.timeframe],) if args.timeframe else FRAMES
-        if set(frames) - set(FRAMES):
-            raise ValueError("Not a v4 benchmark timeframe")
-        run_replay(args, cfg, h, p, frames)
-    else:
-        from .terminal import run
-
-        h = HullConfig.model_validate(cfg["hull"])
-        frames = h.lanes((SIGNAL_TF[args.timeframe],) if args.timeframe else None)
-        p = selection(
-            h, args.symbols, args.profile, args.lots, args.target_usd, args.rate
-        )
-        run(
-            cfg,
-            h,
-            p,
-            frames,
-            armed=getattr(args, "armed", False),
-            preflight=args.command == "hull-preflight",
-            poll=getattr(args, "poll_seconds", 1.0),
-            iterations=getattr(args, "max_iterations", None),
-        )
+    h = model.hull
+    frames = h.lanes((SIGNAL_TF[args.timeframe],) if args.timeframe else None)
+    p = selection(h, args.symbols, args.profile, args.lots, args.target_usd, args.rate)
+    run(
+        cfg,
+        h,
+        p,
+        frames,
+        armed=getattr(args, "armed", False),
+        preflight=args.command == "hull-preflight",
+        poll=getattr(args, "poll_seconds", 1.0),
+        iterations=getattr(args, "max_iterations", None),
+    )
     return 0

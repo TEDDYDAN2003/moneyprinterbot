@@ -1,2 +1,1 @@
-"""XAUUSD adaptive multi-timeframe trading system."""
-
+"""Dynamic Hull demo scanner and independent Wickless companion."""

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "xauusd-adaptive-bot"
-version = "0.1.0"
-description = "Leakage-safe, multi-timeframe XAUUSD research and execution system"
+version = "0.2.0"
+description = "Dynamic Hull 16 MT5 demo scanner and independent Wickless M15 companion"
 requires-python = ">=3.11"
 dependencies = [
   "numpy",
@@ -16,11 +16,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-research = ["lightgbm", "optuna", "pyarrow", "scikit-learn", "shap"]
-live = ["MetaTrader5", "river"]
-test = ["pytest", "hypothesis"]
+live = ["MetaTrader5"]  # Windows terminal integration; not live-money mode
+test = ["pytest"]
 
 [project.scripts]
+dynamic-hull = "bot.cli:main"
 xauusd-bot = "bot.cli:main"
 
 [tool.pytest.ini_options]
@@ -28,6 +28,8 @@ testpaths = ["tests"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+include = ["bot", "bot.config", "bot.hull", "bot.wickless"]
+namespaces = false
 
 [tool.setuptools.package-data]
 "bot.config" = ["entry_sessions.yaml"]

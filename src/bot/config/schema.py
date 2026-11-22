@@ -1,35 +1,37 @@
-from __future__ import annotations
+"""Active desktop config. Older full-file YAML may contain unused research sections."""
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 from bot.hull.config import HullConfig
-from bot.zones.config import ZoneConfig
+from bot.hull.hours import Hours, effective_sessions
 
 
 class RunConfig(BaseModel):
-    model_config = ConfigDict(extra="allow")
-    mode: Literal["backtest", "paper", "auto", "demo", "live"] = "paper"
-    symbol: str = "XAUUSD"
-    seed: int = 42
+    mode: Literal["paper", "demo"] = "paper"
+    market_close_timezone: str = "UTC"
 
 
-class DataConfig(BaseModel):
-    model_config = ConfigDict(extra="allow")
-    history_years: int = Field(default=3, ge=1)
-    base_timeframe: str = "M1"
-    timeframes: list[str] = ["M1", "M2", "M5"]
+class TerminalConfig(BaseModel):
+    terminal_path: str = ""
+
+
+class SafetyConfig(BaseModel):
+    emergency_flatten_hotkey_file: str = Field("KILL", min_length=1)
 
 
 class RootConfig(BaseModel):
-    model_config = ConfigDict(extra="allow")
     run: RunConfig = RunConfig()
-    data: DataConfig = DataConfig()
-    zones: ZoneConfig | None = None  # archived experiments
-    hull: HullConfig | None = None
+    mt5: TerminalConfig = TerminalConfig()
+    safety: SafetyConfig = SafetyConfig()
+    sessions: dict
+    hull: HullConfig  # missing is an error, never fall back to a different trader
 
 
 def validate_config(data: dict) -> RootConfig:
-    """Validate the stable Phase 1 configuration contract."""
-    return RootConfig.model_validate(data)
+    model = RootConfig.model_validate({**data, "sessions": effective_sessions(data)})
+    Hours(
+        model.model_dump()
+    )  # resolve timezones and optional entry restrictions before MT5
+    return model

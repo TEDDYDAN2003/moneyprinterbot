@@ -10,8 +10,8 @@ import pytest
 from hull_mt import MT
 from wickless_qa.fixture import fixture
 
+from bot.broker import DemoSafetyError
 from bot.config import entry_sessions as es
-from bot.execution.demo_runner import DemoSafetyError
 from bot.hull.orders import Block, Grid
 from bot.wickless import terminal
 from bot.wickless.config import Config, Pair
@@ -344,7 +344,7 @@ def test_quote_changed_during_broker_precheck_and_alternative_deal_link(rig):
 def test_explicit_selection_and_foreign_account_lock(rig, tmp_path, monkeypatch):
     from contextlib import ExitStack
 
-    from bot.execution.demo_runner import _account_order_lock
+    from bot.broker import _account_order_lock
 
     m, b, _ = rig
     c = conf()

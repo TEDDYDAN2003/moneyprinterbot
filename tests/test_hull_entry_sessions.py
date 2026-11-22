@@ -10,9 +10,9 @@ from bot.config import entry_sessions as es
 from bot.config.loader import load_yaml
 from bot.hull.curves import LiveTick
 from bot.hull.entry_clock import WAITING
+from bot.hull.hours import Hours
 from bot.hull.structure import Structure
 from bot.hull.terminal import dispatch
-from bot.zones.hours import Hours
 
 NAME = "XAUUSDm"
 OPEN, END = T - 2 * 3600, T + 2 * 3600  # winter, Tue 13:00–17:00 UTC

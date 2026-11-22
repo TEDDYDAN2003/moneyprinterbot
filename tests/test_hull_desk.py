@@ -7,8 +7,8 @@ from types import SimpleNamespace as NS
 import pytest
 from hull_mt import MT, ROOT, T, sig
 
+from bot.broker import DemoSafetyError
 from bot.config.loader import load_yaml
-from bot.execution.demo_runner import DemoSafetyError
 from bot.hull.config import FIXED, HullConfig, selection
 from bot.hull.desk import identity_check, resolve
 from bot.hull.entry_clock import WAITING
@@ -168,7 +168,7 @@ def test_select_profiles_and_fx_currency_conversion():
 def test_stream_ignores_forming_bar_and_never_replays_startup_labels():
     from bot.hull.config import Indicator
 
-    fix = json.loads((ROOT / "research/hull_labels/reference.json").read_text())
+    fix = json.loads((ROOT / "tests/fixtures/hull_reference.json").read_text())
     j = next(i for i, r in enumerate(fix["sets"][0]["rows"]) if i > 80 and r[2])
     tf = 2
     dt = tf * 60

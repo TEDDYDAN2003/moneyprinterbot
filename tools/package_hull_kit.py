@@ -1,123 +1,117 @@
-"""Build the public companions ZIP from an explicit allowlist; never archive private runtime folders."""
+"""Build the current offline desk from reviewed Git index blobs, never local runtime data."""
 
-from hashlib import sha256
+import argparse
+import hashlib
+import subprocess
+import tempfile
 from pathlib import Path
-from tempfile import NamedTemporaryFile
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 ROOT = Path(__file__).resolve().parents[1]
-JOURNAL = [
-    "START-HERE.md",
-    "Start-Journal.cmd",
-    "Hull-Journal.html",
-    "journal.py",
-    "ledger.py",
-    "hull_analytics.py",
-    "requirements-windows.txt",
-    "examples/generate.py",
-    "examples/tickets.csv",
-    "examples/setups.csv",
-    "tests/test_journal.py",
-    "tests/test_analytics.py",
-    "tests/fixtures.py",
-    "ui/build_dashboard.py",
-    "ui/page.tpl",
-    "ui/style.css",
-    "ui/app.js",
-    "ui/analytics.js",
-    "ui/market_windows.js",
-    "ui/market_windows.tpl",
-    "ui/market_windows.json",
-]
-MT5 = [
-    "FC-Hull-Either-16-Structure.mq5",
-    "INSTALL-MT5.md",
-    "optional/Check-FC-Hull-Structure.mq5",
-    "qa/README.md",
-    "qa/package.json",
-    "qa/package-lock.json",
-    "qa/pine_oracle.cjs",
-    "qa/check_port.py",
-    "qa/check_bot.py",
-    "qa/check_chart_rules.py",
-    "qa/trend_cases.hpp",
-    "qa/v4-cases.csv",
-    "qa/v4-verification.txt",
-    "qa/candles.json",
-    "qa/protected_cases.json",
-    "qa/reference.pine",
-]
-SESSION_EVIDENCE = [
+SINGLES = {
     "README.md",
-    "archives.json",
-    "windows.csv",
-    "windows_by_utc_date.csv",
-]
-PINE = "indicators/FC-Hull-Either-16-Structure.pine"
-JOURNAL_INTRO = """HULL LEDGER + BOS HALF-RANGE v4 CHART INDICATORS
+    "AGENTS.md",
+    "pyproject.toml",
+    "config.yaml",
+    "wickless.example.json",
+    ".gitignore",
+    ".gitattributes",
+}
+# Limit every directory by file type. Journal CSVs may ONLY be the two synthetic samples.
+TREES = {
+    "src/bot/": {".py"},
+    "tests/": {".py", ".cjs", ".json"},
+    "docs/": {".md", ".html"},
+    "MT5/": {".mq5", ".md", ".py", ".hpp", ".json"},
+    "indicators/": {".pine", ".js", ".json"},
+    "HullJournal/": {".py", ".js", ".tpl", ".css", ".cmd", ".md", ".html", ".txt"},
+    "WicklessDesk/": {".html"},
+    "research/session_volatility/": {".md", ".py", ".json", ".csv"},
+    "research/wickless_m15/": {".md", ".py", ".json", ".csv"},
+    "tools/": {".py"},
+}
+SINGLES |= {
+    "src/bot/config/entry_sessions.yaml",
+    "HullJournal/examples/tickets.csv",
+    "HullJournal/examples/setups.csv",
+    "HullJournal/ui/market_windows.json",
+    "HullJournal/.gitignore",
+}
+REQUIRED = SINGLES | {
+    "src/bot/cli.py",
+    "src/bot/hull/terminal.py",
+    "docs/HULL_DEMO.md",
+    "MT5/FC-Dynamic-Hull-Lanes.mq5",
+    "HullJournal/ledger.py",
+    "HullJournal/journal.py",
+    "HullJournal/Hull-Journal.html",
+    "tests/test_hull_journal_bridge.py",
+}
 
-Journal: extract the entire kit, read HullJournal/START-HERE.md, and use Start-Journal.cmd on the Windows MT5 computer. Keep your existing private data directory. The journal examples are synthetic; Symbol performance also contains separately labelled historical Exness price research. See research/session_volatility/ for the quote evidence.
 
-"""
-CHART_INTRO = """MT5: copy MT5/FC-Hull-Either-16-Structure.mq5 to MQL5/Indicators, open THAT file in MetaEditor and compile with F7. Refresh Navigator and attach FC Hull BOS Half-Range v4. Do not paste Pine in MetaEditor.
-
-TradingView: paste indicators/FC-Hull-Either-16-Structure.pine into Pine Editor. Save and add FC Range 4. Valid suggestions only remains the default. All Hull crosses (debug) now shows plain green/red crosses on Hull B, for reference only. No bot update is needed for this display change. Delete v3 limit-ready alerts and recreate desired v4 alerts.
-
-Historical v4 rules: docs/archive/HULL_STRUCTURE_v4.md. CHoCH is context only. No reversal watch, no staged limit, no entry on a retest. A new completed trend cross must qualify in a confirmed BOS half-range. The current Dynamic Hull bot does NOT trade these v4 chart signals. MT5/qa/v4-cases.csv and MT5/qa/v4-verification.txt contain worked test traces and the offline results. A chart installation cannot start or update the bot. Do not replace a running armed scanner or delete its state.
-"""
+def git(*args):
+    return subprocess.check_output(["git", "-C", str(ROOT), *args])
 
 
-def pack(target, names, intro):
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with NamedTemporaryFile(dir=target.parent, suffix=".tmp", delete=False) as tmp:
-        temp = Path(tmp.name)
-    try:
-        with ZipFile(temp, "w") as z:
-            items = {
-                "READ-ME-FIRST.txt": intro.encode(),
-                **{n: (ROOT / n).read_bytes() for n in names},
-            }
-            items["SHA256SUMS.txt"] = "".join(
-                f"{sha256(v).hexdigest()}  {n}\n" for n, v in sorted(items.items())
-            ).encode()
-            for name, payload in items.items():
-                info = ZipInfo(name, (2000, 1, 1, 0, 0, 0))
-                info.create_system = 3
-                info.external_attr = 0o100644 << 16
-                z.writestr(info, payload, compress_type=ZIP_DEFLATED, compresslevel=9)
-        with ZipFile(temp) as z:
+def allowed(name):
+    return name in SINGLES or (
+        not name.startswith("HullJournal/data/")
+        and any(
+            name.startswith(d) and Path(name).suffix in ext for d, ext in TREES.items()
+        )
+    )
+
+
+def build(out):
+    files = {
+        n: git("show", ":" + n)
+        for n in git("ls-files", "-z").decode().split("\0")
+        if n and allowed(n)
+    }
+    if not REQUIRED <= files.keys():
+        raise ValueError("Missing expected desk files: " + str(REQUIRED - files.keys()))
+    # The portable copy already *is* the download; don't put a dead self-link in it.
+    files["README.md"] = files["README.md"].replace(
+        b"[Download the current desk](downloads/Dynamic-Hull-Desk.zip)",
+        b"**Portable desk**",
+    )
+    # Git normalises tracked text; Windows launchers and CSVs ship with CRLF.
+    for n in (
+        "HullJournal/Start-Journal.cmd",
+        "HullJournal/examples/tickets.csv",
+        "HullJournal/examples/setups.csv",
+    ):
+        files[n] = files[n].replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+    files["START-HERE.md"] = (
+        b"""# Dynamic Hull desktop kit\n\nNew install: extract into a NEW folder and open README.md. The checked-in template is paper-only; nothing starts automatically. Use the included HullJournal for actual closed demo fills, the MQ5 indicator for chart context, and the profile picker for observation. The charts are not an order manager.\n\nExisting install: preserve config.demo.local.yaml, reports/hull_runtime, home-directory account state, magic, and the journal output folder containing journal.sqlite3. Do not overlay this kit on your running checkout. Use a verified Git fast-forward while flat, or migrate offline in a copy with backups and the same working directory before restarting. For a separate reporter, --repo points to where the scanner writes its reports and --out to the ORIGINAL journal folder. No private records or credentials are included.\n\nSHA256SUMS.txt covers every other file in this kit. The ZIP contains sources, not Git history; the Git checkout has the downloads link and the packaging tools.\n"""
+    )
+    files["SHA256SUMS.txt"] = "".join(
+        f"{hashlib.sha256(data).hexdigest()}  {name}\n"
+        for name, data in sorted(files.items())
+    ).encode()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=out.parent) as tmp:
+        f = Path(tmp) / "desk.zip"
+        with ZipFile(f, "w") as z:
+            for n, data in sorted(files.items()):
+                i = ZipInfo(n, (2000, 1, 1, 0, 0, 0))
+                i.create_system = 3
+                i.external_attr = 0o100644 << 16
+                z.writestr(i, data, compress_type=ZIP_DEFLATED, compresslevel=9)
+        with ZipFile(f) as z:
             if (
                 z.testzip()
-                or len(z.infolist()) != len(items)
-                or any(z.read(k) != v for k, v in items.items())
+                or set(z.namelist()) != set(files)
+                or any(z.read(n) != d for n, d in files.items())
             ):
-                raise ValueError(f"Verification failed for {target.name}")
-        temp.replace(target)
-    finally:
-        temp.unlink(missing_ok=True)
-    print(f"{target.name}: {len(items)} allowlisted files")
-
-
-def main():
-    if (ROOT / PINE).read_bytes() != (ROOT / "MT5/qa/reference.pine").read_bytes():
-        raise ValueError("Published Pine differs from parity reference")
-    charts = [*("MT5/" + f for f in MT5), PINE, "docs/archive/HULL_STRUCTURE_v4.md"]
-    pack(
-        ROOT / "downloads/Hull-Chart-Indicators-v4.zip",
-        charts,
-        "FC HULL BOS HALF-RANGE V4 | CHART DISPLAY 4.01 | CHARTS ONLY\n\n"
-        + CHART_INTRO,
-    )
-    pack(
-        ROOT / "downloads/Hull-Ledger-Analytics-and-MT5.zip",
-        [
-            *("HullJournal/" + f for f in JOURNAL),
-            *("research/session_volatility/" + f for f in SESSION_EVIDENCE),
-            *charts,
-        ],
-        JOURNAL_INTRO + CHART_INTRO,
+                raise ValueError("Archive verification failed")
+        f.replace(out)
+    print(
+        f"{out}: {len(files)} files; SHA256 {hashlib.sha256(out.read_bytes()).hexdigest()}"
     )
 
 
 if __name__ == "__main__":
-    main()
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--out", type=Path, default=ROOT / "downloads/Dynamic-Hull-Desk.zip")
+    build(p.parse_args().out)

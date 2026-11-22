@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass
 
-from bot.zones.engine import Bar
+from bot.hull.bar import Bar
 
 
 @dataclass(frozen=True, slots=True)

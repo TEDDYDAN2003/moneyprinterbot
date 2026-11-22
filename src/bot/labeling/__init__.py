@@ -1,2 +1,0 @@
-"""Leakage-safe outcome labeling."""
-

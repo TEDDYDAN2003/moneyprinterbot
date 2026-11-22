@@ -7,7 +7,7 @@ from types import SimpleNamespace as NS
 import pytest
 from hull_mt import T, scanner_clock, sig
 
-from bot.execution.demo_runner import DemoSafetyError
+from bot.broker import DemoSafetyError
 from bot.hull.config import FIXED, LADDER
 from bot.hull.ladder import Protection, percentages, propose, reached
 from bot.hull.orders import Block, Grid, target

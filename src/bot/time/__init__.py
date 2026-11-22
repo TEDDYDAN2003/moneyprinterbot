@@ -1,2 +1,0 @@
-"""Timezone-aware session calculations."""
-

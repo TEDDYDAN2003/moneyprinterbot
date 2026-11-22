@@ -6,7 +6,7 @@ import math
 import time
 from dataclasses import asdict
 
-from bot.zones.monitor import fresh
+from bot.broker import fresh
 
 from .config import LADDER, TARGET_POLICY
 from .ladder import Protection, executable, inside, percentages, propose, still_valid

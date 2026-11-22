@@ -10,13 +10,13 @@ import pytest
 from hull_mt import MT, ROOT, T, scanner_clock
 
 from bot.config.loader import load_yaml
+from bot.hull.bar import Bar
 from bot.hull.config import HullConfig, Indicator, selection
 from bot.hull.curves import LiveTick
 from bot.hull.feed import Stream, StructureTape, sample
 from bot.hull.signal import Hull
 from bot.hull.structure import InternalStructure, Pivot, Structure
 from bot.hull.terminal import run
-from bot.zones.engine import Bar
 
 # Exact wicks, equal closes, then a close through the previous, known guard.
 PATH = [
@@ -64,11 +64,10 @@ def rate(b):
 
 
 @pytest.mark.parametrize("invert", [False, True])
-@pytest.mark.parametrize("stop", ["cross_candle", "local_pullback", "confirmed_pivot"])
 def test_native_forming_cross_is_live_but_cannot_modify_closed_trend_anchor_or_atr(
-    invert, stop
+    invert,
 ):
-    p = Indicator(hull_len=4, swing_len=1, atr_length=2, stop=stop)
+    p = Indicator(hull_len=4, swing_len=1, atr_length=2)
     h = Hull(1, p, 0.01)
     rows = [h.update(b) for b in fixture(invert)]
     sign = -1 if invert else 1

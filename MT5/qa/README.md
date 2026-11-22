@@ -1,18 +1,12 @@
-# Verify the current trend-only bot and charts
+# Dynamic Hull and chart checks (offline only)
 
-The active policy is `bos_half_range_close_v4`. `reference.pine` is an exact copy of the shipped v4 source. Do not use the old chart-only v3 retest ZIP or v2 scanner oracle to validate it. [Release results](v4-verification.txt) · [Worked close-by-close cases](v4-cases.csv). No terminal or broker data is needed. All fixtures are synthetic; these tests verify decisions, not profitability.
-
-From `MT5/` in the full checkout with Node 20+, Python 3.11+ with project dependencies installed, and `g++` (C++17):
+From the repo root, with the project installed and a C++17 `g++` on PATH:
 
 ```sh
-(cd qa && npm ci --ignore-scripts)
-node qa/pine_oracle.cjs qa/candles.json ../indicators/FC-Hull-Either-16-Structure.pine /tmp/hull-v4.json
-python qa/check_port.py /tmp/hull-v4.json
-python qa/check_chart_rules.py /tmp/hull-v4.json
-python qa/check_bot.py /tmp/hull-v4.json
+python MT5/qa/check_dynamic_lanes.py
+python -m pytest -q tests/test_hull_cross_candle.py tests/test_hull_failed_mss.py tests/test_hull_journal_bridge.py
 ```
 
-- PineTS 0.13.1 executes the deliverable with test-only plots: **29 scenarios, 28,936 closed-bar decisions, 49 numeric fields**. The 4.01 display tests also inspect the actual plot shape, color, price on Hull B, and absence of captions in the reference view, including when marks are hidden. Separate prefix/forming-candle checks verify nothing is backdated. The last two mirrored histories include the *former* early cross, a strict CHoCH with no new cross, and an exact later retest; none creates an entry. The protected-swing fixtures also check a fresh matching cross on a true CHoCH (bar 45: **no entry**) and an eligible post-BOS trend cross (bar 92: **allowed**).
-- The host shim runs the actual `.mq5` calculation and `OnCalculate` scheduler against the Pine fields, checking incremental/full history, forming candles, alert bars and diagnostic-only raw alerts, retired-stage buffers, and reference glyph/price/caption behavior. `trend_cases.hpp` adds **36 mirrored paths** for strict guard and inclusive midpoint, wrong-half and quote-edge vetoes, CHoCH close/touch rejection, next-open simulation, gaps, and independent opposite exits.
-- Independent rule assertions reconstruct each band's inequalities. The Python comparison checks **17 structural/raw fields** and, where the bot and chart options match, the actual pre-slot stop/EMA/entry gate. Broker fills are deliberately not compared to OHLC proxy fills.
-- From the repo root, `python -m pytest -q` additionally exercises the production scanner loop against a fake terminal, including old private timing configs, no index-zero rate reads, no broker requests on former reversals or vanished live crosses, first post-close quotes, per-leg rechecks, funding, old-position exits, ladders and restart safeguards. This does not launch a real scanner.
+The shim compiles the calculation from the [current monitor](../FC-Dynamic-Hull-Lanes.mq5). It compares confirmed raw crosses, trade-grid stops, first-cross skips/waivers, intrabar exit-only projections and broker-D1-aligned M45 bars to Python. It also exercises three-lane updates and attach/duplicate alert suppression. It does not compile an EX5, connect to a terminal, or model profit. See [native installation](../DYNAMIC-LANES.md) for MetaEditor.
+
+`package.json` / `package-lock.json` pin the optional PineTS dependency for the supported TradingView, Free Chart and Wickless code contracts. See the [chart study guide](../../docs/HULL_CHART_REPLAY.md). A chart study is not the Python order manager.

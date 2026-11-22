@@ -8,7 +8,7 @@
 
 **Mandatory entry hours (both Python bots):** use the [shared instrument schedule](docs/ENTRY_SESSIONS.md), not the chart statistics buckets or a global killzone. Validate exact broker names; check `entry_sessions.version`, `sha256` and each symbol’s `entry_session` in preflight. A normally closed window is not a reason to widen hours. An unmapped symbol cannot enter. Never disable protection, arm a scanner or change selections to test this filter.
 
-For **MT5 only**, open **PowerShell in the bot folder** on your Windows MT5 PC (usually `$HOME\Downloads\xauusdm-directional-research`). You should see `config.yaml` and `HullJournal`. No environment activation is needed.
+For **MT5 only**, open **PowerShell in the bot folder** on your Windows MT5 PC (the same root used for your current logs; older installs may be named `xauusdm-directional-research`). You should see `config.yaml` and `HullJournal`. No environment activation is needed.
 
 | What do you want to do? | Start here |
 |---|---|
@@ -94,7 +94,7 @@ $out = '.\HullJournal\data'
   & $py .\HullJournal\journal.py --repo . --out $out --once
   ```
 
-**3. Find your results in `$out`.** `tickets.csv` = fully closed positions; `setups.csv` = completed batches. The first sync defaults to 30 days. Ctrl+C **in the journal window** stops only the reporter, not the bot. For a non-default magic, multiple MT5 installations or older history, see the [journal guide](HullJournal/START-HERE.md).
+**3. Find your results in `$out`.** `tickets.csv` = fully closed positions; `setups.csv` = completed batches. For a confirmed-stop ticket, compare its cross wick, frozen SL, send quote and actual broker fill; do not assign these fields to older entries without a matched receipt. The first sync defaults to 30 days. Ctrl+C **in the journal window** stops only the reporter, not the bot. For a non-default magic, multiple MT5 installations or older history, see the [journal guide](HullJournal/START-HERE.md).
 
 ## Setup
 
@@ -106,7 +106,7 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" 
   Select-Object ProcessId,CommandLine
 ```
 
-**First use / after an update:** with no affected running scanner or unresolved exposure, run `git status --short --branch`. Only on clean `main`, run `git pull --ff-only origin main`. If the pull fails or the checkout is dirty, stop; never force or discard local work.
+**First use / after an update:** with no affected running scanner or unresolved exposure, run `git status --short --branch`. For a published update on clean `main`, run `git pull --ff-only origin main`. For an offline Git update use the supplied verified fast-forward bundle. A portable ZIP has no Git history: extract to a new folder; never overwrite private files. If the pull fails or the checkout is dirty, stop; never force or discard local work.
 
 1. **Prepare Python.** Use supported 64-bit Windows Python 3.11+. Reuse `.venv` if present:
    ```powershell

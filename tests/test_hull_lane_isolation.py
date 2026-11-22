@@ -7,6 +7,7 @@ from types import SimpleNamespace as NS
 import pytest
 from hull_mt import T, sig
 
+from bot.hull.bar import Bar
 from bot.hull.config import HullConfig, Indicator
 from bot.hull.entry_clock import WAITING
 from bot.hull.feed import Stream, rates
@@ -14,7 +15,6 @@ from bot.hull.m45 import aggregate
 from bot.hull.signal import LiveTick
 from bot.hull.structure import Structure
 from bot.hull.terminal import dispatch
-from bot.zones.engine import Bar
 
 NAME = "XAUUSDm"
 OK = {"data_ok": True, "history_ok": True, "rewarmed": False}

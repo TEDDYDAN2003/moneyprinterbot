@@ -45,6 +45,31 @@ class Owners:
             else None
         )
 
+    def deal_lane(self, deal, symbols, magic):
+        """Read-only audit link, never used to admit, close or enroll a position."""
+        pid = getattr(deal, "position_id", 0)
+        rec = self.book.get(str(pid))
+        ms = getattr(deal, "time_msc", None)
+        if not (
+            rec
+            and pid
+            and rec.get("identifier") == pid
+            and rec.get("symbol") == deal.symbol
+            and deal.symbol in symbols
+            and rec.get("magic") == magic
+            and isinstance(ms, int)
+            and 0 < (rec.get("opened_msc") or 0) <= ms
+            and rec.get("type") in (0, 1)
+        ):
+            return None
+        if deal.entry == 0 and deal.magic == magic and deal.type == rec["type"]:
+            return rec.get("tf")
+        if (
+            deal.entry in (1, 3) and deal.type == 1 - rec["type"]
+        ):  # OUT / OUT_BY (including manual)
+            return rec.get("tf")
+        return None
+
     def prune(self, active_ids, now):
         # Keep recently closed IDs to attribute manual/SL exits in the bounded
         # post-signal deals window even when the closing deal's magic is zero.

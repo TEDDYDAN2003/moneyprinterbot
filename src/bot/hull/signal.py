@@ -6,10 +6,9 @@ is never appended to closed indicator/structure/stop history.
 
 from __future__ import annotations
 
-from collections import deque
 from dataclasses import dataclass, field, replace
 
-from bot.zones.engine import Bar
+from bot.hull.bar import Bar
 
 from .config import ENTRY_POLICY, STOP_POLICY, TF_NAME, Indicator
 from .curves import WMA, Baseline, LiveTick
@@ -231,9 +230,7 @@ class Hull:
         self.prev = self.last_b = self.atr = None
         self.n = 0
         self.tr_sum = 0.0
-        self.hist = deque(maxlen=p.pullback_bars)
         self.structure = InternalStructure(p.swing_len)
-        self.last_cross = {1: None, -1: None}
 
     def update(
         self, c: Bar, *, context: Structure | None = None, observe_first=True
@@ -289,9 +286,6 @@ class Hull:
         # The crossover returned by each Baseline uses THAT curve's own prior A.
         # Never OR the outputs and never compare High now to Low on the prior bar.
         a, label = curves.get(active, (None, 0))
-        prior = (
-            list(self.hist) if commit and label and p.stop == "local_pullback" else []
-        )
         if commit:
             tr = (
                 c.h - c.l
@@ -305,54 +299,23 @@ class Hull:
                     self.atr = self.tr_sum / p.atr_length
             else:
                 self.atr = (self.atr * (p.atr_length - 1) + tr) / p.atr_length
-            if p.stop == "local_pullback":
-                self.hist.append(c)
         anchor = when = sl = window = None
-        count = 0
         side = 0
         reason = "no_cross"
         if label and commit:
-            if p.stop == "cross_candle":
-                # Shift 1 is final on this lane, including all three M15 pieces of M45.
-                anchor, when = (c.l if label == 1 else c.h), c.t
-                window = c.t  # zero *prior* bars contribute to this wick
-            elif p.stop == "local_pullback":
-                since = self.last_cross[-label]
-                prior = [q for q in prior if since is None or q.t >= since]
-                if prior:
-                    # Most recent equal wick wins. Signal candle is deliberately excluded.
-                    pick = (
-                        min(prior, key=lambda q: (q.l, -q.t))
-                        if label == 1
-                        else max(prior, key=lambda q: (q.h, q.t))
-                    )
-                    anchor, when = (pick.l if label == 1 else pick.h), pick.t
-                    window = prior[0].t
-                    count = len(prior)
-            else:
-                chosen = self.structure.last_l if label == 1 else self.structure.last_h
-                if chosen:
-                    anchor, when = chosen.price, chosen.bar_s
-            if anchor is not None and self.atr is not None:
+            # The completed lane candle is the only stop anchor (including all three M15s of M45).
+            anchor, when = (c.l if label == 1 else c.h), c.t
+            window = c.t
+            if self.atr is not None:
                 pad = p.atr_buffer * self.atr + p.extra_pips * self.pip
-                sl = (
-                    cross_candle_stop(anchor, label, pad, self.tick_size)
-                    if p.stop == "cross_candle"
-                    else anchor - label * pad
-                )
+                sl = cross_candle_stop(anchor, label, pad, self.tick_size)
             if sl is None:
-                reason = (
-                    "cross_stop_data_unavailable"
-                    if p.stop == "cross_candle"
-                    else "no_known_swing_or_atr"
-                )
+                reason = "cross_stop_data_unavailable"
             elif sl <= 0 or label * (c.c - sl) <= 0:
                 reason = "initial_stop_invalid_at_close"
             else:
                 side = label
                 reason = "ready"
-            if p.stop == "local_pullback":
-                self.last_cross[label] = c.t
         elif label:
             reason = "await_cross_candle_close"
         if commit:
@@ -371,7 +334,7 @@ class Hull:
             when,
             sl,
             window,
-            count,
+            0,  # prior_bars in historical log schema
             self.structure.last_l.price if self.structure.last_l else None,
             self.structure.last_h.price if self.structure.last_h else None,
             structure,
@@ -381,8 +344,6 @@ class Hull:
             curves.get("low", (None, 0))[1],
             curves.get("high", (None, 0))[1],
             tick,
-            stop_tick_size=self.tick_size
-            if anchor is not None and p.stop == "cross_candle"
-            else None,
+            stop_tick_size=self.tick_size if anchor is not None else None,
         )
         return self.gate.apply(r, observe=observe_first)

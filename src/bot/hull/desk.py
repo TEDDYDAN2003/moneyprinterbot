@@ -8,10 +8,17 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from bot.broker import (
+    DemoSafetyError,
+    _filling_mode,
+    _side_is_allowed,
+    account_check,
+    fresh,
+    save,
+    snapshot,
+)
 from bot.config.entry_sessions import EntrySessionVeto, sessions_for_runner
-from bot.execution.demo_runner import DemoSafetyError, _filling_mode, _side_is_allowed
-from bot.zones.hours import Hours
-from bot.zones.monitor import account_check, fresh, save, snapshot
+from bot.hull.hours import Hours
 
 from .config import COUNTS, FIXED, LADDER, TARGET_POLICY, TF_NAME
 from .entry_clock import FAST_POLL_S, WAITING, TimingBlock, check_quote, utc
@@ -982,6 +989,9 @@ class Desk:
                 self.emit(
                     "demo_result",
                     symbol=name,
+                    tf=d.tf,
+                    stop_tick_size=d.stop_tick_size,
+                    cross_atr=d.atr,
                     leg=sent + 1,
                     signal=d.signal_s,
                     request=req,

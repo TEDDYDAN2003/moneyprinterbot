@@ -1,27 +1,42 @@
 @echo off
 setlocal EnableExtensions DisableDelayedExpansion
+set "BOT=%~f1"
+set "OUT=%~f2"
 cd /d "%~dp0"
-set "BOT=%~1"
+if not defined BOT if exist "%~dp0..\src\bot\hull\terminal.py" set "BOT=%~dp0.."
 if not defined BOT if exist "%USERPROFILE%\Downloads\xauusdm-directional-research\src\bot\hull\terminal.py" set "BOT=%USERPROFILE%\Downloads\xauusdm-directional-research"
+if defined OUT goto selected
+set "OUT=%~dp0data"
+if not defined BOT goto selected
+for %%I in ("%BOT%\HullJournal\data") do set "PREVIOUS=%%~fI"
+if /I "%PREVIOUS%"=="%OUT%" goto selected
+if not exist "%PREVIOUS%\journal.sqlite3" goto selected
+if exist "%OUT%\journal.sqlite3" (
+  echo Two different journal checkpoints exist. Pass your existing data folder as the second argument.
+  pause
+  exit /b 2
+)
+if not exist "%OUT%\tickets.csv" if not exist "%OUT%\setups.csv" set "OUT=%PREVIOUS%"
+:selected
 if not defined BOT goto standalone
 if exist "%BOT%\.venv\Scripts\python.exe" goto botpython
 where py >nul 2>&1
 if errorlevel 1 goto botfallback
-py -3 "%~dp0journal.py" --repo "%BOT%" --open-browser
+py -3 "%~dp0journal.py" --repo "%BOT%" --out "%OUT%" --open-browser
 goto finish
 :botfallback
-python "%~dp0journal.py" --repo "%BOT%" --open-browser
+python "%~dp0journal.py" --repo "%BOT%" --out "%OUT%" --open-browser
 goto finish
 :botpython
-"%BOT%\.venv\Scripts\python.exe" "%~dp0journal.py" --repo "%BOT%" --open-browser
+"%BOT%\.venv\Scripts\python.exe" "%~dp0journal.py" --repo "%BOT%" --out "%OUT%" --open-browser
 goto finish
 :standalone
 where py >nul 2>&1
 if errorlevel 1 goto fallback
-py -3 "%~dp0journal.py" --open-browser
+py -3 "%~dp0journal.py" --out "%OUT%" --open-browser
 goto finish
 :fallback
-python "%~dp0journal.py" --open-browser
+python "%~dp0journal.py" --out "%OUT%" --open-browser
 :finish
 if errorlevel 1 (
   echo.

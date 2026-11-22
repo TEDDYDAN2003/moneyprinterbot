@@ -1,28 +1,13 @@
-# Preserve the byte digests of replay code and the reproducible evidence on Windows.
-src/bot/zones/*.py text eol=lf
-research/candle_retest/** text eol=lf
-src/bot/hull/*.py text eol=lf
-research/hull_labels/** text eol=lf
-
-# Keep the published read-only companions and portable fixtures reproducible.
+# Keep audit policies, fixtures and the standalone companions byte-stable across platforms.
+src/bot/** text eol=lf
 HullJournal/** text eol=lf
 HullJournal/Start-Journal.cmd text eol=crlf
 HullJournal/examples/*.csv text eol=crlf
 MT5/** text eol=lf
-indicators/FC-Hull-Either-16-Structure.pine text eol=lf
-downloads/*.zip binary
-
-# Also shipped byte-for-byte in the portable kit.
-docs/HULL_STRUCTURE.md text eol=lf
-
-# Wickless study inputs, sources, and portable website are identical on Windows.
 WicklessDesk/** text eol=lf
-src/bot/wickless/** text eol=lf
+indicators/** text eol=lf
+tests/fixtures/** text eol=lf
+research/session_volatility/** text eol=lf
 research/wickless_m15/** text eol=lf
-indicators/Wickless-M15-Rejection.pine text eol=lf
-
-indicators/FC-Hull-Dynamic-Source.pine text eol=lf
-src/bot/hull/v4/*.py text eol=lf
-
-# The execution policy SHA-256 identifies the same shipped bytes on Windows and Unix.
-src/bot/config/entry_sessions.yaml text eol=lf
+docs/** text eol=lf
+downloads/*.zip binary

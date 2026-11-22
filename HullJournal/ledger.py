@@ -47,6 +47,17 @@ NATIVE_MINUTES = {
 TAG = re.compile(r"h([1-9]\d{0,3})_(\d{9,11})_([1-9]\d{0,3})\Z")
 LIVE_TAG = re.compile(r"i([1-9]\d{0,3})_([1-9]\d{11,13})_([1-9]\d{0,3})\Z")
 LIVE_KEY_MIN = 10**11  # disjoint from every accepted legacy seconds key
+# These are optional evidence columns, not new ownership/settlement rules. Historical
+# confirmed h-tags alone do NOT prove which stop/quote policy produced a trade.
+CROSS_POLICY = "confirmed_cross_candle_wick_v1"
+CROSS_SHARED = (
+    "initial_stop_policy",
+    "cross_candle_wick",
+    "frozen_cross_sl",
+    "mss_skip_exception",
+)
+SEND_FIELDS = ("send_quote_utc", "send_bid", "send_ask")
+LOG_FORMAT = 4  # incremental index: replay available demo.jsonl once, do not reset broker history
 CASH = ("gross_profit", "commission", "swap", "fee")
 FIELDS = [
     "schema_version",
@@ -92,6 +103,8 @@ FIELDS = [
     "signal_bar_end_utc",
     "trigger_bid",
     "trigger_ask",
+    *CROSS_SHARED,
+    *SEND_FIELDS,
 ]
 NUMERIC = {
     "schema_version",
@@ -108,6 +121,10 @@ NUMERIC = {
     "net_profit",
     "initial_sl",
     "initial_tp",
+    "cross_candle_wick",
+    "frozen_cross_sl",
+    "send_bid",
+    "send_ask",
 }
 REASONS = {
     0: "Desktop",
@@ -168,6 +185,8 @@ def db_open(path):
       CREATE TABLE IF NOT EXISTS deals(id TEXT PRIMARY KEY,pid TEXT NOT NULL,body TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS by_pid ON deals(pid);
       CREATE TABLE IF NOT EXISTS receipts(id TEXT PRIMARY KEY,symbol TEXT, tag TEXT,side TEXT,sl TEXT,tp TEXT);
+      CREATE TABLE IF NOT EXISTS cross_receipts(id TEXT PRIMARY KEY, wick TEXT NOT NULL, sl TEXT NOT NULL,
+          waiver TEXT NOT NULL, send_ms INTEGER NOT NULL, bid TEXT NOT NULL, ask TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS labels(symbol TEXT,tf INTEGER,signal INTEGER,side TEXT,model TEXT,
           PRIMARY KEY(symbol,tf,signal,side));
       CREATE TABLE IF NOT EXISTS live_triggers(symbol TEXT,tf INTEGER,signal INTEGER,side TEXT,bar_end INTEGER,bid TEXT,ask TEXT,
@@ -255,6 +274,50 @@ def signal_window(key):
     return ms // 1000, (ms + 999) // 1000 + ENTRY_WINDOW
 
 
+def index_cross_receipt(c, ev, vals, ref):
+    """Enrich a *matched* original request, never a label/preview or a historical h-tag."""
+    if ev.get("initial_stop_policy") != CROSS_POLICY:
+        return
+    tf, close_s, leg = ref
+    did, _sy, tag_text, side, requested_sl, _tp = vals
+    sign = 1 if side == "BUY" else -1
+    ms = int(ev["send_tick_time_msc"])
+    wick, sl, bid, ask = (
+        dec(ev[k])
+        for k in ("cross_candle_wick", "frozen_cross_sl", "send_bid", "send_ask")
+    )
+    waiver = ev.get("mss_skip_exception") or ""
+    if not (
+        ev.get("retcode") in (10009, 10010)
+        and tag_text.startswith("h")
+        and tf in (15, 30, 45)
+        and ev.get("tf", tf) == tf
+        and ev.get("leg") == leg
+        and ev.get("entry_timing") == "confirmed_close"
+        and ev.get("entry_side") == sign
+        and ev.get("signal") == close_s
+        and ev.get("trigger_msc") == close_s * 1000
+        and ev.get("cross_candle_open_s") == close_s - tf * 60
+        and close_s * 1000 <= ms < (close_s + tf * 60) * 1000
+        and 0 < bid <= ask
+        and min(wick, sl) > 0
+        and (wick - sl) * sign > 0
+        and sl == dec(requested_sl)
+        and waiver in ("", "failed_counter_mss_return")
+        and c.execute("SELECT * FROM receipts WHERE id=?", (did,)).fetchone() == vals
+    ):
+        raise ValueError("Inconsistent confirmed-cross receipt metadata")
+    evidence = (did, plain(wick), plain(sl), waiver, ms, plain(bid), plain(ask))
+    previous = c.execute("SELECT * FROM cross_receipts WHERE id=?", (did,)).fetchone()
+    if previous is None:
+        c.execute("INSERT INTO cross_receipts VALUES(?,?,?,?,?,?,?)", evidence)
+    elif previous != evidence and previous[4] != 0:
+        # Contradictory valid receipts for one deal: do not pick the first or last.
+        # A zero clock is a durable ambiguity marker, not an executable quote.
+        c.execute("UPDATE cross_receipts SET send_ms=0 WHERE id=?", (did,))
+        raise ValueError("Conflicting cross-candle receipts for the same deal")
+
+
 def import_log(c, path, magic):
     """Optional exact joins from the account-scoped ARMED log. Never use a preview as a fill."""
     if path is None or not path.is_file():
@@ -265,7 +328,11 @@ def import_log(c, path, magic):
     bad = int(old.get("bad", 0))
     changed = False
     with path.open("rb") as f:
-        if old.get("format") != 3 or old.get("path") != str(path) or off > size:
+        if (
+            old.get("format") != LOG_FORMAT
+            or old.get("path") != str(path)
+            or off > size
+        ):
             off = bad = 0
         if off:
             f.seek(max(off - 96, 0))
@@ -290,17 +357,20 @@ def import_log(c, path, magic):
                 )
             ):
                 continue
+            before = c.total_changes
             try:
                 ev = json.loads(line)
+                if ev.get("scanner_magic", magic) != magic:
+                    continue  # same account's audit can contain several strategy identities
                 typ = ev["event"]
                 sy = str(ev["symbol"])
-                before = c.total_changes
                 if typ == "demo_result":
                     q = ev["request"]
                     key = str(int(ev.get("deal") or 0))
                     parsed = tag(q.get("comment"))
                     if (
-                        key != "0"
+                        int(key) > 0
+                        and ("retcode" not in ev or ev["retcode"] in (10009, 10010))
                         and parsed
                         and int(q["magic"]) == magic
                         and q["symbol"] == sy
@@ -317,6 +387,7 @@ def import_log(c, path, magic):
                         c.execute(
                             "INSERT OR IGNORE INTO receipts VALUES(?,?,?,?,?,?)", vals
                         )
+                        index_cross_receipt(c, ev, vals, parsed)
                 elif (
                     typ == "exit_request"
                     and ev.get("retcode") in (10009, 10010)
@@ -390,7 +461,6 @@ def import_log(c, path, magic):
                             str(ev["outcome"]),
                         ),
                     )
-                changed |= c.total_changes != before
             except (
                 ValueError,
                 KeyError,
@@ -400,12 +470,13 @@ def import_log(c, path, magic):
                 UnicodeDecodeError,
             ):
                 bad += 1
+            changed |= c.total_changes != before
         f.seek(max(0, off - 96))
         tail = hashlib.sha256(f.read(min(off, 96))).hexdigest()
     put(
         c,
         "log_cursor",
-        {"format": 3, "path": str(path), "off": off, "tail": tail, "bad": bad},
+        {"format": LOG_FORMAT, "path": str(path), "off": off, "tail": tail, "bad": bad},
     )
     return changed, True
 
@@ -653,6 +724,18 @@ def make_views(c):
     active = set(get(c, "active", []))
     floor = get(c, "floor")
     receipts = {r[0]: r[1:] for r in c.execute("SELECT * FROM receipts")}
+    cross = {
+        did: dict(
+            zip(
+                (*CROSS_SHARED, *SEND_FIELDS),
+                (CROSS_POLICY, wick, sl, waiver, iso(ms), bid, ask),
+                strict=True,
+            )
+        )
+        for did, wick, sl, waiver, ms, bid, ask in c.execute(
+            "SELECT * FROM cross_receipts WHERE send_ms>0"
+        )
+    }
     notes = defaultdict(list)
     for sy, number, ms, why in c.execute(
         "SELECT symbol,ticket,at_ms,why FROM exit_notes"
@@ -703,7 +786,7 @@ def make_views(c):
         side = ("BUY", "SELL")[a["typ"]]
         refs = set()
         sources = set()
-        brackets = []
+        brackets, proofs = [], []
         for d in ins:
             meta = receipts.get(d["id"])
             k = tag(d["comment"])
@@ -715,6 +798,8 @@ def make_views(c):
                 refs.add(k)
                 sources.add("Bot receipt")
                 brackets.append((meta[3], meta[4]))
+                if k and d["id"] in cross:
+                    proofs.append(cross[d["id"]])
         start = a["ms"]
         link = next(iter(refs)) if len(refs) == 1 else None
         model = ""
@@ -801,6 +886,13 @@ def make_views(c):
                 r["entry_timing"] = "live_hull_cross" if is_live else "confirmed_close"
                 r["signal_trigger_utc"] = iso(trigger_ms(stamp))
                 if not is_live:
+                    # All component fills must have exact, non-conflicting receipts.
+                    # Never infer these fields from a start time or the nearest setup.
+                    if len(proofs) == len(ins):
+                        for k in (*CROSS_SHARED, *SEND_FIELDS):
+                            vs = {v[k] for v in proofs}
+                            if len(vs) == 1:
+                                r[k] = vs.pop()
                     r["signal_close_utc"] = r["signal_trigger_utc"]
                     bar_end = stamp
                 else:
@@ -912,6 +1004,11 @@ def make_views(c):
             else "Mixed exits",
             attribution="Exact signal group",
         )
+        # A setup may have many executable quotes. Leave those ticket-only; show
+        # stop evidence only if ALL of its settled tickets agree on the same stop.
+        frozen = {tuple(x[k] for k in CROSS_SHARED) for x in rs}
+        if len(frozen) == 1:
+            r.update(zip(CROSS_SHARED, frozen.pop(), strict=True))
         noted = {x["bot_exit_request"] for x in rs}
         r["bot_exit_request"] = (
             next(iter(noted)) if len(noted) == 1 else "Varies by ticket"

@@ -11,8 +11,8 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
+from bot.broker import DemoSafetyError, _account_order_lock
 from bot.config.entry_sessions import sessions_for_runner
-from bot.execution.demo_runner import DemoSafetyError, _account_order_lock
 
 from .config import (
     BATCH_ENTRY_POLICY,
@@ -58,15 +58,29 @@ def sync_deals(d, now):
         d.emit("history_unavailable")
         return False
     for x in deals:
-        if d.owned(x) and str(x.ticket) not in known:
+        # Audit only: a manual, SL or TP closing deal can carry a different magic.
+        # Do not treat that magic (or a similar comment) as position ownership.
+        lane = d.owners.deal_lane(x, d.syms, d.h.magic)
+        linked_exit = lane is not None and x.entry in (
+            mt.DEAL_ENTRY_OUT,
+            mt.DEAL_ENTRY_OUT_BY,
+        )
+        if (d.owned(x) or linked_exit) and str(x.ticket) not in known:
             d.emit(
                 "broker_deal",
+                tf=lane,
+                attribution="reconciled_position_exit"
+                if linked_exit
+                else "symbol_and_magic",
                 **{
                     k: getattr(x, k, None)
                     for k in (
                         "symbol",
                         "ticket",
                         "position_id",
+                        "order",
+                        "magic",
+                        "reason",
                         "entry",
                         "type",
                         "volume",
@@ -350,7 +364,12 @@ def run(
                 ],
                 "latest_spread": None if q is None else q.ask - q.bid,
             }
+        root = Path("reports/hull_runtime") / key
+        audit = root / ("demo.jsonl" if armed else "shadow.jsonl")
         summary = {
+            "account_key": key,
+            "journal_magic": h.magic,
+            "audit_log": str(audit.resolve()),
             "mode": "DEMO ARMED" if armed else "READ ONLY",
             "account": "USD hedging demo",
             "terminal_trade_allowed": bool(mt.terminal_info().trade_allowed),
@@ -382,7 +401,7 @@ def run(
             "indicator": h.indicator.model_dump(),
         }
         if preflight:
-            from bot.zones.monitor import snapshot
+            from bot.broker import snapshot
 
             ps, os = snapshot(mt)
             summary["open_positions"] = len(ps)
@@ -460,17 +479,19 @@ def run(
             if session_issues:
                 raise DemoSafetyError("; ".join(session_issues))
             return summary
-        root = Path("reports/hull_runtime") / key
         root.mkdir(parents=True, exist_ok=True)
 
         def emit(event, **fields):
             line = json.dumps(
-                {"at": datetime.now(UTC).isoformat(), "event": event, **fields},
+                {
+                    "at": datetime.now(UTC).isoformat(),
+                    "event": event,
+                    "scanner_magic": h.magic,
+                    **fields,
+                },
                 allow_nan=False,
             )
-            with (root / ("demo.jsonl" if armed else "shadow.jsonl")).open(
-                "a", encoding="utf8"
-            ) as f:
+            with audit.open("a", encoding="utf8") as f:
                 print(line, file=f)
             print(line, flush=True)
 
@@ -654,7 +675,7 @@ def run(
 
 def export_quotes(args, cfg):
     """Read-only export using the same exact broker-symbol resolution as the scanner."""
-    from bot.zones.export import export
+    from bot.hull.quote_export import export
 
     from .config import HullConfig, selection
 

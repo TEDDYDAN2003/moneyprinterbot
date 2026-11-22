@@ -1,6 +1,6 @@
 # Dynamic Hull: signal, entry and exit
 
-The scanner and [FC DynHull Pine v6](../indicators/FC-Hull-Dynamic-Source.pine) share the raw Hull cross and confirmed structure calculation. The post-MSS entry rule differs: the latest Pine indicator allows the first aligned cross, while `trade`, `demo` and `trade-all` retain the bot veto described below. The older Either/16 charts and v4 closed-label benchmark are historical tools, not signals for this bot.
+The scanner and [FC DynHull Pine v6](../indicators/FC-Hull-Dynamic-Source.pine) share the raw Hull cross and confirmed structure calculation. The post-MSS entry rule differs: the latest Pine indicator allows the first aligned cross, while `trade`, `demo` and `trade-all` retain the bot veto described below. Older Either/16 charts and the v4 benchmark were retired to Git history; their recorded trade reasons remain readable in the journal.
 
 **Execution only:** the [shared symbol entry schedule](ENTRY_SESSIONS.md) is mandatory on every new ticket. It uses the confirmed cross close, post-close quote time and submission time; it does not change this indicator’s signals, chart replay or protective exits.
 
