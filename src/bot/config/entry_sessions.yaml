@@ -17,6 +17,7 @@ windows:
   frankfurt_first_hour:   {all_of: [frankfurt_open]}
   london_before_new_york: {all_of: [london_day, ny_before_open]}
   london_ny_overlap:      {all_of: [london_day, new_york_day]}
+  new_york_day_session:   {all_of: [new_york_day]}
   overlap_killzone:       {all_of: [london_day, new_york_day, london_kill_band]}
   ny_cash_first_hour:     {all_of: [ny_cash_open]}
 
@@ -25,13 +26,13 @@ windows:
 # Add a broker suffix to the correct aliases list; never use a wildcard or fallback.
 markets:
   JP225:    {windows: [tokyo_first_hour], aliases: [JP225m, NIKKEI, 'Japan 225', 'JP 225']}
-  USDJPY:   {windows: [tokyo_first_hour, london_ny_overlap], aliases: [USDJPYm]}
+  USDJPY:   {windows: [tokyo_first_hour, london_before_new_york, london_ny_overlap, new_york_day_session], aliases: [USDJPYm]}
   DE40:     {windows: [frankfurt_first_hour], aliases: [DE30, DE30m, DE40m, GER40, GER30, 'Germany 40', 'Germany 30']}
-  GBPJPY:   {windows: [london_before_new_york, london_ny_overlap], aliases: [GBPJPYm]}
-  XAUUSD:   {windows: [london_ny_overlap], aliases: [XAUUSDm, GOLD]}
-  EURUSD:   {windows: [london_ny_overlap], aliases: [EURUSDm]}
-  AUDUSD:   {windows: [london_ny_overlap], aliases: [AUDUSDm]}
-  GBPUSD:   {windows: [london_ny_overlap], aliases: [GBPUSDm]}
-  NAS100USD: {windows: [overlap_killzone, ny_cash_first_hour], aliases: [USTEC_x100m, NAS100, US100, USTEC, USTECm]}
-  US30:      {windows: [overlap_killzone, ny_cash_first_hour], aliases: [US30m, 'Wall Street 30', 'US Wall Street 30']}
-  US500:     {windows: [overlap_killzone, ny_cash_first_hour], aliases: [US500m, SPX500, 'US SPX 500', 'US 500']}
+  GBPJPY:   {windows: [london_before_new_york, london_ny_overlap, new_york_day_session], aliases: [GBPJPYm]}
+  XAUUSD:   {windows: [london_before_new_york, london_ny_overlap, new_york_day_session], aliases: [XAUUSD247m, XAUUSDm, GOLD]}
+  EURUSD:   {windows: [london_before_new_york, london_ny_overlap, new_york_day_session], aliases: [EURUSDm]}
+  AUDUSD:   {windows: [london_before_new_york, london_ny_overlap, new_york_day_session], aliases: [AUDUSDm]}
+  GBPUSD:   {windows: [london_before_new_york, london_ny_overlap, new_york_day_session], aliases: [GBPUSDm]}
+  NAS100USD: {windows: [overlap_killzone, ny_cash_first_hour, new_york_day_session], aliases: [USTEC_x100m, NAS100, US100, USTEC, USTECm]}
+  US30:      {windows: [overlap_killzone, ny_cash_first_hour, new_york_day_session], aliases: [US30m, 'Wall Street 30', 'US Wall Street 30']}
+  US500:     {windows: [overlap_killzone, ny_cash_first_hour, new_york_day_session], aliases: [US500m, SPX500, 'US SPX 500', 'US 500']}

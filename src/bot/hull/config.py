@@ -20,7 +20,7 @@ NATIVE_TF = {
     "D1": 1440,
 }
 # M45 is a study interval, NEVER an MT5 native timeframe constant.
-SIGNAL_TF = {"M15": 15, "M30": 30, "M45": 45}
+SIGNAL_TF = {"M5": 5, "M15": 15, "M30": 30, "M45": 45}
 TF_NAME = {v: k for k, v in (NATIVE_TF | SIGNAL_TF).items()}
 LADDER = "profit_ladder_70_30_v1"
 FIXED = "fixed_tp"
@@ -132,7 +132,8 @@ class HullConfig(Strict):
     def valid_frames(cls, v):
         if len(set(v)) != len(v) or any(f not in SIGNAL_TF for f in v):
             raise ValueError(
-                "Use a unique subset of the approved Hull lanes: M15, M30, M45"
+                "Use a unique subset of the approved Hull lanes: "
+                + ", ".join(SIGNAL_TF.keys())
             )
         return v
 
