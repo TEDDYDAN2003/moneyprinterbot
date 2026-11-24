@@ -22,7 +22,7 @@ def test_template_is_for_the_actual_demo_desk():
     assert (conf.run.mode, conf.hull.magic, conf.hull.lanes(), conf.hull.enabled) == (
         "paper",
         26111825,
-        (15, 30, 45),
+        (5, 10, 15),
         ("XAUUSD",),
     )
     assert (
@@ -109,7 +109,7 @@ def test_retained_desktop_commands_route_only_to_dynamic_scanner(cmd, monkeypatc
                 "--config",
                 str(CONFIG),
                 "--timeframe",
-                "M45",
+                "M10",
                 "--profile",
                 "XAUUSD:0.09:10:slow",
             ]
@@ -124,7 +124,7 @@ def test_retained_desktop_commands_route_only_to_dynamic_scanner(cmd, monkeypatc
         and h.entry_timing == "confirmed_cross_next_bar"
     )
     assert (lanes, tuple(selection), selection["XAUUSD"].lots) == (
-        (45,),
+        (10,),
         ("XAUUSD",),
         0.09,
     )

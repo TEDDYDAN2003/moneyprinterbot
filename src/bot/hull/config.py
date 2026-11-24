@@ -21,6 +21,12 @@ NATIVE_TF = {
 }
 # M45 is a study interval, NEVER an MT5 native timeframe constant.
 SIGNAL_TF = {"M5": 5, "M15": 15, "M30": 30, "M45": 45}
+# Parent -> native trigger. These are exact pairs, not independent execution lanes.
+PAIRS = {5: 3, 10: 5, 15: 10}
+PAIR_FRAMES = {f"M{p}": p for p in PAIRS}
+PAIR_MODE = "paired_structure"
+PAIR_STOP = "confirmed_pair_trigger_candle_wick_v1"
+PAIR_POLICY = "closed_pair_structure_cross_v1"
 TF_NAME = {v: k for k, v in (NATIVE_TF | SIGNAL_TF).items()}
 LADDER = "profit_ladder_70_30_v1"
 FIXED = "fixed_tp"
@@ -32,6 +38,12 @@ M1_STOP = "confirmed_m1_cross_candle_wick_v1"
 M1_POLICY = "m1_close_parent_structure_single_batch_v1"
 STOP_POLICY = "confirmed_cross_candle_wick_v1"
 ENTRY_POLICY = "fc_dynamic_failed_mss_return_v3"
+# Metadata only. Signal-time enforcement stays in the individual execution books.
+EXECUTION_INFO = {
+    "parent_close": (ENTRY_POLICY, STOP_POLICY, "trend_hull_cross"),
+    M1_MODE: (M1_POLICY, M1_STOP, "m1_parent_structure_cross"),
+    PAIR_MODE: (PAIR_POLICY, PAIR_STOP, "paired_structure_cross"),
+}
 BATCH_ENTRY_POLICY = "first_eligible_while_lane_flat_v2"
 # Removed in Hull only. Older full-file demo configs may still contain the keys.
 RETIRED_LIMITS = ("drawdown_usd", "max_orders_minute")
@@ -109,7 +121,9 @@ class Limits(Strict):
 
 
 class HullConfig(Strict):
-    execution_mode: Literal["parent_close", "m1_parent_structure"] = "parent_close"
+    execution_mode: Literal[
+        "parent_close", "m1_parent_structure", "paired_structure"
+    ] = "parent_close"
     entry_timing: Literal["confirmed_cross_next_bar"] = CLOSE_TIMING
     eligible_timeframes: tuple[str, ...] = ()  # no default trading authorization
     exit_policy: Literal["profit_ladder_70_30_v1", "fixed_tp"] = LADDER
@@ -134,15 +148,21 @@ class HullConfig(Strict):
     @field_validator("eligible_timeframes")
     @classmethod
     def valid_frames(cls, v):
-        if len(set(v)) != len(v) or any(f not in SIGNAL_TF for f in v):
+        if len(set(v)) != len(v) or any(f not in SIGNAL_TF | PAIR_FRAMES for f in v):
             raise ValueError(
                 "Use a unique subset of the approved Hull lanes: "
-                + ", ".join(SIGNAL_TF.keys())
+                + ", ".join(SIGNAL_TF | PAIR_FRAMES)
             )
         return v
 
     def lanes(self, requested=None):
-        approved = tuple(SIGNAL_TF[f] for f in self.eligible_timeframes)
+        allowed = PAIR_FRAMES if self.execution_mode == PAIR_MODE else SIGNAL_TF
+        if set(self.eligible_timeframes) - allowed.keys():
+            raise ValueError(
+                f"{self.execution_mode}: set hull.eligible_timeframes to a subset of "
+                + ", ".join(allowed)
+            )
+        approved = tuple(allowed[f] for f in self.eligible_timeframes)
         if not approved:
             raise ValueError(
                 "No eligible Hull timeframes configured; scanner is disabled."
@@ -161,7 +181,15 @@ class HullConfig(Strict):
         ):
             raise ValueError("Select unique, configured Hull symbol keys")
         st = NATIVE_TF.get(self.indicator.structure_timeframe)
-        if st and any(SIGNAL_TF[f] != st for f in self.eligible_timeframes):
+        if self.eligible_timeframes:
+            self.lanes()  # reject an incompatible allowlist even before terminal initialization
+        if self.execution_mode == PAIR_MODE and st:
+            raise ValueError(
+                "paired_structure requires each chart's own structure: set structure_timeframe: null"
+            )
+        if st and any(
+            (SIGNAL_TF | PAIR_FRAMES)[f] != st for f in self.eligible_timeframes
+        ):
             raise ValueError(
                 "Independent bot lanes require their own structure; set hull.indicator.structure_timeframe: null"
             )

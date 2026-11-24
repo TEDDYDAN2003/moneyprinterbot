@@ -1,6 +1,6 @@
 from bot.config.schema import RootConfig
 
-from .config import SIGNAL_TF, selection
+from .config import M1_MODE, PAIR_FRAMES, PAIR_MODE, SIGNAL_TF, selection
 
 
 def register(sub):
@@ -19,7 +19,13 @@ def register(sub):
             name, aliases=["demo"] if name == "trade" else [], help=helptext
         )
         p.add_argument("--config", default="config.yaml")
-        p.add_argument(
+        modes = p.add_mutually_exclusive_group()
+        modes.add_argument(
+            "--paired-confirm",
+            action="store_true",
+            help="Use M5/M3, M10/M5, M15/M10 with both structures aligned. Never expands the parent allowlist or arms orders.",
+        )
+        modes.add_argument(
             "--m1-confirm",
             action="store_true",
             help="M1 close triggers; approved parent lanes provide structure, one batch per symbol. Does not arm orders.",
@@ -41,7 +47,7 @@ def register(sub):
         )
         p.add_argument(
             "--timeframe",
-            choices=tuple(SIGNAL_TF),
+            choices=tuple(SIGNAL_TF | PAIR_FRAMES),
             help="optional single approved lane; cannot override an empty allowlist",
         )
         if name in ("trade", "trade-all"):
@@ -62,8 +68,12 @@ def handle(args, cfg, model: RootConfig):
 
     h = model.hull
     if getattr(args, "m1_confirm", False):
-        h = h.model_copy(update={"execution_mode": "m1_parent_structure"})
-    frames = h.lanes((SIGNAL_TF[args.timeframe],) if args.timeframe else None)
+        h = h.model_copy(update={"execution_mode": M1_MODE})
+    elif getattr(args, "paired_confirm", False):
+        h = h.model_copy(update={"execution_mode": PAIR_MODE})
+    frames = h.lanes(
+        ((SIGNAL_TF | PAIR_FRAMES)[args.timeframe],) if args.timeframe else None
+    )
     p = selection(h, args.symbols, args.profile, args.lots, args.target_usd, args.rate)
     run(
         cfg,

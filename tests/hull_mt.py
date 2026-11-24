@@ -4,9 +4,8 @@ import time
 from pathlib import Path
 from types import SimpleNamespace as NS
 
-from bot.hull.structure import Structure
-
 from bot.hull.signal import Reading
+from bot.hull.structure import Structure
 
 T = 1794322800  # Tue 15:00 UTC, inside gold/FX overlap and US index killzone
 ROOT = Path(__file__).resolve().parents[1]
@@ -37,6 +36,8 @@ class MT:
     SYMBOL_TRADE_MODE_LONGONLY = 1
     TIMEFRAME_M1 = 1
     TIMEFRAME_M2 = 2
+    TIMEFRAME_M3 = 3
+    TIMEFRAME_M10 = 10
     TIMEFRAME_M5 = 5
     TIMEFRAME_M15 = 15
     TIMEFRAME_M30 = 30

@@ -4,6 +4,7 @@ The account-specific journal is authoritative only after the broker opening orde
 and position are reconciled. Legacy/unknown tickets are NEVER assigned by guess.
 """
 
+from .config import PAIRS
 from .ladder_desk import opened_ms
 
 
@@ -23,11 +24,15 @@ class Owners:
     def __init__(self, state):
         self.book = state.setdefault("hull_lane_positions_v1", {})
 
-    def bind(self, p, tf, *, minute_source=None, minute_policy=None):
+    def bind(self, p, tf, *, minute_source=None, policy_key=None, pair_child=None):
         record = fingerprint(p) | {"tf": int(tf)}
+        if pair_child is not None:
+            if PAIRS.get(tf) != pair_child or minute_source is not None:
+                return False
+            record.update(trigger_tf=pair_child, pair_policy_key=policy_key)
         if minute_source is not None:
             record.update(
-                trigger_tf=1, m1_source=minute_source, m1_policy_key=minute_policy
+                trigger_tf=1, m1_source=minute_source, m1_policy_key=policy_key
             )
         if (
             record["opened_msc"] <= 0
@@ -55,6 +60,11 @@ class Owners:
             return None
         rec = self.book[str(getattr(p, "identifier", p.ticket))]
         return rec.get("m1_source") if rec.get("trigger_tf") == 1 else None
+
+    def origin(self, p):
+        if self.lane(p) is None:
+            return None
+        return self.book[str(getattr(p, "identifier", p.ticket))]
 
     def deal_lane(self, deal, symbols, magic):
         """Read-only audit link, never used to admit, close or enroll a position."""

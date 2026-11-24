@@ -332,6 +332,9 @@ def test_terminal_detects_standalone_native_shift_without_label_and_no_attach_ex
         monkeypatch, lambda: wall[0], lambda _: wall.__setitem__(0, stamp + 0.125)
     )
     cfg = load_yaml(ROOT / "config.yaml")
+    cfg["hull"].update(
+        execution_mode="parent_close", eligible_timeframes=["M15", "M30", "M45"]
+    )
     cfg["run"]["mode"] = "demo"
     h = HullConfig.model_validate(cfg["hull"])
     run(cfg, h, selection(h), armed=True, iterations=3)

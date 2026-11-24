@@ -10,7 +10,14 @@ from dataclasses import dataclass, field, replace
 
 from bot.hull.bar import Bar
 
-from .config import ENTRY_POLICY, M1_POLICY, M1_STOP, STOP_POLICY, TF_NAME, Indicator
+from .config import (
+    EXECUTION_INFO,
+    M1_MODE,
+    PAIR_MODE,
+    PAIRS,
+    TF_NAME,
+    Indicator,
+)
 from .curves import WMA, Baseline, LiveTick
 from .entry_clock import utc
 from .orders import cross_candle_stop
@@ -47,9 +54,32 @@ class Reading:
     stop_tick_size: float | None = None  # verified trade grid at signal, not pip size
 
     trigger_tf: int | None = (
-        None  # None = legacy same-lane clock; 1 = M1 trigger, tf is its owner
+        None  # None = same-lane clock; otherwise tf owns a separate trigger_tf candle
     )
     detected_s: float | None = None
+    trigger_structure: Structure | None = (
+        None  # native, immutable close-time evidence for paired mode
+    )
+
+    @property
+    def paired(self):
+        return self.trigger_tf is not None and PAIRS.get(self.tf) == self.trigger_tf
+
+    @property
+    def execution_mode(self):
+        if self.trigger_tf is None:
+            return "parent_close"
+        if self.trigger_tf == 1:
+            return M1_MODE
+        return PAIR_MODE if self.paired else None
+
+    def order_tag(self, leg):
+        prefix = (
+            f"p{self.tf}x{self.candle_tf}"
+            if self.paired
+            else f"{'m' if self.trigger_tf == 1 else 'h'}{self.tf}"
+        )
+        return f"{prefix}_{self.close_s}_{leg}"
 
     @property
     def candle_tf(self):
@@ -88,6 +118,20 @@ class Reading:
     def candidate_reason(self):
         if not self.label:
             return "no_cross"
+        if self.paired:
+            child = self.trigger_structure
+            parent = self.structure
+            if (
+                child is None
+                or child.closed_s != self.close_s
+                or parent.closed_s is None
+                or not 0 <= self.close_s - parent.closed_s < self.tf * 60
+            ):
+                return "pair_context_unverified"
+            if child.bias == 0 or parent.bias == 0:
+                return "neutral_pair_structure"
+            if child.bias != parent.bias or self.label != child.bias:
+                return "pair_structure_disagrees"
         if not self.structure.bias:
             return "neutral_structure"
         if self.label != self.structure.bias:
@@ -120,24 +164,33 @@ class Reading:
         return self.label if self.entry_reason == "ready" else 0
 
     def entry_audit(self):
+        entry_policy, stop_policy, setup = EXECUTION_INFO.get(
+            self.execution_mode, (None, None, None)
+        )
+        ctx = {}
+        if self.trigger_tf is not None:
+            ctx.update(
+                parent_tf=self.tf,
+                trigger_tf=self.trigger_tf,
+                parent_structure_close_s=self.structure.closed_s,
+                close_to_detect_ms=round((self.detected_s - self.close_s) * 1000, 3)
+                if self.detected_s is not None
+                else None,
+            )
+            if self.trigger_tf == 1:
+                ctx["m1_source"] = self.active_source
+            elif self.paired:
+                child = self.trigger_structure
+                ctx.update(
+                    trigger_source=self.active_source,
+                    parent_structure_bias=self.structure.bias,
+                    trigger_structure_bias=child.bias if child else None,
+                    trigger_structure_close_s=child.closed_s if child else None,
+                )
         return {
-            **(
-                {
-                    "parent_tf": self.tf,
-                    "trigger_tf": 1,
-                    "parent_structure_close_s": self.structure.closed_s,
-                    "m1_source": self.active_source,
-                    "close_to_detect_ms": round(
-                        (self.detected_s - self.close_s) * 1000, 3
-                    )
-                    if self.detected_s is not None
-                    else None,
-                }
-                if self.trigger_tf == 1
-                else {}
-            ),
-            "entry_policy": M1_POLICY if self.trigger_tf == 1 else ENTRY_POLICY,
-            "initial_stop_policy": (M1_STOP if self.trigger_tf == 1 else STOP_POLICY)
+            **ctx,
+            "entry_policy": entry_policy,
+            "initial_stop_policy": stop_policy
             if self.stop_tick_size is not None
             else None,
             "cross_candle_open_s": self.anchor_s
@@ -148,13 +201,7 @@ class Reading:
             else None,
             "frozen_cross_sl": self.raw_sl if self.stop_tick_size is not None else None,
             "structure_phase": self.structure.phase,
-            "entry_setup": (
-                "m1_parent_structure_cross"
-                if self.trigger_tf == 1
-                else "trend_hull_cross"
-            )
-            if self.entry_side
-            else None,
+            "entry_setup": setup if self.entry_side else None,
             "entry_side": self.entry_side,
             "entry_reason": self.entry_reason,
             "mss_skip_exception": "failed_counter_mss_return"

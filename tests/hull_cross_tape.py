@@ -111,6 +111,7 @@ def run_tape(
     scanner_clock(monkeypatch, wall, lambda _: phase.__setitem__(0, phase[0] + 1))
     cfg = load_yaml(ROOT / "config.yaml")
     cfg["run"]["mode"] = "demo"
+    cfg["hull"]["execution_mode"] = "parent_close"
     cfg["hull"]["eligible_timeframes"] = [f"M{tf}"]
     cfg["hull"]["indicator"]["swing_len"] = 1
     h = HullConfig.model_validate(cfg["hull"])

@@ -1,6 +1,8 @@
 # Dynamic Hull: M1 trigger, higher-timeframe structure
 
-**Scope:** optional Python execution mode for the existing USD hedging demo desk. It replaces parent-candle entries; it does not run an extra M1 trading lane. Other scripts, private data and historical tickets are not converted. Ordinary configs without the new option keep `parent_close`. The supplied `run_preflight.ps1` and `run_arm_demo.ps1` explicitly select the M1 mode; review their profile lists before running either.
+**Previous release, not the active launch policy.** See [paired triggers and restart](HULL_PAIRS.md) for the current scripts. This page documents historical M1 behavior and explicit compatibility mode.
+
+**Scope:** optional Python execution mode for the existing USD hedging demo desk. It replaces parent-candle entries; it does not run an extra M1 trading lane. Other scripts, private data and historical tickets are not converted. Ordinary configs without the new option keep `parent_close`. The scripts shipped at `dc080b4` selected M1; the current scripts do not.
 
 ## The two clocks
 
@@ -38,7 +40,7 @@
    & $py -m bot.cli trade-all --config $cfg --m1-confirm
    ```
 
-   Check `READ ONLY`, `execution_mode: m1_parent_structure`, `trigger_timeframe: M1`, intended `timeframes`, `m1_history_ready: true` in preflight, `new_ticket_stop_policy: confirmed_m1_cross_candle_wick_v1`, account, lots, history, and warnings. Verify `checkout_head_at_start`/`source_module`. Keep the observer only if observation is intended. To send demo orders, stop **that observer** first, then use the reviewed invocation in **one** scanner only, explicitly adding `--arm-demo`. If those supplied profiles are the ones you want: run `./run_preflight.ps1`, then `./run_arm_demo.ps1 -Observe`. Stop the observer before intentionally running `./run_arm_demo.ps1` to arm demo. The scripts use their own explicit profiles, not necessarily your YAML `enabled` list. Software exits cannot operate when the bot/MT5 is offline.
+   Check `READ ONLY`, `execution_mode: m1_parent_structure`, `trigger_timeframe: M1`, intended `timeframes`, `m1_history_ready: true` in preflight, `new_ticket_stop_policy: confirmed_m1_cross_candle_wick_v1`, account, lots, history, and warnings. Verify `checkout_head_at_start`/`source_module`. Keep the observer only if observation is intended. To send demo orders, stop **that observer** first, then use the reviewed invocation in **one** scanner only, explicitly adding `--arm-demo`. Do not use the current paired-mode wrappers to start an M1 manager. Software exits cannot operate when the bot/MT5 is offline.
 
 ## See why a trade did or didn't happen
 

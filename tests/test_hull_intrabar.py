@@ -181,6 +181,7 @@ def test_scanner_live_cross_is_recorded_only_as_protection(
     from bot.hull.config import SIGNAL_TF
 
     monkeypatch.setitem(SIGNAL_TF, "M1", 1)  # short fabricated clock
+    cfg["hull"]["execution_mode"] = "parent_close"
     cfg["hull"]["eligible_timeframes"] = ["M1"]
     cfg["hull"]["indicator"].update(swing_len=1, atr_length=2)
     cfg["hull"]["symbols"]["XAUUSD"].update(session="continuous")

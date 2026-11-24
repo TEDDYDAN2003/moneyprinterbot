@@ -42,7 +42,7 @@ def tape(
             return 2000.0 if phase[0] == 1 else 2000.0 - 2 * side
         return (
             2000.0 - 3 * side
-            if (case == "exit" and phase[0] >= 2 or case == "interrupt" and last[0])
+            if ((case == "exit" and phase[0] >= 2) or (case == "interrupt" and last[0]))
             else 2000.0
         )
 
@@ -451,18 +451,23 @@ def test_journal_uses_m1_clock_and_parent_ownership_on_actual_deals_only(
         assert all(r["send_bid"] and r["frozen_cross_sl"] for r in data["tickets"])
 
 
-def test_explicit_cli_override_does_not_authorize_m1_lane_or_arm(monkeypatch):
+def test_explicit_cli_override_does_not_authorize_m1_lane_or_arm(tmp_path, monkeypatch):
+    import yaml
     from pydantic import ValidationError
 
     from bot.cli import main
 
+    old = load_yaml(ROOT / "config.yaml")
+    old["hull"].pop("execution_mode")  # legacy full YAML with approved parents
+    old["hull"]["eligible_timeframes"] = ["M15", "M30", "M45"]
+    (tmp_path / "old.yaml").write_text(yaml.safe_dump(old))
     calls = []
     monkeypatch.setattr("bot.hull.terminal.run", lambda *a, **kw: calls.append((a, kw)))
     main(
         [
             "hull-preflight",
             "--config",
-            str(ROOT / "config.yaml"),
+            str(tmp_path / "old.yaml"),
             "--m1-confirm",
             "--timeframe",
             "M30",
@@ -473,7 +478,7 @@ def test_explicit_cli_override_does_not_authorize_m1_lane_or_arm(monkeypatch):
         and calls[0][0][3] == (30,)
         and not calls[0][1]["armed"]
     )
-    cfg = load_yaml(ROOT / "config.yaml")["hull"]
+    cfg = old["hull"]
     assert HullConfig.model_validate(cfg).execution_mode == "parent_close"
     with pytest.raises(ValidationError):
         HullConfig.model_validate(

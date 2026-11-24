@@ -46,6 +46,12 @@ NATIVE_MINUTES = {
 }
 TAG = re.compile(r"h([1-9]\d{0,3})_(\d{9,11})_([1-9]\d{0,3})\Z")
 MINUTE_TAG = re.compile(r"m(5|15|30|45)_(\d{9,11})_([1-9]\d{0,3})\Z")
+# Journal is standalone; accepting historical tags never authorizes trading.
+PAIRS = {5: 3, 10: 5, 15: 10}
+PAIR_TAG = re.compile(r"p(5|10|15)x(3|5|10)_(\d{9,11})_([1-9]\d{0,3})\Z")
+PAIR_STOP = "confirmed_pair_trigger_candle_wick_v1"
+PAIR_ENTRY = "closed_pair_structure_cross_v1"
+PAIR_SHARED = ("parent_structure_close_utc", "confirmed_pair_bias")
 LIVE_TAG = re.compile(r"i([1-9]\d{0,3})_([1-9]\d{11,13})_([1-9]\d{0,3})\Z")
 LIVE_KEY_MIN = 10**11  # disjoint from every accepted legacy seconds key
 # These are optional evidence columns, not new ownership/settlement rules. Historical
@@ -59,7 +65,7 @@ CROSS_SHARED = (
     "mss_skip_exception",
 )
 SEND_FIELDS = ("send_quote_utc", "send_bid", "send_ask")
-LOG_FORMAT = 5  # incremental index: replay available demo.jsonl once, do not reset broker history
+LOG_FORMAT = 6  # incremental index: replay available demo.jsonl once, do not reset broker history
 CASH = ("gross_profit", "commission", "swap", "fee")
 FIELDS = [
     "schema_version",
@@ -107,6 +113,8 @@ FIELDS = [
     "trigger_ask",
     *CROSS_SHARED,
     *SEND_FIELDS,
+    "trigger_timeframe",
+    *PAIR_SHARED,
 ]
 NUMERIC = {
     "schema_version",
@@ -189,6 +197,8 @@ def db_open(path):
       CREATE TABLE IF NOT EXISTS receipts(id TEXT PRIMARY KEY,symbol TEXT, tag TEXT,side TEXT,sl TEXT,tp TEXT);
       CREATE TABLE IF NOT EXISTS cross_receipts(id TEXT PRIMARY KEY, wick TEXT NOT NULL, sl TEXT NOT NULL,
           waiver TEXT NOT NULL, send_ms INTEGER NOT NULL, bid TEXT NOT NULL, ask TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS pair_context(id TEXT PRIMARY KEY,parent_close INTEGER NOT NULL,bias INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS pair_finished(symbol TEXT,tf INTEGER,signal INTEGER,outcome TEXT,PRIMARY KEY(symbol,tf,signal));
       CREATE TABLE IF NOT EXISTS labels(symbol TEXT,tf INTEGER,signal INTEGER,side TEXT,model TEXT,
           PRIMARY KEY(symbol,tf,signal,side));
       CREATE TABLE IF NOT EXISTS live_triggers(symbol TEXT,tf INTEGER,signal INTEGER,side TEXT,bar_end INTEGER,bid TEXT,ask TEXT,
@@ -259,10 +269,22 @@ def tf_name(minutes):
 
 def tag(s):
     text = str(s or "")
-    m = TAG.fullmatch(text) or MINUTE_TAG.fullmatch(text) or LIVE_TAG.fullmatch(text)
-    if not m:
-        return None
-    tf, stamp, leg = map(int, m.groups())
+    if text.startswith("p"):
+        m = PAIR_TAG.fullmatch(text)
+        if not m:
+            return None
+        tf, child, stamp, leg = map(int, m.groups())
+        if PAIRS[tf] != child:
+            return None
+    else:
+        m = (
+            TAG.fullmatch(text)
+            or MINUTE_TAG.fullmatch(text)
+            or LIVE_TAG.fullmatch(text)
+        )
+        if not m:
+            return None
+        tf, stamp, leg = map(int, m.groups())
     maximum = 32_503_680_000 * (1000 if text.startswith("i") else 1)
     return (tf, stamp, leg) if tf in NATIVE_MINUTES and 0 < stamp < maximum else None
 
@@ -276,14 +298,30 @@ def signal_window(key):
     return ms // 1000, (ms + 999) // 1000 + ENTRY_WINDOW
 
 
+def pair_clock_valid(ev, close_s, quote_ms):
+    # Millisecond counters in receipts are rounded to three decimals. Compare
+    # relative to bar close, not to journal ingestion time or a guessed fill.
+    entry, tick, submitted = (
+        dec(ev[k]) for k in ("max_entry_age_s", "max_quote_age_s", "close_to_submit_ms")
+    )
+    elapsed = quote_ms - close_s * 1000
+    return (
+        0 < entry <= 30
+        and 0 < tick <= 15
+        and 0 <= elapsed <= submitted <= entry * 1000
+        and submitted - elapsed <= tick * 1000
+    )
+
+
 def index_cross_receipt(c, ev, vals, ref):
     """Enrich a *matched* original request, never a label/preview or a historical h-tag."""
-    if ev.get("initial_stop_policy") not in (CROSS_POLICY, M1_POLICY):
+    if ev.get("initial_stop_policy") not in (CROSS_POLICY, M1_POLICY, PAIR_STOP):
         return
     tf, close_s, leg = ref
     did, _sy, tag_text, side, requested_sl, _tp = vals
     minute = ev["initial_stop_policy"] == M1_POLICY
-    candle_tf = 1 if minute else tf
+    paired = ev["initial_stop_policy"] == PAIR_STOP
+    candle_tf = PAIRS.get(tf, 0) if paired else 1 if minute else tf
     sign = 1 if side == "BUY" else -1
     ms = int(ev["send_tick_time_msc"])
     wick, sl, bid, ask = (
@@ -293,8 +331,26 @@ def index_cross_receipt(c, ev, vals, ref):
     waiver = ev.get("mss_skip_exception") or ""
     if not (
         ev.get("retcode") in (10009, 10010)
-        and tag_text.startswith("m" if minute else "h")
-        and tf in (5, 15, 30, 45)
+        and tag_text.startswith("p" if paired else "m" if minute else "h")
+        and tf in (PAIRS if paired else (5, 15, 30, 45))
+        and (
+            not paired
+            or (
+                pair_clock_valid(ev, close_s, ms)
+                and 0 < dec(ev["stop_tick_size"]) <= (wick - sl) * sign
+                and sl % dec(ev["stop_tick_size"]) == 0
+                and ev.get("entry_policy") == PAIR_ENTRY
+                and ev.get("trigger_tf") == candle_tf
+                and ev.get("parent_tf") == tf
+                and ev.get("trigger_source")
+                and ev.get("trigger_structure_close_s") == close_s
+                and ev.get("parent_structure_bias")
+                == ev.get("trigger_structure_bias")
+                == sign
+                and isinstance(ev.get("parent_structure_close_s"), int)
+                and 0 <= close_s - ev["parent_structure_close_s"] < tf * 60
+            )
+        )
         and (
             not minute
             or (
@@ -323,6 +379,14 @@ def index_cross_receipt(c, ev, vals, ref):
         raise ValueError("Inconsistent confirmed-cross receipt metadata")
     evidence = (did, plain(wick), plain(sl), waiver, ms, plain(bid), plain(ask))
     previous = c.execute("SELECT * FROM cross_receipts WHERE id=?", (did,)).fetchone()
+    if paired:
+        ctx = (did, ev["parent_structure_close_s"], sign)
+        original = c.execute("SELECT * FROM pair_context WHERE id=?", (did,)).fetchone()
+        if original is None:
+            c.execute("INSERT INTO pair_context VALUES(?,?,?)", ctx)
+        elif original != ctx:
+            c.execute("UPDATE cross_receipts SET send_ms=0 WHERE id=?", (did,))
+            raise ValueError("Conflicting paired structure evidence")
     if previous is None:
         c.execute("INSERT INTO cross_receipts VALUES(?,?,?,?,?,?,?)", evidence)
     elif previous != evidence and previous[4] != 0:
@@ -422,6 +486,8 @@ def import_log(c, path, magic):
                 elif typ in ("closed_label", "live_hull_cross") and ev.get(
                     "entry_side"
                 ) in (1, -1):
+                    if ev.get("entry_policy") == PAIR_ENTRY:
+                        continue  # paired setup evidence is joined by receipt/deal, not proximity to a label
                     tf, end = int(ev["tf"]), int(ev["close_s"])
                     side = "BUY" if ev["entry_side"] == 1 else "SELL"
                     stamp = end
@@ -463,7 +529,9 @@ def import_log(c, path, magic):
                     )
                 ):
                     c.execute(
-                        "INSERT OR REPLACE INTO finished VALUES(?,?,?,?)",
+                        "INSERT OR REPLACE INTO pair_finished VALUES(?,?,?,?)"
+                        if ev.get("entry_policy") == PAIR_ENTRY
+                        else "INSERT OR REPLACE INTO finished VALUES(?,?,?,?)",
                         (
                             sy,
                             int(ev["tf"]),
@@ -743,7 +811,11 @@ def make_views(c):
             zip(
                 (*CROSS_SHARED, *SEND_FIELDS),
                 (
-                    M1_POLICY if receipts[did][1].startswith("m") else CROSS_POLICY,
+                    PAIR_STOP
+                    if receipts[did][1].startswith("p")
+                    else M1_POLICY
+                    if receipts[did][1].startswith("m")
+                    else CROSS_POLICY,
                     wick,
                     sl,
                     waiver,
@@ -759,6 +831,12 @@ def make_views(c):
         )
         if did in receipts
     }
+    contexts = {
+        did: (iso(end * 1000), "bullish" if sign == 1 else "bearish")
+        for did, end, sign in c.execute("SELECT * FROM pair_context")
+    }
+    for did, proof in cross.items():
+        proof.update(zip(PAIR_SHARED, contexts.get(did, ("", "")), strict=True))
     notes = defaultdict(list)
     for sy, number, ms, why in c.execute(
         "SELECT symbol,ticket,at_ms,why FROM exit_notes"
@@ -775,6 +853,9 @@ def make_views(c):
     }
     finished = {
         (s, t, stamp): o for s, t, stamp, o in c.execute("SELECT * FROM finished")
+    }
+    pair_finished = {
+        (s, t, stamp): o for s, t, stamp, o in c.execute("SELECT * FROM pair_finished")
     }
     windows = set(c.execute("SELECT symbol,signal FROM windows"))
     live_meta = get(c, "active_meta", {})
@@ -808,7 +889,7 @@ def make_views(c):
         sy = a["symbol"]
         side = ("BUY", "SELL")[a["typ"]]
         refs = set()
-        minute_flags = set()
+        tag_kinds = set()
         sources = set()
         brackets, proofs = [], []
         for d in ins:
@@ -816,26 +897,32 @@ def make_views(c):
             k = tag(d["comment"])
             if k:
                 refs.add(k)
-                minute_flags.add(d["comment"].startswith("m"))
+                tag_kinds.add(d["comment"][0])
                 sources.add("Entry comment")
             if meta and meta[0] == sy and meta[2] == side:
                 k = tag(meta[1])
                 refs.add(k)
-                minute_flags.add(meta[1].startswith("m"))
+                tag_kinds.add(meta[1][0])
                 sources.add("Bot receipt")
                 brackets.append((meta[3], meta[4]))
                 if k and d["id"] in cross:
                     proofs.append(cross[d["id"]])
         start = a["ms"]
-        link = next(iter(refs)) if len(refs) == 1 and len(minute_flags) == 1 else None
-        is_minute = minute_flags == {True}
+        link = next(iter(refs)) if len(refs) == 1 and len(tag_kinds) == 1 else None
+        is_minute = tag_kinds == {"m"}
+        paired = tag_kinds == {"p"}
         model = ""
         gid = ""
         r = None
         if link:
             tf, stamp, _leg = link
-            gid = f"{sy}|{tf_name(tf)}|{stamp}|{side}"
-            model = labels.get((sy, tf, stamp, side), "")
+            lane = f"{tf_name(tf)}>{tf_name(PAIRS[tf])}" if paired else tf_name(tf)
+            gid = f"{sy}|{lane}|{stamp}|{side}"
+            model = (
+                ("paired_structure_cross" if len(proofs) == len(ins) else "")
+                if paired
+                else labels.get((sy, tf, stamp, side), "")
+            )
         else:
             unknown[sy].append((start // 1000 - 2, start // 1000 + 2))
         vol = sum((D(d["volume"]) for d in ins), D(0))
@@ -913,6 +1000,8 @@ def make_views(c):
                 r["entry_timing"] = (
                     "live_hull_cross"
                     if is_live
+                    else "confirmed_pair_close"
+                    if paired
                     else "confirmed_m1_close"
                     if is_minute
                     else "confirmed_close"
@@ -922,7 +1011,7 @@ def make_views(c):
                     # All component fills must have exact, non-conflicting receipts.
                     # Never infer these fields from a start time or the nearest setup.
                     if len(proofs) == len(ins):
-                        for k in (*CROSS_SHARED, *SEND_FIELDS):
+                        for k in (*CROSS_SHARED, *SEND_FIELDS, *PAIR_SHARED):
                             vs = {v[k] for v in proofs}
                             if len(vs) == 1:
                                 r[k] = vs.pop()
@@ -932,9 +1021,15 @@ def make_views(c):
                     bar_end, r["trigger_bid"], r["trigger_ask"] = live_triggers.get(
                         (sy, tf, stamp, side), (None, "", "")
                     )
+                if paired:
+                    r["trigger_timeframe"] = tf_name(PAIRS[tf])
                 if bar_end is not None:
                     r["signal_bar_open_utc"] = iso(
-                        (bar_end - (1 if is_minute else tf) * 60) * 1000
+                        (
+                            bar_end
+                            - (PAIRS[tf] if paired else 1 if is_minute else tf) * 60
+                        )
+                        * 1000
                     )
                     r["signal_bar_end_utc"] = iso(bar_end * 1000)
             # The audit contains the position ticket but no exit deal ID. Show the
@@ -966,17 +1061,17 @@ def make_views(c):
             if not link:
                 unlinked += 1
         if link:
-            members[(sy, tf, stamp, side)].append(r)
+            members[(sy, tf, stamp, side, paired)].append(r)
     missing = defaultdict(set)
     for did, (sy, comment, side, _, _) in receipts.items():
         ref = tag(comment)
         if ref and did not in seen_deals:
-            missing[(sy, ref[0], ref[1], side)].add(did)
+            missing[(sy, ref[0], ref[1], side, comment.startswith("p"))].add(did)
     wait = 0
     for key, rs in members.items():
-        sy, tf, stamp, side = key
+        sy, tf, stamp, side, paired = key
         begin_window, end_window = signal_window(stamp)
-        result = finished.get((sy, tf, stamp), "")
+        result = (pair_finished if paired else finished).get((sy, tf, stamp), "")
         # A receipt without a broker deal, an unresolved sibling or any open leg prevents completion.
         final_receipt = (
             result == "demo_batch_sent"
@@ -1013,11 +1108,15 @@ def make_views(c):
             side=side,
             setup_id=first["setup_id"],
             ticket_count=str(len(rs)),
-            setup_type=first["setup_type"],
+            setup_type=first["setup_type"]
+            if not paired
+            or all(x["setup_type"] == "paired_structure_cross" for x in rs)
+            else "",
             **{
                 k: first[k]
                 for k in (
                     "signal_close_utc",
+                    "trigger_timeframe",
                     "entry_timing",
                     "signal_trigger_utc",
                     "signal_bar_open_utc",
@@ -1041,9 +1140,10 @@ def make_views(c):
         )
         # A setup may have many executable quotes. Leave those ticket-only; show
         # stop evidence only if ALL of its settled tickets agree on the same stop.
-        frozen = {tuple(x[k] for k in CROSS_SHARED) for x in rs}
+        shared = (*CROSS_SHARED, *PAIR_SHARED)
+        frozen = {tuple(x[k] for k in shared) for x in rs}
         if len(frozen) == 1:
-            r.update(zip(CROSS_SHARED, frozen.pop(), strict=True))
+            r.update(zip(shared, frozen.pop(), strict=True))
         noted = {x["bot_exit_request"] for x in rs}
         r["bot_exit_request"] = (
             next(iter(noted)) if len(noted) == 1 else "Varies by ticket"

@@ -20,7 +20,15 @@ from bot.broker import (
 from bot.config.entry_sessions import EntrySessionVeto, sessions_for_runner
 from bot.hull.hours import Hours
 
-from .config import COUNTS, FIXED, LADDER, M1_MODE, TARGET_POLICY, TF_NAME
+from .config import (
+    COUNTS,
+    FIXED,
+    LADDER,
+    PAIR_MODE,
+    PAIRS,
+    TARGET_POLICY,
+    TF_NAME,
+)
 from .entry_clock import FAST_POLL_S, WAITING, TimingBlock, check_quote, utc
 from .ladder import Protection, executable, inside
 from .ladder_desk import TicketLadders, opened_ms
@@ -115,8 +123,8 @@ class Desk:
         self.open_lanes = (
             set()
         )  # refreshed by verified inventory; used only to schedule protective reads
-        self.minute_watch = None
-        self.minute_policy_key = None
+        self.watch_other_symbols = None
+        self.indicator_key = None
         self.verify_signal = (
             None  # installed by the native scanner; mandatory for live orders
         )
@@ -204,6 +212,7 @@ class Desk:
                 polls=window.polls,
                 disposition="fresh_quote",
                 previous_wait=window.last_wait_reason,
+                **({"trigger_tf": d.candle_tf} if d.paired else {}),
                 **check.audit(d.candle_tf),
             )
         return q, check.checked
@@ -274,7 +283,7 @@ class Desk:
                 owner
                 and owner["symbol"] == name
                 and owner["magic"] == self.h.magic
-                and reading.trigger_tf != 1
+                and reading.trigger_tf is None
                 and owner["tf"] != reading.tf
             ):
                 continue
@@ -289,12 +298,18 @@ class Desk:
             raise Block("timeframe_not_eligible")
         if not d.entry_side:
             raise Block(d.entry_reason)
+        if (
+            d.paired
+            and self.pair_fence(name, d.tf, d.trigger_tf, -d.side) >= d.signal_msc
+        ):
+            raise Block("opposite_after_pair_cross")
         if d.trigger_tf == 1 and self.minute_invalidated(name, d):
             raise Block("opposite_after_m1_cross")
         if self.mss_book.get(name, {}).get(str(d.tf), -1) >= d.signal_s:
             raise Block("confirmed_mss_exit")
         if any(
-            x["symbol"] == name and (d.trigger_tf == 1 or x.get("tf") in (None, d.tf))
+            x["symbol"] == name
+            and (d.trigger_tf is not None or x.get("tf") in (None, d.tf))
             for x in self.exits.values()
         ):
             raise Block("opposite_exit_not_confirmed_flat")
@@ -322,6 +337,11 @@ class Desk:
             for r, tf in here
         ):
             raise Block("symbol_busy_or_batch_changed")
+        if d.paired and any(
+            tf != d.tf or self.owners.origin(p).get("trigger_tf") != d.trigger_tf
+            for p, tf in here
+        ):
+            raise Block("symbol_busy_or_batch_changed")
         tickets = {r.ticket for r, tf in here if tf == d.tf}
         if tickets != (expected or set()):
             if stage == "first_plan" and any(
@@ -332,6 +352,10 @@ class Desk:
         if stage == "first_plan" or (stage == "tick_reprice" and not expected):
             self._check_flat_at_trigger(name, d, time.time())
         i = mt.symbol_info(name)
+        if d.paired and getattr(i, "chart_mode", None) != getattr(
+            mt, "SYMBOL_CHART_MODE_BID", 0
+        ):
+            raise Block("unverified_bid_chart")
         grid = Grid.from_info(i)
         if not _side_is_allowed(mt, i, "BUY" if d.side == 1 else "SELL"):
             raise Block("broker_side_disabled")
@@ -439,6 +463,11 @@ class Desk:
             symbol=p.symbol,
             ticket=int(p.ticket),
             reason=reason,
+            **(
+                {"trigger_tf": intent["trigger_tf"]}
+                if intent and "trigger_tf" in intent
+                else {}
+            ),
             tf=self.owners.lane(p),
             retcode=getattr(res, "retcode", None),
         )
@@ -447,6 +476,10 @@ class Desk:
         return (
             x.get("tf") is not None
             and self.owners.lane(p) == x["tf"]
+            and (
+                "trigger_tf" not in x
+                or self.owners.origin(p).get("trigger_tf") == x["trigger_tf"]
+            )
             and p.symbol == x["symbol"]
             and p.type == x["type"]
             and getattr(p, "identifier", p.ticket) == x["identifier"]
@@ -479,6 +512,7 @@ class Desk:
                     symbol=p.symbol,
                     tf=x.get("tf"),
                     reason=x.get("reason"),
+                    **({"trigger_tf": x["trigger_tf"]} if "trigger_tf" in x else {}),
                     ticket=p.ticket,
                 )
             elif x["status"] == "verify_or_review":
@@ -495,6 +529,8 @@ class Desk:
         if (
             not self.armed
             or not isinstance(reading, Reading)
+            or reading.trigger_tf
+            is not None  # never treat an attached child label as a parent cross
             or reading.label not in (-1, 1)
             or TF_NAME.get(reading.tf) not in self.h.eligible_timeframes
             or not 0 <= now - reading.signal_s <= self.lim.max_entry_age_s
@@ -570,6 +606,63 @@ class Desk:
         )
         return len(matched)
 
+    def pair_fence(self, name, parent, child, side):
+        return (
+            self.state.get("pair_exit_fences", {})
+            .get(name, {})
+            .get(f"{parent}:{child}:{side}", -1)
+        )
+
+    def pair_opposite(self, name, parent, r):
+        """An observed native trigger cross belongs to exactly ONE parent/child pair."""
+        if (
+            name not in self.syms
+            or self.h.execution_mode != PAIR_MODE
+            or not isinstance(r, Reading)
+            or r.trigger_tf is not None
+            or PAIRS.get(parent) != r.tf
+            or TF_NAME.get(parent) not in self.h.eligible_timeframes
+            or r.label not in (-1, 1)
+            or r.structure.closed_s
+            != (r.close_s - r.tf * 60 if r.trigger else r.close_s)
+            or r.signal_s > time.time()
+            or (
+                r.trigger is not None
+                and (
+                    time.time() >= r.close_s
+                    or time.time() - r.signal_s > self.lim.max_quote_age_s
+                )
+            )
+        ):
+            return 0
+        stamp = r.signal_msc
+        if self.pair_fence(name, parent, r.tf, r.label) >= stamp:
+            return 0
+        self.state.setdefault("pair_exit_fences", {}).setdefault(name, {})[
+            f"{parent}:{r.tf}:{r.label}"
+        ] = stamp
+        self.persist()  # write ahead: an unavailable inventory or a restart must not lose protection
+        window = self.waiting.get((name, parent))
+        if (
+            window
+            and window.reading.trigger_tf == r.tf
+            and window.reading.label == -r.label
+            and window.reading.signal_msc <= stamp
+        ):
+            self.cancel_wait(name, parent, "opposite_after_pair_cross")
+        count = self._protect(name, parent, stamp, r.label, child=r.tf)
+        self.emit(
+            "pair_trigger_exit_signal",
+            symbol=name,
+            parent_tf=parent,
+            trigger_tf=r.tf,
+            raw_side=r.label,
+            phase="live" if r.trigger else "closed",
+            trigger_msc=stamp,
+            matched_positions=count,
+        )
+        return count
+
     def close_mss(self, name, reading):
         """Confirmed native structure shift. Fence the lane before any replacement.
 
@@ -604,14 +697,16 @@ class Desk:
         self.persist()
         return self._protect(name, tf, close * 1000, 0, bias=frame.bias)
 
-    def _protect(self, name, tf, stamp, raw_side, *, bias=0):
+    def _protect(self, name, tf, stamp, raw_side, *, bias=0, child=None):
         shift = raw_side == 0
         close = stamp // 1000
         ps = self.mt.positions_get() if self.armed else ()
         if ps is None:
-            if shift:
+            if shift or child is not None:
                 self.emit(
-                    "lane_mss_await_inventory",
+                    "lane_mss_await_inventory"
+                    if shift
+                    else "pair_exit_await_inventory",
                     symbol=name,
                     tf=tf,
                     close_s=close,
@@ -619,17 +714,27 @@ class Desk:
                 return 0
             raise DemoSafetyError("Cannot verify owned positions for lane exit")
         matched = []
-        reason = "confirmed_lane_mss" if shift else "opposite_hull_label"
+        reason = (
+            "opposite_pair_trigger_hull"
+            if child is not None
+            else "confirmed_lane_mss"
+            if shift
+            else "opposite_hull_label"
+        )
         for p in ps:
             if (
                 p.symbol != name
                 or not self.owned(p)
                 or self.owners.lane(p) != tf
+                or (
+                    child is not None
+                    and self.owners.origin(p).get("trigger_tf") != child
+                )
                 or (not shift and p.type == self.typ(raw_side))
                 or not 0 < opened_ms(p) <= stamp
             ):
                 continue
-            self._reserve_exit(p, tf, reason, stamp)
+            self._reserve_exit(p, tf, reason, stamp, child=child)
             matched.append(p)
         if matched or shift:
             self.persist()  # watermark and every ticket intent in one atomic snapshot
@@ -647,13 +752,14 @@ class Desk:
             )
         return len(matched)
 
-    def _reserve_exit(self, p, tf, reason, stamp):
+    def _reserve_exit(self, p, tf, reason, stamp, *, child=None):
         self.exits.setdefault(
             str(p.ticket),
             {
                 "symbol": p.symbol,
                 "tf": tf,
                 "reason": reason,
+                **({"trigger_tf": child} if child is not None else {}),
                 "type": p.type,
                 "open": p.price_open,
                 "identifier": getattr(p, "identifier", p.ticket),
@@ -696,7 +802,18 @@ class Desk:
                 src = self.owners.minute_source(p)
                 opp = -1 if p.type == self.typ(1) else 1
                 m1stamp = self.minute_fence(p.symbol, src, opp) if src else -1
-                if src and 0 < opened_ms(p) <= m1stamp:
+                child = (self.owners.origin(p) or {}).get("trigger_tf")
+                pairstamp = (
+                    self.pair_fence(p.symbol, tf, child, opp)
+                    if child and PAIRS.get(tf) == child
+                    else -1
+                )
+                if 0 < opened_ms(p) <= pairstamp:
+                    self._reserve_exit(
+                        p, tf, "opposite_pair_trigger_hull", pairstamp, child=child
+                    )
+                    recovered = True
+                elif src and 0 < opened_ms(p) <= m1stamp:
                     self._reserve_exit(p, tf, "opposite_m1_hull", m1stamp)
                     recovered = True
                 elif tf is not None and 0 < opened_ms(p) <= stamp:
@@ -734,6 +851,11 @@ class Desk:
                 symbol=pending["symbol"],
                 tf=pending.get("tf"),
                 reason=pending.get("reason"),
+                **(
+                    {"trigger_tf": pending["trigger_tf"]}
+                    if "trigger_tf" in pending
+                    else {}
+                ),
                 ticket=int(key),
             )
         if self.owners.prune(
@@ -747,7 +869,9 @@ class Desk:
             self.persist()
         self.last_service = time.monotonic()
 
-    def finalize(self, name, tf, plan, res, expected, *, minute_source=None):
+    def finalize(
+        self, name, tf, plan, res, expected, *, minute_source=None, pair_child=None
+    ):
         mt = self.mt
         self.account()
         if (
@@ -786,7 +910,11 @@ class Desk:
         ):
             return None, "fill_not_reconciled"
         if not self.owners.bind(
-            p, tf, minute_source=minute_source, minute_policy=self.minute_policy_key
+            p,
+            tf,
+            minute_source=minute_source,
+            policy_key=self.indicator_key,
+            pair_child=pair_child,
         ):
             return None, "lane_identity_not_reconciled"
         self.persist()
@@ -895,19 +1023,24 @@ class Desk:
             return "not_dynamic_hull_signal"
         if TF_NAME.get(d.tf) not in self.h.eligible_timeframes:
             return "timeframe_not_eligible"
-        if (self.h.execution_mode == M1_MODE) != (d.trigger_tf == 1):
+        if self.h.execution_mode != d.execution_mode:
             return "execution_mode_mismatch"
         if not d.entry_side:
             return d.entry_reason
-        if d.trigger_tf == 1:
+        if d.trigger_tf is not None:
             if (
                 self.verify_signal is None
-                or d.anchor_s != d.close_s - 60
+                or d.anchor_s != d.close_s - d.candle_tf * 60
                 or d.detected_s is None
                 or d.stop_tick_size is None
             ):
-                return "m1_signal_unverified"
-            if self.state.get("m1_consumed", {}).get(name, -1) >= d.close_s:
+                return "pair_signal_unverified" if d.paired else "m1_signal_unverified"
+            if (
+                self.state.get("pair_consumed" if d.paired else "m1_consumed", {}).get(
+                    name, -1
+                )
+                >= d.close_s
+            ):
                 return "already_consumed"
         bars = self.state.setdefault("dynamic_entry_bars", {}).setdefault(name, {})
         bar_id = f"{d.tf}:{d.side}"
@@ -924,8 +1057,10 @@ class Desk:
         self.cancel_wait(name, d.tf, "first_quote_wait_superseded")
         # Reserve ONCE before touching broker order APIs. Only the original,
         # in-memory first-quote window may resume this reservation. A restart cannot.
-        if d.trigger_tf == 1:
-            self.state.setdefault("m1_consumed", {})[name] = d.close_s
+        if d.trigger_tf is not None:
+            self.state.setdefault("pair_consumed" if d.paired else "m1_consumed", {})[
+                name
+            ] = d.close_s
         seen[str(d.tf)] = d.signal_s
         bars[bar_id] = d.close_s
         self.persist()
@@ -1002,7 +1137,7 @@ class Desk:
                     "magic": self.h.magic,
                     "type_time": self.mt.ORDER_TIME_GTC,
                     "type_filling": _filling_mode(self.mt, i),
-                    "comment": f"{'m' if d.trigger_tf == 1 else 'h'}{d.tf}_{d.close_s}_{sent + 1}",
+                    "comment": d.order_tag(sent + 1),
                 }
                 chk = self.mt.order_check(req)
                 a = self.account()
@@ -1058,11 +1193,13 @@ class Desk:
                     "leg": sent + 1,
                     **(
                         {
-                            "trigger_tf": 1,
-                            "m1_source": d.active_source,
+                            "trigger_tf": d.trigger_tf,
+                            (
+                                "trigger_source" if d.paired else "m1_source"
+                            ): d.active_source,
                             "parent_tf": d.tf,
                         }
-                        if d.trigger_tf == 1
+                        if d.trigger_tf is not None
                         else {}
                     ),
                     "target_policy": TARGET_POLICY,
@@ -1099,7 +1236,7 @@ class Desk:
                     self.persist()
                     continue
                 submit = time.time()
-                if d.trigger_tf == 1:
+                if d.trigger_tf is not None:
                     # Do not allow a slow precheck/persist to carry this quote across a deadline.
                     try:
                         final_check = self._quote_clock(gate, window, q3, "submit")
@@ -1109,9 +1246,14 @@ class Desk:
                         ):
                             raise Block(why)
                         if (
-                            final_check.checked >= d.close_s + 60
+                            final_check.checked >= d.close_s + d.candle_tf * 60
                             or self.kill.exists()
-                            or self.minute_invalidated(name, d)
+                            or (
+                                self.pair_fence(name, d.tf, d.trigger_tf, -d.label)
+                                >= d.signal_msc
+                                if d.paired
+                                else self.minute_invalidated(name, d)
+                            )
                         ):
                             raise Block("final_quote_or_safety_changed")
                     except (Block, EntrySessionVeto):
@@ -1139,7 +1281,15 @@ class Desk:
                             "order_send_roundtrip_ms": round(call_ms, 3),
                             "submit_utc": utc(submit),
                         }
-                        if d.trigger_tf == 1
+                        if d.trigger_tf is not None
+                        else {}
+                    ),
+                    **(
+                        {
+                            "max_entry_age_s": self.lim.max_entry_age_s,
+                            "max_quote_age_s": self.lim.max_quote_age_s,
+                        }
+                        if d.paired
                         else {}
                     ),
                     send_check_utc=utc(checked),
@@ -1163,6 +1313,7 @@ class Desk:
                     res,
                     expected,
                     minute_source=d.active_source if d.trigger_tf == 1 else None,
+                    pair_child=d.trigger_tf if d.paired else None,
                 )
                 if ticket is None:
                     return status + "_manual_hold"
@@ -1174,8 +1325,8 @@ class Desk:
                 if sent == n:
                     return "demo_batch_sent"
                 self.service_if_due()
-                if self.minute_watch is not None:
-                    self.minute_watch(name)
+                if self.watch_other_symbols is not None:
+                    self.watch_other_symbols(name)
         except TimingBlock as exc:
             check = exc.check
             wait = (
@@ -1191,6 +1342,7 @@ class Desk:
                     polls=window.polls,
                     disposition="wait" if wait else "reject",
                     previous_wait=window.last_wait_reason,
+                    **({"trigger_tf": d.candle_tf} if d.paired else {}),
                     **check.audit(d.candle_tf),
                 )
             if wait:

@@ -12,6 +12,7 @@ from bot.hull.desk import Desk, resolve
 def hull_desk(tmp_path, monkeypatch):
     cfg = load_yaml(ROOT / "config.yaml")
     cfg["run"]["mode"] = "demo"
+    cfg["hull"]["execution_mode"] = "parent_close"
     # Short fake clocks for legacy guard fixtures only, not production authorization.
     from bot.hull.config import SIGNAL_TF
 

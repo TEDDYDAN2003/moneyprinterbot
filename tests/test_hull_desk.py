@@ -240,7 +240,9 @@ def test_preflight_resolves_only_requested_symbols_and_never_sends(
             max_orders_minute=40,
         )
     h = HullConfig.model_validate(cfg["hull"])
-    h = h.model_copy(update={"eligible_timeframes": ("M15", "M30")})
+    h = h.model_copy(
+        update={"execution_mode": "parent_close", "eligible_timeframes": ("M15", "M30")}
+    )
     mt.copy_rates_from_pos = lambda *args: []
     mt.initialize = lambda: True
     mt.shutdown = lambda: None

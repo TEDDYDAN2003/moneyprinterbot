@@ -1,6 +1,6 @@
 # What to paste into your Windows desktop agent
 
-**Approved Hull lanes: M15, M30, M45.** Verify the same list in the private config. A confirmed MSS exits only its own lane. These settings alone do not start or arm anything.
+**Approved parent → entry pairs: M5 → M3, M10 → M5, M15 → M10.** Verify `paired_structure` and the parent list in the private config; [paired migration](HULL_PAIRS.md). A confirmed MSS exits only its own lane. These settings alone do not start or arm anything.
 
 With the updated repository open in your agent's workspace, **send just this** for your three slow profiles:
 
@@ -14,7 +14,7 @@ It means exactly:
 HULL START XAUUSD:0.09:10:slow EURUSD:0.01:10:slow GBPUSD:0.01:10:slow
 ```
 
-On current `main`, slow requests **ten tickets**, not one. These explicit lots are per ticket; generic EURUSD/GBPUSD presets are larger. Verify the batch totals and `new_ticket_exit_policy: profit_ladder_70_30_v1` in preflight, plus `entry_policy: fc_dynamic_failed_mss_return_v3`, `entry_timing: confirmed_cross_next_bar`, `new_ticket_stop_policy: confirmed_cross_candle_wick_v1` and `choch_entry: never_standalone`. $10 is the **configured base** per new ticket. Its initial gross goal and ladder base also include that leg’s entry spread in USD. Preflight shows an indicative goal for each side.
+On current `main`, slow requests **ten tickets**, not one. These explicit lots are per ticket; generic EURUSD/GBPUSD presets are larger. Verify the batch totals and `new_ticket_exit_policy: profit_ladder_70_30_v1` in preflight, plus `entry_policy: closed_pair_structure_cross_v1`, `entry_timing: confirmed_cross_next_bar`, `new_ticket_stop_policy: confirmed_pair_trigger_candle_wick_v1` and `choch_entry: never_standalone`. $10 is the **configured base** per new ticket. Its initial gross goal and ladder base also include that leg’s entry spread in USD. Preflight shows an indicative goal for each side.
 
 To use different profiles, open [Hull demo start](Hull-demo-start.html), tick the instruments and select **Copy start line** or **Copy selected rows**. Only checked rows are included. The fields are **symbol, lot per ticket, base USD per ticket, rate**. No long prompt is necessary. These are messages for your agent, not shell commands.
 

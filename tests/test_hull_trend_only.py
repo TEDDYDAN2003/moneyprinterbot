@@ -47,7 +47,7 @@ def test_active_bot_refuses_non_16_private_settings(period):
 def test_empty_allowlist_and_cli_override_cannot_initialize_mt5(monkeypatch):
     cfg = load_yaml(ROOT / "config.yaml")
     h = HullConfig.model_validate(cfg["hull"])
-    assert cfg["run"]["mode"] == "paper" and h.lanes() == (15, 30, 45)
+    assert cfg["run"]["mode"] == "paper" and h.lanes() == (5, 10, 15)
     h = HullConfig.model_validate(cfg["hull"] | {"eligible_timeframes": []})
     monkeypatch.setitem(
         sys.modules, "MetaTrader5", NS(initialize=lambda: pytest.fail("not allowed"))
@@ -56,7 +56,8 @@ def test_empty_allowlist_and_cli_override_cannot_initialize_mt5(monkeypatch):
         with pytest.raises(ValueError, match="No eligible"):
             run(cfg, h, selection(h), frames=requested)
     approved = HullConfig.model_validate(
-        cfg["hull"] | {"eligible_timeframes": ["M15", "M45"]}
+        cfg["hull"]
+        | {"execution_mode": "parent_close", "eligible_timeframes": ["M15", "M45"]}
     )
     assert approved.lanes() == (15, 45)
     with pytest.raises(ValueError, match="not in"):

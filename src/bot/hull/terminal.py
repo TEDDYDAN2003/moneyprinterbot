@@ -17,14 +17,13 @@ from bot.config.entry_sessions import sessions_for_runner
 from .config import (
     BATCH_ENTRY_POLICY,
     COUNTS,
-    ENTRY_POLICY,
+    EXECUTION_INFO,
     LADDER,
     M1_MODE,
-    M1_POLICY,
-    M1_STOP,
     NATIVE_TF,
+    PAIR_MODE,
+    PAIRS,
     RETIRED_LIMITS,
-    STOP_POLICY,
     TARGET_POLICY,
     TF_NAME,
 )
@@ -35,6 +34,7 @@ from .feed import Stream, StructureTape, sample, verify_before_leg
 from .ladder import cash_levels
 from .minute import MinuteBook
 from .orders import Block, Grid, spread_goal
+from .pairs import PairBook, asof
 
 
 def describe(r):
@@ -313,7 +313,18 @@ def run(
         or h.indicator.structure_timeframe not in (None, "Chart")
     ):
         raise ValueError("M1 execution requires native M5/M15/M30/M45 parent structure")
-    exposure_books = 1 if minute_mode else len(frames)
+    paired = h.execution_mode == PAIR_MODE
+    if paired and (
+        set(frames) - PAIRS.keys() or h.indicator.structure_timeframe is not None
+    ):
+        raise ValueError(
+            "Paired execution needs native M5/M10/M15 parent structure and structure_timeframe: null"
+        )
+    pairs = {p: PAIRS[p] for p in frames} if paired else {}
+    native_frames = (
+        tuple(sorted(set(frames) | set(pairs.values()))) if paired else frames
+    )
+    exposure_books = 1 if minute_mode or paired else len(frames)
     if not 0.25 <= poll <= 10 or (iterations is not None and iterations < 1):
         raise ValueError("Invalid poll/iterations")
     mode = cfg["run"]["mode"]
@@ -391,23 +402,45 @@ def run(
             "new_ticket_exit_policy": h.exit_policy,
             "new_ticket_target_policy": TARGET_POLICY,
             "execution_mode": h.execution_mode,
-            "trigger_timeframe": "M1" if minute_mode else "same_as_parent",
-            "entry_policy": M1_POLICY if minute_mode else ENTRY_POLICY,
+            "trigger_timeframe": "per_parent"
+            if paired
+            else "M1"
+            if minute_mode
+            else "same_as_parent",
+            **(
+                {
+                    "parent_to_trigger": {
+                        TF_NAME[p]: TF_NAME[c] for p, c in pairs.items()
+                    },
+                    "structure_alignment": "own_parent_and_trigger_at_trigger_close",
+                }
+                if paired
+                else {}
+            ),
+            "entry_policy": EXECUTION_INFO[h.execution_mode][0],
             "entry_sessions": sessions.identity(),
             "signal_policy": h.indicator.signal_policy,
             "batch_entry_policy": "single_symbol_highest_qualifying_parent"
-            if minute_mode
+            if minute_mode or paired
             else BATCH_ENTRY_POLICY,
             "entry_timing": h.entry_timing,
             "entry_quote_policy": QUOTE_POLICY,
-            "new_ticket_stop_policy": M1_STOP if minute_mode else STOP_POLICY,
+            "new_ticket_stop_policy": EXECUTION_INFO[h.execution_mode][1],
             "live_cross_role": "protective_exit_only",
-            "opposite_exit": "symbol_wide_opposing_m1_for_verified_m1_tickets_plus_parent_protection"
+            "opposite_exit": "own_trigger_only_plus_parent_protection"
+            if paired
+            else "symbol_wide_opposing_m1_for_verified_m1_tickets_plus_parent_protection"
             if minute_mode
             else "lane_raw_cross_before_entry_checks",
             "mss_exit": "flatten_own_lane_on_confirmed_shift",
-            "ownership": "verified_position_id_and_broker_symbol_and_signal_timeframe",
-            "m45_clock": "3 consecutive M15 bars anchored to the broker D1 open",
+            "ownership": "verified_position_id_symbol_parent_and_trigger"
+            if paired
+            else "verified_position_id_and_broker_symbol_and_signal_timeframe",
+            **(
+                {"m45_clock": "3 consecutive M15 bars anchored to the broker D1 open"}
+                if not paired
+                else {}
+            ),
             "choch_entry": "never_standalone",
             "post_mss_entry": "skip_first_except_failed_counter_mss_return",
             "failed_mss_return": "confirmed_MSS_back_to_established_bias_without_counter_BOS; fresh_cross_after_close_only",
@@ -455,7 +488,7 @@ def run(
                         issues.append(
                             f"{name} {side}: target preview unavailable: {preview['status']}"
                         )
-                ext, lanes = make_lanes(h, frames, p, specs[name]["tick"])
+                ext, lanes = make_lanes(h, native_frames, p, specs[name]["tick"])
                 now = time.time()
                 if not specs[name]["bid_chart_verified"]:
                     issues.append(
@@ -480,8 +513,40 @@ def run(
                         else "native MT5",
                         "closed_bars_loaded": lane.h.n,
                         "current_structure_phase": active.phase,
-                        "last_label_for_comparison_only": describe(v) if v else None,
+                        **(
+                            {
+                                "last_native_cross_for_comparison_only": {
+                                    "chart_tf": tf,
+                                    "close_s": v.close_s,
+                                    "raw_side": v.label,
+                                    "closed_bias": v.structure.bias,
+                                    "wick": v.anchor,
+                                }
+                                if v
+                                else None
+                            }
+                            if paired
+                            else {
+                                "last_label_for_comparison_only": describe(v)
+                                if v
+                                else None
+                            }
+                        ),
                     }
+                    if paired:
+                        checks[TF_NAME[tf]].update(
+                            parent=tf in pairs,
+                            trigger_for=[
+                                TF_NAME[p] for p, c in pairs.items() if c == tf
+                            ],
+                            last_structure_close_s=active.closed_s,
+                            native_history_ready=lane.h.n >= lane.min_bars
+                            and asof(active, tf, now),
+                        )
+                        if not asof(active, tf, now):
+                            issues.append(
+                                f"{name} {TF_NAME[tf]}: no current closed structure bar"
+                            )
                     if status == "history_unavailable" or lane.h.n < lane.min_bars:
                         issues.append(
                             f"{name} {TF_NAME[tf]}: insufficient closed-bar history"
@@ -519,6 +584,16 @@ def run(
                     )
                     for name, checks in summary["history_check"].items()
                 )
+            if paired:
+                summary["pair_history_ready"] = all(
+                    specs[name]["bid_chart_verified"]
+                    and all(
+                        row["status"] != "history_unavailable"
+                        and row["native_history_ready"]
+                        for row in checks.values()
+                    )
+                    for name, checks in summary["history_check"].items()
+                )
             summary["review_before_demo"] = issues
         print(json.dumps(summary, indent=2, allow_nan=False), flush=True)
         if preflight:
@@ -527,6 +602,10 @@ def run(
             if minute_mode and not summary["m1_history_ready"]:
                 raise DemoSafetyError(
                     "M1 or approved parent bid history unavailable; do not arm"
+                )
+            if paired and not summary["pair_history_ready"]:
+                raise DemoSafetyError(
+                    "Paired native bid history unavailable or stale; do not arm"
                 )
             return summary
         root.mkdir(parents=True, exist_ok=True)
@@ -563,7 +642,7 @@ def run(
             )
             locks.callback(d.cancel_all_waits)
             bundles = {
-                name: make_lanes(h, frames, p, specs[name]["tick"])
+                name: make_lanes(h, native_frames, p, specs[name]["tick"])
                 for name, (_, p) in syms.items()
             }
 
@@ -574,22 +653,21 @@ def run(
             policy_key = hashlib.sha256(
                 h.indicator.model_dump_json(exclude={"exit_on_mss"}).encode()
             ).hexdigest()[:16]
-            skip_book = state.setdefault("first_cross_after_mss", {}).setdefault(
-                policy_key, {}
-            )
-            for name, (_, lanes) in bundles.items():
-                for tf, lane in lanes.items():
-                    record = skip_book.setdefault(name, {}).setdefault(str(tf), {})
-                    if not minute_mode:
-                        lane.h.gate.bind(record, d.persist if armed else None)
-
-            d.minute_policy_key = policy_key
-            minute_books = {}
-            if minute_mode:
+            d.indicator_key = policy_key
+            trigger_books = {}
+            if paired:
+                records = state.setdefault("pair_parent_first_cross", {}).setdefault(
+                    policy_key, {}
+                )
+                trigger_books = {
+                    name: PairBook(frames, lanes, records.setdefault(name, {}))
+                    for name, (_, lanes) in bundles.items()
+                }
+            elif minute_mode:
                 records = state.setdefault("m1_parent_first_cross", {}).setdefault(
                     policy_key, {}
                 )
-                minute_books = {
+                trigger_books = {
                     name: MinuteBook(
                         h,
                         syms[name][1],
@@ -600,8 +678,17 @@ def run(
                     )
                     for name, (_, lanes) in bundles.items()
                 }
-            if armed and any(
-                rec.get("trigger_tf") == 1 for rec in d.owners.book.values()
+            else:
+                skip_book = state.setdefault("first_cross_after_mss", {}).setdefault(
+                    policy_key, {}
+                )
+                for name, (_, lanes) in bundles.items():
+                    for tf, lane in lanes.items():
+                        record = skip_book.setdefault(name, {}).setdefault(str(tf), {})
+                        lane.h.gate.bind(record, d.persist if armed else None)
+
+            if armed and (
+                paired or any(rec.get("trigger_tf") for rec in d.owners.book.values())
             ):
                 inventory = mt.positions_get()
                 if inventory is None:
@@ -609,21 +696,47 @@ def run(
                         "Cannot verify manager coverage before starting"
                     )
                 for pos in inventory:
+                    origin = d.owners.origin(pos)
+                    saved = (
+                        d.owners.book.get(str(getattr(pos, "identifier", pos.ticket)))
+                        or {}
+                    )
                     if (
-                        getattr(pos, "magic", None) == h.magic
-                        and d.owners.minute_source(pos)
-                        and (
-                            not minute_mode
-                            or pos.symbol not in minute_books
-                            or d.owners.book[
-                                str(getattr(pos, "identifier", pos.ticket))
-                            ].get("m1_policy_key")
-                            != policy_key
-                            or d.owners.lane(pos) not in frames
+                        origin is None
+                        and saved.get("trigger_tf")
+                        and saved.get("symbol") == pos.symbol
+                        and saved.get("magic") == pos.magic
+                    ):
+                        raise DemoSafetyError(
+                            "Unverified Hull ticket identity; do not switch managers while open"
                         )
+                    child = (origin or {}).get("trigger_tf")
+                    covered = (
+                        pos.magic == h.magic
+                        and pos.symbol in syms
+                        and origin is not None
+                        and origin["tf"] in frames
+                    )
+                    if child == 1 and not (
+                        minute_mode
+                        and covered
+                        and origin.get("m1_policy_key") == policy_key
                     ):
                         raise DemoSafetyError(
                             "Open M1-origin ticket needs its original symbol, parent, indicator settings and M1 manager; do not change modes while open"
+                        )
+                    if child not in (None, 1) and not (
+                        paired
+                        and covered
+                        and pairs.get(origin["tf"]) == child
+                        and origin.get("pair_policy_key") == policy_key
+                    ):
+                        raise DemoSafetyError(
+                            "Open paired-origin ticket needs its original symbol, parent/trigger and indicator settings; do not change managers while open"
+                        )
+                    if paired and child is None and (origin or pos.magic == h.magic):
+                        raise DemoSafetyError(
+                            "Unverified or legacy Hull exposure: do not switch to paired execution while open"
                         )
 
             def verify(name, r, quote):
@@ -631,12 +744,14 @@ def run(
                 # instrument. A sibling shift protects the sibling, not this batch.
                 invalidated = False
                 for f, stream in bundles[name][1].items():
+                    if f not in frames:
+                        continue  # a child-only MSS is not a parent exit
                     for shift in stream.boundary_shifts(mt, name, time.time()):
                         d.confirmed_shift(name, f, shift)
                         if f == r.tf and shift.closed_s * 1000 >= r.signal_msc:
                             invalidated = True
-                if r.trigger_tf == 1:
-                    ok = minute_books[name].verify(d, name, r, quote, time.time)
+                if r.trigger_tf is not None:
+                    ok = trigger_books[name].verify(d, name, r, quote, time.time)
                     return ok and not invalidated
                 if invalidated:
                     return False
@@ -668,17 +783,17 @@ def run(
                     interrupt,
                 )
 
-            if minute_mode:
+            if trigger_books:
 
                 def other_protection(active_symbol):
                     for symbol in {sym for sym, _ in d.open_lanes} - {active_symbol}:
                         if (
-                            symbol in minute_books
+                            symbol in trigger_books
                             and specs[symbol]["bid_chart_verified"]
                         ):
-                            minute_books[symbol].watch(d, symbol, time.time)
+                            trigger_books[symbol].watch(d, symbol, time.time)
 
-                d.minute_watch = other_protection
+                d.watch_other_symbols = other_protection
             d.verify_signal = verify
             num = 0
             sync = 0.0
@@ -694,8 +809,8 @@ def run(
                     sync = now
                 for name in syms:
                     d.service_if_due()
-                    if minute_mode:
-                        minute_books[name].poll(
+                    if trigger_books:
+                        trigger_books[name].poll(
                             d,
                             name,
                             time.time,
@@ -780,8 +895,8 @@ def run(
                     time.sleep(
                         poll_delay(
                             time.time(),
-                            (1, *frames) if minute_mode else frames,
-                            min(0.1, poll) if minute_mode else poll,
+                            (1, *frames) if minute_mode else native_frames,
+                            min(0.1, poll) if trigger_books else poll,
                             limits.max_entry_age_s,
                             True,  # always watch for a live cross, including exit-only signals
                         )

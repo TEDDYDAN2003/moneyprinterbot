@@ -17,8 +17,8 @@ $profiles = @(
 ) | ForEach-Object { '--profile'; $_ }
 
 if ($Observe) {
-  & $py -m bot.cli trade-all --config $cfg --m1-confirm @profiles
+  & $py -m bot.cli trade-all --config $cfg --paired-confirm @profiles
 } else {
-  & $py -m bot.cli trade-all --config $cfg --m1-confirm --arm-demo @profiles
+  & $py -m bot.cli trade-all --config $cfg --paired-confirm --arm-demo @profiles
 }
 exit $LASTEXITCODE

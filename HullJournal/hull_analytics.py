@@ -12,6 +12,7 @@ SESSIONS = (
     ("New York", "America/New_York", 8, 17),
 )
 REASON_LABELS = {
+    "paired_structure_cross": "Dynamic Hull · aligned parent and trigger cross",
     "m1_parent_structure_cross": "Dynamic Hull · M1 close / parent structure",
     "trend_hull_cross": "Dynamic Hull · trend-aligned cross",
     "bull_bos_discount_buy": "BUY · BOS discount (closed cross)",
@@ -26,6 +27,7 @@ REASON_LABELS = {
     "sell_above_bull_bos": "SELL · above bullish BOS",
 }
 REASON_NOTES = {
+    "paired_structure_cross": "The trigger Hull crossed on its own completed candle, in the direction of both its own and its parent’s confirmed structure. Other charts do not vote.",
     "m1_parent_structure_cross": "A completed M1 Hull cross agreed with the owning parent’s closed structure. No parent Hull cross or continuation BOS was required.",
     "trend_hull_cross": "The selected Hull curve crossed in the direction of confirmed internal structure. No price-zone or continuation-BOS requirement.",
     "bull_bos_discount_buy": "A fresh Hull BUY closed above the BOS-protected higher low and at or below the range midpoint. CHoCH and its retest are not entries.",
