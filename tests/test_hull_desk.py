@@ -258,7 +258,7 @@ def test_preflight_resolves_only_requested_symbols_and_never_sends(
         and answer["entry_quote_policy"] == "first_fresh_post_close_tick_v1"
         and answer["entry_sessions"]["version"] == "symbol-entry-sessions/v1"
         and answer["specs"]["XAUUSDm"]["entry_session"]["windows"]
-        == ["london_ny_overlap"]
+        == ["london_before_new_york", "london_ny_overlap", "new_york_day_session"]
         and answer["specs"]["XAUUSDm"]["bid_chart_verified"]
         and answer["batch_entry_policy"] == "first_eligible_while_lane_flat_v2"
         and list(answer["specs"]) == ["XAUUSDm"]

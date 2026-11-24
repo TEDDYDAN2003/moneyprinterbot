@@ -208,7 +208,7 @@ def test_paper_arm_real_account_and_bad_server_refused(rig):
 
 
 @pytest.mark.parametrize(
-    "rejection,expected", [(B - 3600, "observer_plan"), (B + 3 * 3600, es.OUTSIDE)]
+    "rejection,expected", [(B - 6 * 3600, "observer_plan"), (B + 8 * 3600, es.OUTSIDE)]
 )
 def test_stream_and_full_loop_with_closed_synthetic_history(
     monkeypatch, tmp_path, capsys, rejection, expected
@@ -281,7 +281,7 @@ def test_stream_and_full_loop_with_closed_synthetic_history(
         for x in log
     )
     assert target["signal_session"]["active"] == (
-        ["london_ny_overlap"] if expected == "observer_plan" else []
+        ["london_before_new_york"] if expected == "observer_plan" else []
     )
     if expected == es.OUTSIDE:
         assert (
@@ -401,7 +401,7 @@ def test_preflight_never_sends_and_unresolved_blocks_next_armed_start(
     )
     assert next(v for v in events if v["event"] == "symbol_check")["entry_session"][
         "active"
-    ] == ["london_ny_overlap"]
+    ] == ["london_ny_overlap", "new_york_day_session"]
     assert not m.requests and not (tmp_path / ".moneyprinterbot").exists()
     key = hashlib.sha256(repr((1, "t")).encode()).hexdigest()[:16]
     book = Intents(tmp_path / ".moneyprinterbot/wickless" / key / "intents.sqlite3")
@@ -427,13 +427,16 @@ def test_preflight_never_sends_and_unresolved_blocks_next_armed_start(
     "name,hour,expected",
     [
         ("USDJPYm", 0, ""),
-        ("USDJPYm", 8, es.OUTSIDE),
+        ("USDJPYm", 7, es.OUTSIDE),
+        ("USDJPYm", 8, ""),
         ("GBPJPYm", 8, ""),
-        ("EURUSDm", 8, es.OUTSIDE),
+        ("EURUSDm", 7, es.OUTSIDE),
+        ("EURUSDm", 8, ""),
         ("DE30m", 8, ""),
         ("JP225m", 15, es.OUTSIDE),
         ("AUDUSDm", 15, ""),
-        ("USTEC_x100m", 16, es.OUTSIDE),
+        ("USTEC_x100m", 22, es.OUTSIDE),
+        ("USTEC_x100m", 16, ""),
         ("US500m", 15, ""),
         ("XAUUSD.pro", 15, es.UNMAPPED),
         ("1HZ100V", 15, es.UNMAPPED),
@@ -464,6 +467,7 @@ def test_selected_broker_pair_uses_shared_exact_schedule(
             assert v["entry_session"]["active"] == [
                 "overlap_killzone",
                 "ny_cash_first_hour",
+                "new_york_day_session",
             ]
     assert len(m.requests) == int(armed and not expected)
 
@@ -471,7 +475,7 @@ def test_selected_broker_pair_uses_shared_exact_schedule(
 @pytest.mark.parametrize("stage", ["observer_plan", "post_precheck", "final_send"])
 def test_time_edge_while_pricing_checking_or_reserving(rig, stage):
     m, book, go = rig
-    end = B + 3 * 3600
+    end = B + 8 * 3600
     # Inject an off-grid signal 2s before close to distinguish this gate from
     # the independent 8s age limit. Real M15 bar times are grid-checked upstream.
     stamp = end - 2
@@ -507,7 +511,7 @@ def test_time_edge_while_pricing_checking_or_reserving(rig, stage):
 
 def test_fill_slippage_tp_correction_is_not_an_entry_after_hours(rig):
     m, book, go = rig
-    end = B + 3 * 3600
+    end = B + 8 * 3600
     stamp = end - 2
     clock = [stamp + 0.2]
     m.q.time_msc = stamp * 1000 + 100

@@ -298,7 +298,7 @@ def test_fresh_resumption_through_confirmed_wick_and_next_quote_real_desk(
     hull_desk, monkeypatch, side, mode
 ):
     end = (
-        T + 3 * 3600 if mode == "outside" else T
+        T + 8 * 3600 if mode == "outside" else T
     )  # quiet price fixture, same signal other hour
     mt, d, log = hull_desk("medium", armed=mode != "observe")
     d.h = d.h.model_copy(update={"eligible_timeframes": ("M15", "M30", "M45")})

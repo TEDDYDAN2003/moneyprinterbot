@@ -15,7 +15,7 @@ from bot.hull.structure import Structure
 from bot.hull.terminal import dispatch
 
 NAME = "XAUUSDm"
-OPEN, END = T - 2 * 3600, T + 2 * 3600  # winter, Tue 13:00–17:00 UTC
+OPEN, END = T - 7 * 3600, T + 7 * 3600  # winter gold union, Tue 08:00–22:00 UTC
 OK = {"data_ok": True, "history_ok": True, "rewarmed": False}
 
 
@@ -51,7 +51,8 @@ def signal_at(stamp, tf=15, side=1):
     "name,key,hour,expected",
     [
         ("USDJPYm", "USDJPY", 0, ""),
-        ("USDJPYm", "USDJPY", 8, es.OUTSIDE),
+        ("USDJPYm", "USDJPY", 7, es.OUTSIDE),
+        ("USDJPYm", "USDJPY", 8, ""),
         ("JP225m", "JP225", 0, ""),
         ("JP225m", "JP225", 15, es.OUTSIDE),
         ("DE30m", "DE40", 8, ""),
@@ -59,9 +60,11 @@ def signal_at(stamp, tf=15, side=1):
         ("GBPJPYm", "GBPJPY", 10, ""),
         ("AUDUSDm", "AUDUSD", 0, es.OUTSIDE),
         ("AUDUSDm", "AUDUSD", 16, ""),
-        ("USTEC_x100m", "NAS100USD", 16, es.OUTSIDE),
+        ("USTEC_x100m", "NAS100USD", 16, ""),
+        ("USTEC_x100m", "NAS100USD", 22, es.OUTSIDE),
         ("US30m", "US30", 15, ""),
-        ("US500m", "US500", 16, es.OUTSIDE),
+        ("US500m", "US500", 16, ""),
+        ("US500m", "US500", 22, es.OUTSIDE),
         ("1HZ100V", "1HZ100V", 15, es.UNMAPPED),
         ("XAUUSD.r", "XAUUSD", 15, es.UNMAPPED),
         ("EURUSDm", "XAUUSD", 15, es.MISMATCH),
@@ -139,6 +142,7 @@ def test_first_quote_wait_cannot_resume_across_end_or_catch_up_tomorrow(
 ):
     mt, d, log = hull_desk()
     d.h = d.h.model_copy(update={"eligible_timeframes": ("M15",)})
+    d.hours = Hours({})
     r = signal_at(END - 900)
     clock = wall_at(monkeypatch, r.signal_s + 0.2)
     q, mt.q = mt.q, None
@@ -162,6 +166,8 @@ def test_edge_during_broker_precheck_write_ahead_or_partial_batch(
 ):
     mt, d, log = hull_desk("medium")
     d.h = d.h.model_copy(update={"eligible_timeframes": ("M45",)})
+    # Isolate the mandatory market closing edge from the separate local rollover blackout.
+    d.hours = Hours({})
     mt.q.time_msc = END * 1000 - 1750
     r = signal_at(END - 2, 45)  # synthetic close within the clock-edge test window
     d.verify_signal = lambda *_: True
@@ -276,6 +282,8 @@ def test_opposite_seen_between_legs_at_session_end_still_closes_filled_leg(
 ):
     mt, d, log = hull_desk("medium")
     d.h = d.h.model_copy(update={"eligible_timeframes": ("M45",)})
+    # Isolate the mandatory market closing edge from the separate local rollover blackout.
+    d.hours = Hours({})
     mt.q.time_msc = END * 1000 - 1750
     r = signal_at(END - 2, 45)  # synthetic close within the clock-edge test window
     clock = wall_at(monkeypatch, END - 1.5)

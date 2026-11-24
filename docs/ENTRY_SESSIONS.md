@@ -4,14 +4,13 @@ Both Python bots use **one mandatory file**: [`src/bot/config/entry_sessions.yam
 
 ## Which market can enter when?
 
-| Market | Allowed entry windows (either window is enough) |
+| Market | Allowed entry windows (any listed window is enough) |
 |---|---|
 | JP225 | **09:00–10:00 Tokyo** |
 | DE40 | **09:00–10:00 Berlin** (Frankfurt cash open) |
-| USDJPY | **09:00–10:00 Tokyo**, or the **full London–New York overlap** |
-| GBPJPY | **08:00 London until 08:00 New York**, or the **full overlap**; no Frankfurt window |
-| XAUUSD, EURUSD, AUDUSD, GBPUSD | **Full overlap**. Gold’s narrower 09:30–10:30 New York hour is already included. AUDUSD is not Asia-only. |
-| NAS100USD, US30, US500 | **13:00–16:00 London while both cities are open**, or **09:30–10:30 New York**. Not the full overlap. |
+| USDJPY | **09:00–10:00 Tokyo**, London before NY, the full overlap, or the New York day |
+| GBPJPY, XAUUSD, EURUSD, AUDUSD, GBPUSD | **London before NY**, the **full overlap**, or the **New York day (08:00–17:00 New York)** |
+| NAS100USD, US30, US500 | **13:00–16:00 London while both cities are open**, **09:30–10:30 New York**, or the **New York day**. Overlapping windows never multiply entries. |
 
 **Full overlap** means London **08:00–17:00 Europe/London** *and* New York **08:00–17:00 America/New_York**. The opening instant is included; the ending instant is excluded. Windows use **local weekdays** and IANA time zones. They are not exchange holiday or half-day calendars. A scheduled window is permission to consider a signal, not evidence that the broker is open or that a fill is possible.
 
@@ -21,12 +20,13 @@ Both Python bots use **one mandatory file**: [`src/bot/config/entry_sessions.yam
 |---|---|---|---|
 | Tokyo first hour | 03:00–04:00 | 03:00–04:00 | 03:00–04:00 |
 | Frankfurt first hour | 11:00–12:00 | 10:00–11:00 | 11:00–12:00 |
-| GBPJPY London before NY | 11:00–16:00 | 10:00–15:00 | 11:00–15:00 |
+| London before NY | 11:00–16:00 | 10:00–15:00 | 11:00–15:00 |
 | Full overlap | 16:00–20:00 | 15:00–19:00 | 15:00–20:00 |
 | Index overlap killzone | 16:00–19:00 | 15:00–18:00 | 16:00–19:00 |
+| Full New York day | 16:00–01:00 next day | 15:00–00:00 | 15:00–00:00 |
 | NY cash first hour | 17:30–18:30 | 16:30–17:30 | 16:30–17:30 |
 
-For example, on **Tuesday 27 October 2026 at 15:00 EAT**, New York has just opened its 08:00 session and London is at noon. AUDUSD can enter the full overlap. US30 **cannot** enter yet; its killzone starts at **16:00 EAT**. At **16:30 EAT** both index windows match, still just one admission decision per signal.
+For example, on **Tuesday 27 October 2026 at 15:00 EAT**, New York has just opened its 08:00 session and London is at noon. AUDUSD can enter the full overlap. US30 can already consider an entry under the New York day window. Its narrower killzone starts at **16:00 EAT**. At **16:30 EAT** all three index windows match, still just one admission decision per signal.
 
 ## What each bot checks
 

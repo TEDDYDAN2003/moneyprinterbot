@@ -17,13 +17,14 @@ TOKYO, FRANK, LONDON, FULL, KZ, CASH = (
     "overlap_killzone",
     "ny_cash_first_hour",
 )
+NY = "new_york_day_session"
 RULES = {
     "JP225": (TOKYO,),
-    "USDJPY": (TOKYO, FULL),
+    "USDJPY": (TOKYO, LONDON, FULL, NY),
     "DE40": (FRANK,),
-    "GBPJPY": (LONDON, FULL),
-    **{s: (FULL,) for s in ("XAUUSD", "EURUSD", "AUDUSD", "GBPUSD")},
-    **{s: (KZ, CASH) for s in ("NAS100USD", "US30", "US500")},
+    "GBPJPY": (LONDON, FULL, NY),
+    **{s: (LONDON, FULL, NY) for s in ("XAUUSD", "EURUSD", "AUDUSD", "GBPUSD")},
+    **{s: (KZ, CASH, NY) for s in ("NAS100USD", "US30", "US500")},
 }
 
 
@@ -50,6 +51,7 @@ def test_utc_day_all_markets_and_both_sides_of_every_edge(
     policy, day, berlin_open, london_open, ny_open, london_end, kz_start, ny_cash
 ):
     windows = {
+        NY: (ny_open, ny_open + 9 * 60),
         TOKYO: (0, 60),
         FRANK: (berlin_open, berlin_open + 60),
         LONDON: (london_open, ny_open),
@@ -113,7 +115,7 @@ def test_exact_mapping_and_invalid_clocks(policy):
     assert policy.bind("USDJPYm", "GBPJPY").issue == es.MISMATCH
     assert policy.bind("DE30m", "DE30") is policy.bind("DE40")
     at = midnight("2026-01-13") + 15 * 3600
-    assert policy.bind("USTEC_x100m").report(at)["active"] == [KZ, CASH]
+    assert policy.bind("USTEC_x100m").report(at)["active"] == [KZ, CASH, NY]
     for bad in (None, "15:00", True, math.nan, math.inf, -math.inf, 1e100):
         assert policy.bind("XAUUSD").veto(bad) == "invalid_entry_session_clock"
 
@@ -200,8 +202,8 @@ def test_offline_lookup_ignores_decoy_cwd_and_equivalent_offset_inputs(
         assert es.main(["--at", when]) == 0
         outputs.append(json.loads(capsys.readouterr().out))
     assert outputs[0] == outputs[1]
-    assert outputs[0]["symbols"]["AUDUSD"]["active"] == [FULL]
-    assert outputs[0]["symbols"]["US30"]["status"] == es.OUTSIDE
+    assert outputs[0]["symbols"]["AUDUSD"]["active"] == [FULL, NY]
+    assert outputs[0]["symbols"]["US30"]["active"] == [NY]
     assert es.main(["--symbol", "1HZ100V"]) == 2
     assert (
         json.loads(capsys.readouterr().out)["symbols"]["1HZ100V"]["status"]
