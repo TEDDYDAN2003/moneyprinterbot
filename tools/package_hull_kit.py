@@ -13,6 +13,8 @@ SINGLES = {
     "AGENTS.md",
     "pyproject.toml",
     "config.yaml",
+    "run_preflight.ps1",
+    "run_arm_demo.ps1",
     "wickless.example.json",
     ".gitignore",
     ".gitattributes",
@@ -40,6 +42,9 @@ SINGLES |= {
 REQUIRED = SINGLES | {
     "src/bot/cli.py",
     "src/bot/hull/terminal.py",
+    "src/bot/hull/minute.py",
+    "docs/HULL_M1.md",
+    "tests/test_hull_m1_execution.py",
     "docs/HULL_DEMO.md",
     "MT5/FC-Dynamic-Hull-Lanes.mq5",
     "HullJournal/ledger.py",
@@ -78,6 +83,8 @@ def build(out):
     # Git normalises tracked text; Windows launchers and CSVs ship with CRLF.
     for n in (
         "HullJournal/Start-Journal.cmd",
+        "run_preflight.ps1",
+        "run_arm_demo.ps1",
         "HullJournal/examples/tickets.csv",
         "HullJournal/examples/setups.csv",
     ):

@@ -19,6 +19,9 @@ from .config import (
     COUNTS,
     ENTRY_POLICY,
     LADDER,
+    M1_MODE,
+    M1_POLICY,
+    M1_STOP,
     NATIVE_TF,
     RETIRED_LIMITS,
     STOP_POLICY,
@@ -30,6 +33,7 @@ from .desk import Desk, identity_check, resolve
 from .entry_clock import QUOTE_POLICY, WAITING, poll_delay
 from .feed import Stream, StructureTape, sample, verify_before_leg
 from .ladder import cash_levels
+from .minute import MinuteBook
 from .orders import Block, Grid, spread_goal
 
 
@@ -303,6 +307,13 @@ def run(
 ):
     # No timeframe flag, old local YAML, or direct invocation can enable an unapproved lane.
     frames = h.lanes(frames)
+    minute_mode = h.execution_mode == M1_MODE
+    if minute_mode and (
+        set(frames) - {5, 15, 30, 45}
+        or h.indicator.structure_timeframe not in (None, "Chart")
+    ):
+        raise ValueError("M1 execution requires native M5/M15/M30/M45 parent structure")
+    exposure_books = 1 if minute_mode else len(frames)
     if not 0.25 <= poll <= 10 or (iterations is not None and iterations < 1):
         raise ValueError("Invalid poll/iterations")
     mode = cfg["run"]["mode"]
@@ -354,9 +365,10 @@ def run(
                 ),
                 "preview_quote": asdict(q) if q else None,
                 "legs_when_room": COUNTS[p.rate],
-                "max_tickets_across_selected_lanes": len(frames) * max(COUNTS[p.rate]),
+                "max_tickets_across_selected_lanes": exposure_books
+                * max(COUNTS[p.rate]),
                 "max_lots_across_selected_lanes": round(
-                    len(frames) * max(COUNTS[p.rate]) * p.lots, 8
+                    exposure_books * max(COUNTS[p.rate]) * p.lots, 8
                 ),
                 "batch_lots_range": [
                     round(p.lots * min(COUNTS[p.rate]), 8),
@@ -378,15 +390,21 @@ def run(
             "structure_timeframe": h.indicator.structure_timeframe or "Chart",
             "new_ticket_exit_policy": h.exit_policy,
             "new_ticket_target_policy": TARGET_POLICY,
-            "entry_policy": ENTRY_POLICY,
+            "execution_mode": h.execution_mode,
+            "trigger_timeframe": "M1" if minute_mode else "same_as_parent",
+            "entry_policy": M1_POLICY if minute_mode else ENTRY_POLICY,
             "entry_sessions": sessions.identity(),
             "signal_policy": h.indicator.signal_policy,
-            "batch_entry_policy": BATCH_ENTRY_POLICY,
+            "batch_entry_policy": "single_symbol_highest_qualifying_parent"
+            if minute_mode
+            else BATCH_ENTRY_POLICY,
             "entry_timing": h.entry_timing,
             "entry_quote_policy": QUOTE_POLICY,
-            "new_ticket_stop_policy": STOP_POLICY,
+            "new_ticket_stop_policy": M1_STOP if minute_mode else STOP_POLICY,
             "live_cross_role": "protective_exit_only",
-            "opposite_exit": "lane_raw_cross_before_entry_checks",
+            "opposite_exit": "symbol_wide_opposing_m1_for_verified_m1_tickets_plus_parent_protection"
+            if minute_mode
+            else "lane_raw_cross_before_entry_checks",
             "mss_exit": "flatten_own_lane_on_confirmed_shift",
             "ownership": "verified_position_id_and_broker_symbol_and_signal_timeframe",
             "m45_clock": "3 consecutive M15 bars anchored to the broker D1 open",
@@ -468,16 +486,48 @@ def run(
                         issues.append(
                             f"{name} {TF_NAME[tf]}: insufficient closed-bar history"
                         )
+                if minute_mode:
+                    minute = Stream(
+                        1,
+                        h.indicator,
+                        p.pip_size,
+                        tick_size=specs[name]["tick"],
+                        price_only=True,
+                    )
+                    _, status = minute.refresh(mt, name, time.time())
+                    checks["M1 trigger"] = {
+                        "status": status,
+                        "closed_bars_loaded": minute.h.n,
+                        "role": "timing_and_opposite_exit_only",
+                    }
+                    if not minute.h.prev or status == "history_unavailable":
+                        issues.append(
+                            f"{name}: native M1 history unavailable; no M1 entries"
+                        )
                 summary["history_check"][name] = checks
             if ps or os:
                 issues.append(
                     "Preflight found existing exposure; review before starting or changing profiles"
+                )
+            if minute_mode:
+                summary["m1_history_ready"] = all(
+                    specs[name]["bid_chart_verified"]
+                    and all(
+                        row["status"] != "history_unavailable"
+                        and row["closed_bars_loaded"] > 0
+                        for row in checks.values()
+                    )
+                    for name, checks in summary["history_check"].items()
                 )
             summary["review_before_demo"] = issues
         print(json.dumps(summary, indent=2, allow_nan=False), flush=True)
         if preflight:
             if session_issues:
                 raise DemoSafetyError("; ".join(session_issues))
+            if minute_mode and not summary["m1_history_ready"]:
+                raise DemoSafetyError(
+                    "M1 or approved parent bid history unavailable; do not arm"
+                )
             return summary
         root.mkdir(parents=True, exist_ok=True)
 
@@ -530,7 +580,51 @@ def run(
             for name, (_, lanes) in bundles.items():
                 for tf, lane in lanes.items():
                     record = skip_book.setdefault(name, {}).setdefault(str(tf), {})
-                    lane.h.gate.bind(record, d.persist if armed else None)
+                    if not minute_mode:
+                        lane.h.gate.bind(record, d.persist if armed else None)
+
+            d.minute_policy_key = policy_key
+            minute_books = {}
+            if minute_mode:
+                records = state.setdefault("m1_parent_first_cross", {}).setdefault(
+                    policy_key, {}
+                )
+                minute_books = {
+                    name: MinuteBook(
+                        h,
+                        syms[name][1],
+                        specs[name]["tick"],
+                        lanes,
+                        records.setdefault(name, {}),
+                        d.persist if armed else None,
+                    )
+                    for name, (_, lanes) in bundles.items()
+                }
+            if armed and any(
+                rec.get("trigger_tf") == 1 for rec in d.owners.book.values()
+            ):
+                inventory = mt.positions_get()
+                if inventory is None:
+                    raise DemoSafetyError(
+                        "Cannot verify manager coverage before starting"
+                    )
+                for pos in inventory:
+                    if (
+                        getattr(pos, "magic", None) == h.magic
+                        and d.owners.minute_source(pos)
+                        and (
+                            not minute_mode
+                            or pos.symbol not in minute_books
+                            or d.owners.book[
+                                str(getattr(pos, "identifier", pos.ticket))
+                            ].get("m1_policy_key")
+                            != policy_key
+                            or d.owners.lane(pos) not in frames
+                        )
+                    ):
+                        raise DemoSafetyError(
+                            "Open M1-origin ticket needs its original symbol, parent, indicator settings and M1 manager; do not change modes while open"
+                        )
 
             def verify(name, r, quote):
                 # Take care of an MSS even between legs of a slow batch on this
@@ -541,6 +635,9 @@ def run(
                         d.confirmed_shift(name, f, shift)
                         if f == r.tf and shift.closed_s * 1000 >= r.signal_msc:
                             invalidated = True
+                if r.trigger_tf == 1:
+                    ok = minute_books[name].verify(d, name, r, quote, time.time)
+                    return ok and not invalidated
                 if invalidated:
                     return False
 
@@ -571,6 +668,17 @@ def run(
                     interrupt,
                 )
 
+            if minute_mode:
+
+                def other_protection(active_symbol):
+                    for symbol in {sym for sym, _ in d.open_lanes} - {active_symbol}:
+                        if (
+                            symbol in minute_books
+                            and specs[symbol]["bid_chart_verified"]
+                        ):
+                            minute_books[symbol].watch(d, symbol, time.time)
+
+                d.minute_watch = other_protection
             d.verify_signal = verify
             num = 0
             sync = 0.0
@@ -586,6 +694,15 @@ def run(
                     sync = now
                 for name in syms:
                     d.service_if_due()
+                    if minute_mode:
+                        minute_books[name].poll(
+                            d,
+                            name,
+                            time.time,
+                            history_ok=history_ok,
+                            bid_chart=specs[name]["bid_chart_verified"],
+                        )
+                        continue
                     ds, data_ok, rewarmed = [], {}, {}
                     ext, lanes = bundles[name]
                     ext_status = (
@@ -663,8 +780,8 @@ def run(
                     time.sleep(
                         poll_delay(
                             time.time(),
-                            frames,
-                            poll,
+                            (1, *frames) if minute_mode else frames,
+                            min(0.1, poll) if minute_mode else poll,
                             limits.max_entry_age_s,
                             True,  # always watch for a live cross, including exit-only signals
                         )

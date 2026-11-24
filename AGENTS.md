@@ -1,5 +1,7 @@
 # Dynamic Hull: replay charts, run the demo or sync the journal
 
+**M1 execution mode:** see [the two-clock policy and restart checklist](docs/HULL_M1.md). Its M1 trigger, parent ownership, initial stop and audit fields differ from the original parent-close mode described below. Chart marks are not M1 fills.
+
 **Wickless is a separate bot:** for `WICKLESS OBSERVE`, use the pasted Wickless JSON and the [Wickless operator guide](docs/WICKLESS.md), not Hull profiles, tickets or commands. Ordinary setup, implementation and test requests never send orders.
 
 **Dynamic Hull:** M15/M30/M45 authorized as independent lanes in `hull.eligible_timeframes`, not authorization to start a scanner or send orders. `structure_timeframe: null`. A confirmed MSS closes only the originating symbol/timeframe; M45 is three aligned M15 candles. [Rules and private YAML migration](docs/HULL_STRUCTURE.md).

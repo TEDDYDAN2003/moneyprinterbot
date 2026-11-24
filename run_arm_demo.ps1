@@ -1,3 +1,6 @@
+[CmdletBinding()]
+param([switch]$Observe)
+
 $py = '.\.venv\Scripts\python.exe'
 $cfg = '.\config.demo.local.yaml'
 $profiles = @(
@@ -13,4 +16,9 @@ $profiles = @(
   'JP225:3:10:slow'
 ) | ForEach-Object { '--profile'; $_ }
 
-& $py -m bot.cli trade-all --config $cfg --arm-demo @profiles
+if ($Observe) {
+  & $py -m bot.cli trade-all --config $cfg --m1-confirm @profiles
+} else {
+  & $py -m bot.cli trade-all --config $cfg --m1-confirm --arm-demo @profiles
+}
+exit $LASTEXITCODE

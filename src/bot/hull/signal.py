@@ -10,7 +10,7 @@ from dataclasses import dataclass, field, replace
 
 from bot.hull.bar import Bar
 
-from .config import ENTRY_POLICY, STOP_POLICY, TF_NAME, Indicator
+from .config import ENTRY_POLICY, M1_POLICY, M1_STOP, STOP_POLICY, TF_NAME, Indicator
 from .curves import WMA, Baseline, LiveTick
 from .entry_clock import utc
 from .orders import cross_candle_stop
@@ -46,11 +46,21 @@ class Reading:
     waived_first_cross: bool = False
     stop_tick_size: float | None = None  # verified trade grid at signal, not pip size
 
+    trigger_tf: int | None = (
+        None  # None = legacy same-lane clock; 1 = M1 trigger, tf is its owner
+    )
+    detected_s: float | None = None
+
+    @property
+    def candle_tf(self):
+        return self.trigger_tf or self.tf
+
     @property
     def confirmed_mss(self):
         s = self.structure
         return (
-            self.trigger is None
+            self.trigger_tf is None
+            and self.trigger is None
             and s.closed_s == self.close_s
             and s.bias in (-1, 1)
             and s.event_code == 2 * s.bias
@@ -69,7 +79,7 @@ class Reading:
             "entry_timing": "live_exit_only" if self.trigger else "confirmed_close",
             "trigger_msc": self.signal_msc,
             "trigger_utc": utc(self.signal_s),
-            "bar_open_utc": utc(self.close_s - self.tf * 60),
+            "bar_open_utc": utc(self.close_s - self.candle_tf * 60),
             "bar_end_utc": utc(self.close_s),
             "signal_close_utc": None if self.trigger else utc(self.close_s),
         }
@@ -111,8 +121,23 @@ class Reading:
 
     def entry_audit(self):
         return {
-            "entry_policy": ENTRY_POLICY,
-            "initial_stop_policy": STOP_POLICY
+            **(
+                {
+                    "parent_tf": self.tf,
+                    "trigger_tf": 1,
+                    "parent_structure_close_s": self.structure.closed_s,
+                    "m1_source": self.active_source,
+                    "close_to_detect_ms": round(
+                        (self.detected_s - self.close_s) * 1000, 3
+                    )
+                    if self.detected_s is not None
+                    else None,
+                }
+                if self.trigger_tf == 1
+                else {}
+            ),
+            "entry_policy": M1_POLICY if self.trigger_tf == 1 else ENTRY_POLICY,
+            "initial_stop_policy": (M1_STOP if self.trigger_tf == 1 else STOP_POLICY)
             if self.stop_tick_size is not None
             else None,
             "cross_candle_open_s": self.anchor_s
@@ -123,7 +148,13 @@ class Reading:
             else None,
             "frozen_cross_sl": self.raw_sl if self.stop_tick_size is not None else None,
             "structure_phase": self.structure.phase,
-            "entry_setup": "trend_hull_cross" if self.entry_side else None,
+            "entry_setup": (
+                "m1_parent_structure_cross"
+                if self.trigger_tf == 1
+                else "trend_hull_cross"
+            )
+            if self.entry_side
+            else None,
             "entry_side": self.entry_side,
             "entry_reason": self.entry_reason,
             "mss_skip_exception": "failed_counter_mss_return"
@@ -215,11 +246,19 @@ class FirstCrossGate:
 
 class Hull:
     def __init__(
-        self, tf: int, p: Indicator, pip_size: float, gate=None, *, tick_size=None
+        self,
+        tf: int,
+        p: Indicator,
+        pip_size: float,
+        gate=None,
+        *,
+        tick_size=None,
+        price_only=False,
     ):
         if tf not in TF_NAME:
             raise ValueError("Unsupported Hull timeframe")
         self.tf, self.p, self.pip, self.tick_size = tf, p, pip_size, tick_size
+        self.price_only = price_only
         self.gate = gate if gate is not None else FirstCrossGate()
         n = p.hull_len
         h = max(1, n // 2)
@@ -255,7 +294,11 @@ class Hull:
     def _read(self, c, tick, context, observe_first):
         commit, p = tick is None, self.p
         close_s = c.t + self.tf * 60
-        native = self.structure.update(c, close_s) if commit else self.structure.view
+        native = (
+            self.structure.update(c, close_s)
+            if commit and not self.price_only
+            else self.structure.view
+        )
         structure = native if context is None else context
         values = {
             "open": c.o,
@@ -346,4 +389,4 @@ class Hull:
             tick,
             stop_tick_size=self.tick_size if anchor is not None else None,
         )
-        return self.gate.apply(r, observe=observe_first)
+        return r if self.price_only else self.gate.apply(r, observe=observe_first)

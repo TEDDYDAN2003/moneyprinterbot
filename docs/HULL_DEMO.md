@@ -1,5 +1,7 @@
 # Dynamic Hull → protected MT5 demo tickets
 
+**M1 execution mode:** see [the two-clock policy and restart checklist](HULL_M1.md). Its M1 trigger, parent ownership, initial stop and audit fields differ from the original parent-close mode described below. Chart marks are not M1 fills.
+
 `trade`, `demo` and `trade-all` run the Python companion for Windows MT5 Desktop, not an Expert Advisor. No webhook or database is required. The shipped allowlist is **M15, M30, M45**. M45 uses aligned M15 data; each timeframe has its own structure, signals and tickets. Install only when flat, with no unresolved exposure or running manager to interrupt.
 
 ## What triggers an entry?

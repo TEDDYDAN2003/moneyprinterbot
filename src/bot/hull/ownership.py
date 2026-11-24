@@ -23,8 +23,12 @@ class Owners:
     def __init__(self, state):
         self.book = state.setdefault("hull_lane_positions_v1", {})
 
-    def bind(self, p, tf):
+    def bind(self, p, tf, *, minute_source=None, minute_policy=None):
         record = fingerprint(p) | {"tf": int(tf)}
+        if minute_source is not None:
+            record.update(
+                trigger_tf=1, m1_source=minute_source, m1_policy_key=minute_policy
+            )
         if (
             record["opened_msc"] <= 0
             or record["identifier"] <= 0
@@ -44,6 +48,13 @@ class Owners:
             if rec and all(rec.get(k) == v for k, v in fingerprint(p).items())
             else None
         )
+
+    def minute_source(self, p):
+        # No inference from broker comments, current chart or magic alone.
+        if self.lane(p) is None:
+            return None
+        rec = self.book[str(getattr(p, "identifier", p.ticket))]
+        return rec.get("m1_source") if rec.get("trigger_tf") == 1 else None
 
     def deal_lane(self, deal, symbols, magic):
         """Read-only audit link, never used to admit, close or enroll a position."""

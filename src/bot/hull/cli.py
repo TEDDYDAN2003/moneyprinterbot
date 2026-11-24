@@ -20,6 +20,11 @@ def register(sub):
         )
         p.add_argument("--config", default="config.yaml")
         p.add_argument(
+            "--m1-confirm",
+            action="store_true",
+            help="M1 close triggers; approved parent lanes provide structure, one batch per symbol. Does not arm orders.",
+        )
+        p.add_argument(
             "--symbols", nargs="+", help="configured keys; default hull.enabled"
         )
         p.add_argument("--lots", type=float, help="per position")
@@ -56,6 +61,8 @@ def handle(args, cfg, model: RootConfig):
     from .terminal import run
 
     h = model.hull
+    if getattr(args, "m1_confirm", False):
+        h = h.model_copy(update={"execution_mode": "m1_parent_structure"})
     frames = h.lanes((SIGNAL_TF[args.timeframe],) if args.timeframe else None)
     p = selection(h, args.symbols, args.profile, args.lots, args.target_usd, args.rate)
     run(

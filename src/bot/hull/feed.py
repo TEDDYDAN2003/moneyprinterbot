@@ -91,11 +91,19 @@ class StructureTape:
 
 class Stream:
     def __init__(
-        self, tf, cfg, pip, external: StructureTape | None = None, *, tick_size=None
+        self,
+        tf,
+        cfg,
+        pip,
+        external: StructureTape | None = None,
+        *,
+        tick_size=None,
+        price_only=False,
     ):
         self.tf, self.cfg, self.pip, self.ext = tf, cfg, pip, external
+        self.price_only = price_only
         self.tick_size = tick_size
-        self.h = Hull(tf, cfg, pip, tick_size=tick_size)
+        self.h = Hull(tf, cfg, pip, tick_size=tick_size, price_only=price_only)
         self.rebaseline_close = False
         self.history_fence = 0  # never trade a close that predates attachment/recovery
         self.last_label = None
@@ -125,7 +133,12 @@ class Stream:
         if reload:
             self.h, self.last_label = (
                 Hull(
-                    self.tf, self.cfg, self.pip, self.h.gate, tick_size=self.tick_size
+                    self.tf,
+                    self.cfg,
+                    self.pip,
+                    self.h.gate,
+                    tick_size=self.tick_size,
+                    price_only=self.price_only,
                 ),
                 None,
             )

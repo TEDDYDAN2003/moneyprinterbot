@@ -45,11 +45,13 @@ NATIVE_MINUTES = {
     1440,
 }
 TAG = re.compile(r"h([1-9]\d{0,3})_(\d{9,11})_([1-9]\d{0,3})\Z")
+MINUTE_TAG = re.compile(r"m(5|15|30|45)_(\d{9,11})_([1-9]\d{0,3})\Z")
 LIVE_TAG = re.compile(r"i([1-9]\d{0,3})_([1-9]\d{11,13})_([1-9]\d{0,3})\Z")
 LIVE_KEY_MIN = 10**11  # disjoint from every accepted legacy seconds key
 # These are optional evidence columns, not new ownership/settlement rules. Historical
 # confirmed h-tags alone do NOT prove which stop/quote policy produced a trade.
 CROSS_POLICY = "confirmed_cross_candle_wick_v1"
+M1_POLICY = "confirmed_m1_cross_candle_wick_v1"
 CROSS_SHARED = (
     "initial_stop_policy",
     "cross_candle_wick",
@@ -57,7 +59,7 @@ CROSS_SHARED = (
     "mss_skip_exception",
 )
 SEND_FIELDS = ("send_quote_utc", "send_bid", "send_ask")
-LOG_FORMAT = 4  # incremental index: replay available demo.jsonl once, do not reset broker history
+LOG_FORMAT = 5  # incremental index: replay available demo.jsonl once, do not reset broker history
 CASH = ("gross_profit", "commission", "swap", "fee")
 FIELDS = [
     "schema_version",
@@ -257,7 +259,7 @@ def tf_name(minutes):
 
 def tag(s):
     text = str(s or "")
-    m = TAG.fullmatch(text) or LIVE_TAG.fullmatch(text)
+    m = TAG.fullmatch(text) or MINUTE_TAG.fullmatch(text) or LIVE_TAG.fullmatch(text)
     if not m:
         return None
     tf, stamp, leg = map(int, m.groups())
@@ -276,10 +278,12 @@ def signal_window(key):
 
 def index_cross_receipt(c, ev, vals, ref):
     """Enrich a *matched* original request, never a label/preview or a historical h-tag."""
-    if ev.get("initial_stop_policy") != CROSS_POLICY:
+    if ev.get("initial_stop_policy") not in (CROSS_POLICY, M1_POLICY):
         return
     tf, close_s, leg = ref
     did, _sy, tag_text, side, requested_sl, _tp = vals
+    minute = ev["initial_stop_policy"] == M1_POLICY
+    candle_tf = 1 if minute else tf
     sign = 1 if side == "BUY" else -1
     ms = int(ev["send_tick_time_msc"])
     wick, sl, bid, ask = (
@@ -289,16 +293,26 @@ def index_cross_receipt(c, ev, vals, ref):
     waiver = ev.get("mss_skip_exception") or ""
     if not (
         ev.get("retcode") in (10009, 10010)
-        and tag_text.startswith("h")
-        and tf in (15, 30, 45)
+        and tag_text.startswith("m" if minute else "h")
+        and tf in (5, 15, 30, 45)
+        and (
+            not minute
+            or (
+                ev.get("trigger_tf") == 1
+                and ev.get("parent_tf") == tf
+                and ev.get("m1_source")
+                and isinstance(ev.get("parent_structure_close_s"), int)
+                and 0 <= close_s - ev["parent_structure_close_s"] < tf * 60
+            )
+        )
         and ev.get("tf", tf) == tf
         and ev.get("leg") == leg
         and ev.get("entry_timing") == "confirmed_close"
         and ev.get("entry_side") == sign
         and ev.get("signal") == close_s
         and ev.get("trigger_msc") == close_s * 1000
-        and ev.get("cross_candle_open_s") == close_s - tf * 60
-        and close_s * 1000 <= ms < (close_s + tf * 60) * 1000
+        and ev.get("cross_candle_open_s") == close_s - candle_tf * 60
+        and close_s * 1000 <= ms < (close_s + candle_tf * 60) * 1000
         and 0 < bid <= ask
         and min(wick, sl) > 0
         and (wick - sl) * sign > 0
@@ -728,13 +742,22 @@ def make_views(c):
         did: dict(
             zip(
                 (*CROSS_SHARED, *SEND_FIELDS),
-                (CROSS_POLICY, wick, sl, waiver, iso(ms), bid, ask),
+                (
+                    M1_POLICY if receipts[did][1].startswith("m") else CROSS_POLICY,
+                    wick,
+                    sl,
+                    waiver,
+                    iso(ms),
+                    bid,
+                    ask,
+                ),
                 strict=True,
             )
         )
         for did, wick, sl, waiver, ms, bid, ask in c.execute(
             "SELECT * FROM cross_receipts WHERE send_ms>0"
         )
+        if did in receipts
     }
     notes = defaultdict(list)
     for sy, number, ms, why in c.execute(
@@ -785,6 +808,7 @@ def make_views(c):
         sy = a["symbol"]
         side = ("BUY", "SELL")[a["typ"]]
         refs = set()
+        minute_flags = set()
         sources = set()
         brackets, proofs = [], []
         for d in ins:
@@ -792,16 +816,19 @@ def make_views(c):
             k = tag(d["comment"])
             if k:
                 refs.add(k)
+                minute_flags.add(d["comment"].startswith("m"))
                 sources.add("Entry comment")
             if meta and meta[0] == sy and meta[2] == side:
                 k = tag(meta[1])
                 refs.add(k)
+                minute_flags.add(meta[1].startswith("m"))
                 sources.add("Bot receipt")
                 brackets.append((meta[3], meta[4]))
                 if k and d["id"] in cross:
                     proofs.append(cross[d["id"]])
         start = a["ms"]
-        link = next(iter(refs)) if len(refs) == 1 else None
+        link = next(iter(refs)) if len(refs) == 1 and len(minute_flags) == 1 else None
+        is_minute = minute_flags == {True}
         model = ""
         gid = ""
         r = None
@@ -883,7 +910,13 @@ def make_views(c):
             )
             if link:
                 is_live = stamp >= LIVE_KEY_MIN
-                r["entry_timing"] = "live_hull_cross" if is_live else "confirmed_close"
+                r["entry_timing"] = (
+                    "live_hull_cross"
+                    if is_live
+                    else "confirmed_m1_close"
+                    if is_minute
+                    else "confirmed_close"
+                )
                 r["signal_trigger_utc"] = iso(trigger_ms(stamp))
                 if not is_live:
                     # All component fills must have exact, non-conflicting receipts.
@@ -900,7 +933,9 @@ def make_views(c):
                         (sy, tf, stamp, side), (None, "", "")
                     )
                 if bar_end is not None:
-                    r["signal_bar_open_utc"] = iso((bar_end - tf * 60) * 1000)
+                    r["signal_bar_open_utc"] = iso(
+                        (bar_end - (1 if is_minute else tf) * 60) * 1000
+                    )
                     r["signal_bar_end_utc"] = iso(bar_end * 1000)
             # The audit contains the position ticket but no exit deal ID. Show the
             # request separately, never overwrite the final broker deal reason.

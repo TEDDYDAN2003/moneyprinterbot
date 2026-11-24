@@ -4,7 +4,9 @@ This is the **Dynamic Hull scanner, its trade journal, and its read-only chart t
 
 [Download the current desk](downloads/Dynamic-Hull-Desk.zip) · [Operating guide](docs/HULL_DEMO.md) · [Journal setup](HullJournal/START-HERE.md) · [Profile picker](docs/Hull-demo-start.html)
 
-## How a trade works
+**Earlier entries on M1:** [M1 trigger, parent structure and Windows restart](docs/HULL_M1.md). A confirmed M1 cross uses M5/M15/M30/M45 parent direction, with one symbol batch and immediate observed opposite-M1 protection. `--m1-confirm` selects this mode; do not add M1 as an independent trading lane.
+
+## How a trade works in legacy parent-close mode
 
 1. **Watch one instrument and one timeframe at a time.** Each selected symbol has independent M15, M30 and M45 lanes with their own structure and positions. M45 is three consecutive M15 candles aligned to the broker’s D1 open. An incomplete group is not a closed M45 candle.
 2. **Confirm the cross.** The close-based Hull B must cross above the selected Hull A for a BUY, or below for a SELL. In the default Dynamic/16 setup, A uses lows in bullish structure and highs in bearish structure. Only trade in the confirmed direction; never enter on neutral structure or on an MSS (market-structure shift) alone. A cross that vanishes before the candle closes opens **nothing**.

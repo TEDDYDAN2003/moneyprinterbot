@@ -20,7 +20,7 @@ from bot.broker import (
 from bot.config.entry_sessions import EntrySessionVeto, sessions_for_runner
 from bot.hull.hours import Hours
 
-from .config import COUNTS, FIXED, LADDER, TARGET_POLICY, TF_NAME
+from .config import COUNTS, FIXED, LADDER, M1_MODE, TARGET_POLICY, TF_NAME
 from .entry_clock import FAST_POLL_S, WAITING, TimingBlock, check_quote, utc
 from .ladder import Protection, executable, inside
 from .ladder_desk import TicketLadders, opened_ms
@@ -112,6 +112,11 @@ class Desk:
         self.hours = Hours(cfg)
         self.ladders = TicketLadders(self)
         self.last_service = time.monotonic()
+        self.open_lanes = (
+            set()
+        )  # refreshed by verified inventory; used only to schedule protective reads
+        self.minute_watch = None
+        self.minute_policy_key = None
         self.verify_signal = (
             None  # installed by the native scanner; mandatory for live orders
         )
@@ -199,7 +204,7 @@ class Desk:
                 polls=window.polls,
                 disposition="fresh_quote",
                 previous_wait=window.last_wait_reason,
-                **check.audit(d.tf),
+                **check.audit(d.candle_tf),
             )
         return q, check.checked
 
@@ -269,6 +274,7 @@ class Desk:
                 owner
                 and owner["symbol"] == name
                 and owner["magic"] == self.h.magic
+                and reading.trigger_tf != 1
                 and owner["tf"] != reading.tf
             ):
                 continue
@@ -283,10 +289,12 @@ class Desk:
             raise Block("timeframe_not_eligible")
         if not d.entry_side:
             raise Block(d.entry_reason)
+        if d.trigger_tf == 1 and self.minute_invalidated(name, d):
+            raise Block("opposite_after_m1_cross")
         if self.mss_book.get(name, {}).get(str(d.tf), -1) >= d.signal_s:
             raise Block("confirmed_mss_exit")
         if any(
-            x["symbol"] == name and x.get("tf") in (None, d.tf)
+            x["symbol"] == name and (d.trigger_tf == 1 or x.get("tf") in (None, d.tf))
             for x in self.exits.values()
         ):
             raise Block("opposite_exit_not_confirmed_flat")
@@ -309,6 +317,11 @@ class Desk:
         here = [(r, self.owners.lane(r)) for r in ps if r.symbol == name]
         if any(tf is None for _, tf in here):
             raise Block("unattributed_hull_position_review")
+        if d.trigger_tf == 1 and any(
+            tf != d.tf or self.owners.minute_source(r) != d.active_source
+            for r, tf in here
+        ):
+            raise Block("symbol_busy_or_batch_changed")
         tickets = {r.ticket for r, tf in here if tf == d.tf}
         if tickets != (expected or set()):
             if stage == "first_plan" and any(
@@ -490,6 +503,73 @@ class Desk:
             return 0
         return self._protect(name, reading.tf, reading.signal_msc, reading.label)
 
+    def minute_fence(self, name, src, opposite):
+        fences = self.state.get("m1_exit_fences", {}).get(name, {})
+        return max(
+            fences.get(f"{src}:{opposite}", -1), fences.get(f"all:{opposite}", -1)
+        )
+
+    def minute_invalidated(self, name, r):
+        return self.minute_fence(name, r.active_source, -r.label) >= r.signal_msc
+
+    def minute_opposite(self, name, signs, stamp, *, live, active_sources=()):
+        """Latch verified raw signals before querying inventory; broker exits may complete later."""
+        if (
+            name not in self.syms
+            or not signs
+            or any(s not in (-1, 1) for s in signs.values())
+        ):
+            return 0
+        fences = self.state.setdefault("m1_exit_fences", {}).setdefault(name, {})
+        fresh = {
+            src: side
+            for src, side in signs.items()
+            if fences.get(f"{src}:{side}", -1) < stamp
+        }
+        broadcast = {
+            side
+            for src, side in signs.items()
+            if src in active_sources and fences.get(f"all:{side}", -1) < stamp
+        }
+        if not fresh and not broadcast:
+            return 0
+        fences.update({f"all:{side}": stamp for side in broadcast})
+        fences.update({f"{src}:{side}": stamp for src, side in fresh.items()})
+        self.persist()
+        for key, window in list(self.waiting.items()):
+            if (
+                key[0] == name
+                and window.reading.trigger_tf == 1
+                and self.minute_invalidated(name, window.reading)
+            ):
+                self.cancel_wait(*key, "opposite_after_m1_cross")
+        ps = self.mt.positions_get() if self.armed else ()
+        matched = []
+        for p in ps or ():
+            if p.symbol != name or not self.owned(p) or not 0 < opened_ms(p) <= stamp:
+                continue
+            src = self.owners.minute_source(p)
+            opposite = -1 if p.type == self.typ(1) else 1
+            if src and (fresh.get(src) == opposite or opposite in broadcast):
+                self._reserve_exit(p, self.owners.lane(p), "opposite_m1_hull", stamp)
+                matched.append(p)
+        if matched:
+            self.persist()
+        for p in matched:
+            self._service_exit(p, self.exits[str(p.ticket)])
+        self.emit(
+            "m1_raw_exit_signal",
+            symbol=name,
+            trigger_tf=1,
+            trigger_msc=stamp,
+            phase="live" if live else "closed",
+            crosses=fresh,
+            broadcast_sides=sorted(broadcast),
+            matched_positions=len(matched),
+            inventory_available=ps is not None,
+        )
+        return len(matched)
+
     def close_mss(self, name, reading):
         """Confirmed native structure shift. Fence the lane before any replacement.
 
@@ -596,6 +676,7 @@ class Desk:
         if not self.armed:
             return
         ps, _ = snapshot(self.mt)
+        self.open_lanes = {(p.symbol, self.owners.lane(p)) for p in ps if self.owned(p)}
         goals = self.state.setdefault("target_by_ticket", {})
         active = {
             str(p.ticket) for p in ps
@@ -612,7 +693,13 @@ class Desk:
             if self.owned(p) and str(p.ticket) not in self.exits:
                 tf = self.owners.lane(p)
                 stamp = self.mss_book.get(p.symbol, {}).get(str(tf), -1) * 1000
-                if tf is not None and 0 < opened_ms(p) <= stamp:
+                src = self.owners.minute_source(p)
+                opp = -1 if p.type == self.typ(1) else 1
+                m1stamp = self.minute_fence(p.symbol, src, opp) if src else -1
+                if src and 0 < opened_ms(p) <= m1stamp:
+                    self._reserve_exit(p, tf, "opposite_m1_hull", m1stamp)
+                    recovered = True
+                elif tf is not None and 0 < opened_ms(p) <= stamp:
                     self._reserve_exit(p, tf, "confirmed_lane_mss", stamp)
                     recovered = True
         if recovered:
@@ -660,7 +747,7 @@ class Desk:
             self.persist()
         self.last_service = time.monotonic()
 
-    def finalize(self, name, tf, plan, res, expected):
+    def finalize(self, name, tf, plan, res, expected, *, minute_source=None):
         mt = self.mt
         self.account()
         if (
@@ -698,9 +785,12 @@ class Desk:
             or p.price_open <= 0
         ):
             return None, "fill_not_reconciled"
-        if not self.owners.bind(p, tf):
+        if not self.owners.bind(
+            p, tf, minute_source=minute_source, minute_policy=self.minute_policy_key
+        ):
             return None, "lane_identity_not_reconciled"
         self.persist()
+        self.open_lanes.add((name, tf))
         if self.h.exit_policy == FIXED:
             self.state.setdefault("target_by_ticket", {})[str(p.ticket)] = plan.goal_usd
             self.persist()
@@ -805,8 +895,20 @@ class Desk:
             return "not_dynamic_hull_signal"
         if TF_NAME.get(d.tf) not in self.h.eligible_timeframes:
             return "timeframe_not_eligible"
+        if (self.h.execution_mode == M1_MODE) != (d.trigger_tf == 1):
+            return "execution_mode_mismatch"
         if not d.entry_side:
             return d.entry_reason
+        if d.trigger_tf == 1:
+            if (
+                self.verify_signal is None
+                or d.anchor_s != d.close_s - 60
+                or d.detected_s is None
+                or d.stop_tick_size is None
+            ):
+                return "m1_signal_unverified"
+            if self.state.get("m1_consumed", {}).get(name, -1) >= d.close_s:
+                return "already_consumed"
         bars = self.state.setdefault("dynamic_entry_bars", {}).setdefault(name, {})
         bar_id = f"{d.tf}:{d.side}"
         if bars.get(bar_id, -1) >= d.close_s:
@@ -822,6 +924,8 @@ class Desk:
         self.cancel_wait(name, d.tf, "first_quote_wait_superseded")
         # Reserve ONCE before touching broker order APIs. Only the original,
         # in-memory first-quote window may resume this reservation. A restart cannot.
+        if d.trigger_tf == 1:
+            self.state.setdefault("m1_consumed", {})[name] = d.close_s
         seen[str(d.tf)] = d.signal_s
         bars[bar_id] = d.close_s
         self.persist()
@@ -898,7 +1002,7 @@ class Desk:
                     "magic": self.h.magic,
                     "type_time": self.mt.ORDER_TIME_GTC,
                     "type_filling": _filling_mode(self.mt, i),
-                    "comment": f"h{d.tf}_{d.close_s}_{sent + 1}",
+                    "comment": f"{'m' if d.trigger_tf == 1 else 'h'}{d.tf}_{d.close_s}_{sent + 1}",
                 }
                 chk = self.mt.order_check(req)
                 a = self.account()
@@ -952,6 +1056,15 @@ class Desk:
                     "signal": d.signal_s,
                     **d.clock_fields(),
                     "leg": sent + 1,
+                    **(
+                        {
+                            "trigger_tf": 1,
+                            "m1_source": d.active_source,
+                            "parent_tf": d.tf,
+                        }
+                        if d.trigger_tf == 1
+                        else {}
+                    ),
                     "target_policy": TARGET_POLICY,
                     "initial_goal_usd": plan.goal_usd,
                     "entry_spread_usd": plan.entry_spread_usd,
@@ -985,7 +1098,30 @@ class Desk:
                     self.state.pop("manual_hold")  # no send was made
                     self.persist()
                     continue
+                submit = time.time()
+                if d.trigger_tf == 1:
+                    # Do not allow a slow precheck/persist to carry this quote across a deadline.
+                    try:
+                        final_check = self._quote_clock(gate, window, q3, "submit")
+                        gate.require("submit", decision=final_check.checked)
+                        if self.syms[name][1].session == "configured" and (
+                            why := self.hours.status(final_check.checked)[0]
+                        ):
+                            raise Block(why)
+                        if (
+                            final_check.checked >= d.close_s + 60
+                            or self.kill.exists()
+                            or self.minute_invalidated(name, d)
+                        ):
+                            raise Block("final_quote_or_safety_changed")
+                    except (Block, EntrySessionVeto):
+                        self.state.pop("manual_hold")
+                        self.persist()
+                        raise
+                    submit = final_check.checked
+                start_call = time.monotonic()
                 res = self.mt.order_send(req)
+                call_ms = (time.monotonic() - start_call) * 1000
                 self.emit(
                     "demo_result",
                     symbol=name,
@@ -997,6 +1133,15 @@ class Desk:
                     request=req,
                     **d.clock_fields(),
                     **d.entry_audit(),
+                    **(
+                        {
+                            "close_to_submit_ms": round((submit - d.close_s) * 1000, 3),
+                            "order_send_roundtrip_ms": round(call_ms, 3),
+                            "submit_utc": utc(submit),
+                        }
+                        if d.trigger_tf == 1
+                        else {}
+                    ),
                     send_check_utc=utc(checked),
                     entry_session=self.session_gate(name).report(checked),
                     send_tick_time_msc=int(q3.time_msc),
@@ -1011,7 +1156,14 @@ class Desk:
                     price=getattr(res, "price", None),
                     deal=getattr(res, "deal", None),
                 )
-                ticket, status = self.finalize(name, d.tf, plan, res, expected)
+                ticket, status = self.finalize(
+                    name,
+                    d.tf,
+                    plan,
+                    res,
+                    expected,
+                    minute_source=d.active_source if d.trigger_tf == 1 else None,
+                )
                 if ticket is None:
                     return status + "_manual_hold"
                 expected.add(ticket)
@@ -1022,6 +1174,8 @@ class Desk:
                 if sent == n:
                     return "demo_batch_sent"
                 self.service_if_due()
+                if self.minute_watch is not None:
+                    self.minute_watch(name)
         except TimingBlock as exc:
             check = exc.check
             wait = (
@@ -1037,7 +1191,7 @@ class Desk:
                     polls=window.polls,
                     disposition="wait" if wait else "reject",
                     previous_wait=window.last_wait_reason,
-                    **check.audit(d.tf),
+                    **check.audit(d.candle_tf),
                 )
             if wait:
                 window.last_wait_reason = check.reason

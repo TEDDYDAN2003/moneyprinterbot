@@ -1,5 +1,7 @@
 # Hull Ledger | Analytics edition · Windows quick start
 
+**M1 execution mode:** see [the two-clock policy and restart checklist](../docs/HULL_M1.md). Its M1 trigger, parent ownership, initial stop and audit fields differ from the original parent-close mode described below. Chart marks are not M1 fills.
+
 A read-only journal for the Hull bot’s **actual MT5 hedging-demo fills**. It does not send orders, subscribe to TradingView, change the scanner, or require a cloud/database account. A BUY arrow, shadow plan or attempted order is never a trade in this ledger.
 
 ## Upgrade an existing journal without losing history

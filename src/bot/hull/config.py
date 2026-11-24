@@ -27,6 +27,9 @@ FIXED = "fixed_tp"
 TARGET_POLICY = "base_plus_entry_spread_v1"  # all newly opened Hull tickets, never retrofit saved goals
 DYNAMIC_HULL_LENGTH = 16  # shared base period for the active scanner
 CLOSE_TIMING = "confirmed_cross_next_bar"
+M1_MODE = "m1_parent_structure"
+M1_STOP = "confirmed_m1_cross_candle_wick_v1"
+M1_POLICY = "m1_close_parent_structure_single_batch_v1"
 STOP_POLICY = "confirmed_cross_candle_wick_v1"
 ENTRY_POLICY = "fc_dynamic_failed_mss_return_v3"
 BATCH_ENTRY_POLICY = "first_eligible_while_lane_flat_v2"
@@ -106,6 +109,7 @@ class Limits(Strict):
 
 
 class HullConfig(Strict):
+    execution_mode: Literal["parent_close", "m1_parent_structure"] = "parent_close"
     entry_timing: Literal["confirmed_cross_next_bar"] = CLOSE_TIMING
     eligible_timeframes: tuple[str, ...] = ()  # no default trading authorization
     exit_policy: Literal["profit_ladder_70_30_v1", "fixed_tp"] = LADDER

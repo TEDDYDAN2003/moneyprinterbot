@@ -1,5 +1,7 @@
 # Desktop agent: starting Dynamic Hull
 
+**M1 execution mode:** see [the two-clock policy and restart checklist](HULL_M1.md). Its M1 trigger, parent ownership, initial stop and audit fields differ from the original parent-close mode described below. Chart marks are not M1 fills.
+
 **On every start, restart, profile change or arming request, first open/read `docs/Hull-demo-start.html` in this checkout and follow the [root README](../README.md).** If you cannot render the page, read its source; if it or the Hull CLI is missing, stop and get the updated checkout. Use the operator’s pasted selection, **not** whichever boxes are checked by default on a freshly opened page. The page formats text only; it cannot connect to MT5 or start a process.
 
 ### Check the checkout before reusing an observer

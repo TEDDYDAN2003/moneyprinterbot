@@ -18,5 +18,5 @@ Write-Host "--- VALIDATE CONFIG ---"
 if ($LASTEXITCODE -ne 0) { throw 'Invalid config.' }
 
 Write-Host "--- HULL PREFLIGHT ---"
-& $py -m bot.cli hull-preflight --config $cfg @profiles
+& $py -m bot.cli hull-preflight --config $cfg --m1-confirm @profiles
 if ($LASTEXITCODE -ne 0) { throw 'Preflight failed.' }

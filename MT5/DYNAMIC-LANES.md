@@ -1,5 +1,7 @@
 # FC Dynamic Hull 16 • MT5 lane indicator
 
+**M1 execution mode:** see [the two-clock policy and restart checklist](../docs/HULL_M1.md). Its M1 trigger, parent ownership, initial stop and audit fields differ from the original parent-close mode described below. Chart marks are not M1 fills.
+
 **Chart display only — not an EA or a second order manager.** The Python Hull companion is the only component that can send demo orders. The `.mq5` does not use trading, account, file or network APIs, and does not need Algo Trading enabled.
 
 1. In MT5 Desktop select **File → Open Data Folder → MQL5 → Indicators**. Copy `FC-Dynamic-Hull-Lanes.mq5` there.
