@@ -22,7 +22,10 @@ hull:
   execution_mode: paired_structure  # both the parent and its own trigger must agree
   eligible_timeframes: [M5, M10, M15]  # native parent -> trigger: 5->3, 10->5, 15->10
   entry_timing: confirmed_cross_next_bar  # entries on fresh post-close quotes only; live crosses still protect
-  exit_policy: profit_ladder_70_30_v1  # unchanged: each leg's frozen base + entry spread
+  entry_route: market_next_quote  # alternative: direct_retest_limit; preflight & observe the chosen route
+  retest_fraction: 0.20  # fraction of the body or near wick, measured from the trigger close
+  retest_atr_cap: 0.10  # maximum pullback in units of the closed trigger ATR
+  exit_policy: profit_ladder_70_30_v1  # frozen base + spread: placement quote for limits, entry quote for market orders
   enabled: [XAUUSD]
   magic: 26111825
   indicator:

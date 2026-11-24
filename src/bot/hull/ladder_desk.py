@@ -40,7 +40,7 @@ class TicketLadders:
     def needs_review(self):
         return any(r.get("pending") or r.get("hold") for r in self.book.values())
 
-    def enroll(self, p, plan, tp):
+    def enroll(self, p, plan, tp, *, target_policy=TARGET_POLICY):
         # Called only after a *new* fill and its protection have been reconciled.
         key = str(p.ticket)
         self.d.state.setdefault("ladder_by_ticket", {})[key] = {
@@ -52,7 +52,7 @@ class TicketLadders:
             "side": plan.side,
             "entry": float(p.price_open),
             "lots": float(p.volume),
-            "target_policy": TARGET_POLICY,
+            "target_policy": target_policy,
             "configured_target_usd": plan.configured_target_usd,
             "entry_spread_usd": plan.entry_spread_usd,
             "base_usd": plan.goal_usd,

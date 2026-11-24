@@ -26,6 +26,7 @@ from .config import (
     LADDER,
     PAIR_MODE,
     PAIRS,
+    RETEST,
     TARGET_POLICY,
     TF_NAME,
 )
@@ -43,6 +44,8 @@ from .orders import (
     valid_cash,
 )
 from .ownership import Owners
+from .retest import make_retest_plan
+from .retest_desk import RetestDesk
 from .signal import Reading
 
 
@@ -131,6 +134,11 @@ class Desk:
         self.exits = self.state.setdefault("opposite_exits", {})
         self.owners = Owners(state)
         self.mss_book = state.setdefault("last_lane_mss_exit", {})
+        self.retest = RetestDesk(self) if h.entry_route == RETEST else None
+        if armed and self.retest is None and state.get("retest_batches_v1"):
+            raise DemoSafetyError(
+                "Unresolved retest orders need their original manager; do not switch entry routes"
+            )
         self.waiting: dict[
             tuple[str, int], FirstQuoteWindow
         ] = {}  # never restored after restart
@@ -138,6 +146,10 @@ class Desk:
     def persist(self):
         if self.armed:
             save(self.path, self.state)
+
+    @staticmethod
+    def now():
+        return time.time()
 
     def account(self):
         return identity_check(self.mt, self.mode, self.armed, self.ident)
@@ -154,8 +166,9 @@ class Desk:
         )
 
     def exposure(self, ps, os):
-        if os:
+        if os and not self.retest:
             raise Block("pending_orders_present")
+        pending = self.retest.reserved(os, ps) if self.retest else Exposure()
         risk = 0.0
         for p in ps:
             if not self.owned(p) or not (p.sl > 0 and p.tp > 0):
@@ -165,7 +178,11 @@ class Desk:
                 0.0,
                 -valid_cash(self.cash(p.symbol), side, p.volume, p.price_open, p.sl),
             )
-        return Exposure(len(ps), sum(p.volume for p in ps), risk)
+        return Exposure(
+            len(ps) + pending.count,
+            sum(p.volume for p in ps) + pending.lots,
+            risk + pending.risk,
+        )
 
     def session_gate(self, name):
         return self.sessions.bind(name, self.syms[name][0])
@@ -360,16 +377,28 @@ class Desk:
         if not _side_is_allowed(mt, i, "BUY" if d.side == 1 else "SELL"):
             raise Block("broker_side_disabled")
         q, _ = self._entry_quote(name, window, stage)
-        plan = make_plan(d, p, grid, q.bid, q.ask, self.cash(name))
+        plan = (
+            make_retest_plan(d, p, grid, q.bid, q.ask, self.cash(name), self.h)
+            if self.retest
+            else make_plan(d, p, grid, q.bid, q.ask, self.cash(name))
+        )
         margin = _finite_or_none(
             mt.order_calc_margin(self.typ(d.side), name, p.lots, plan.entry)
         )
         free = _finite_or_none(getattr(a, "margin_free", None))
         min_legs = min(COUNTS[p.rate]) if remaining is None else remaining
 
+        rows, unfunded = (
+            self.retest.pending_terms(a, os, ps) if self.retest else ((), 0.0)
+        )
+
         def funding_veto(n):
+            if self.retest and (
+                veto := self.retest.broker_room(rows, name, d.side, plan, n, a, i)
+            ):
+                return veto
             projected = (
-                free - n * margin
+                free - unfunded - n * margin
                 if free is not None and margin is not None and margin >= 0
                 else None
             )
@@ -527,7 +556,7 @@ class Desk:
         """Latch and immediately service raw opposite signals. No entry/stop/zone gate."""
         now = time.time()
         if (
-            not self.armed
+            (not self.armed and not self.retest)
             or not isinstance(reading, Reading)
             or reading.trigger_tf
             is not None  # never treat an attached child label as a parent cross
@@ -699,6 +728,8 @@ class Desk:
 
     def _protect(self, name, tf, stamp, raw_side, *, bias=0, child=None):
         shift = raw_side == 0
+        if self.retest:
+            self.retest.interrupt(name, tf, stamp, raw_side, child=child)
         close = stamp // 1000
         ps = self.mt.positions_get() if self.armed else ()
         if ps is None:
@@ -773,16 +804,22 @@ class Desk:
         # batch or scan is slow. Never interleave amendments into an entry send.
         if (
             self.armed
-            and (self.ladders.book or self.exits)
+            and (
+                self.ladders.book or self.exits or (self.retest and self.retest.active)
+            )
             and time.monotonic() - self.last_service >= FAST_POLL_S
         ):
             self.supervise()
 
     def supervise(self):
+        if self.retest:
+            self.retest.service()
         if not self.armed:
             return
         ps, _ = snapshot(self.mt)
         self.open_lanes = {(p.symbol, self.owners.lane(p)) for p in ps if self.owned(p)}
+        if self.retest:
+            self.open_lanes.update(self.retest.lanes())
         goals = self.state.setdefault("target_by_ticket", {})
         active = {
             str(p.ticket) for p in ps
@@ -900,6 +937,31 @@ class Desk:
             getattr(p, "identifier", p.ticket),
         ):
             return None, "opening_order_not_reconciled"
+        return self.enroll_fill(
+            name,
+            tf,
+            plan,
+            p,
+            ps,
+            os,
+            minute_source=minute_source,
+            pair_child=pair_child,
+        )
+
+    def enroll_fill(
+        self,
+        name,
+        tf,
+        plan,
+        p,
+        ps,
+        os,
+        *,
+        minute_source=None,
+        pair_child=None,
+        target_policy=TARGET_POLICY,
+    ):
+        mt = self.mt
         grid = Grid.from_info(mt.symbol_info(name))
         tol = grid.tick * 1e-6
         if (
@@ -987,7 +1049,7 @@ class Desk:
                 return None, "target_alignment_unverified"
         if self.h.exit_policy == LADDER:
             # Do not enroll a pre-existing, partial, unknown or unverified ticket.
-            self.ladders.enroll(p, plan, tp)
+            self.ladders.enroll(p, plan, tp, target_policy=target_policy)
         return p.ticket, "ok"
 
     def cancel_wait(self, name, tf, reason):
@@ -1027,6 +1089,8 @@ class Desk:
             return "execution_mode_mismatch"
         if not d.entry_side:
             return d.entry_reason
+        if self.retest and (reason := self.retest.blocked(name)):
+            return reason
         if d.trigger_tf is not None:
             if (
                 self.verify_signal is None
@@ -1105,6 +1169,8 @@ class Desk:
                     raise Block("final_quote_or_safety_changed")
                 if n is None:
                     n = left
+                    if self.retest:
+                        return self.retest.stage(name, window, plan, n, q, i)
                     preview_s = time.time()
                     self.session_gate(name).require("batch_preview", decision=preview_s)
                     self.emit(
@@ -1364,6 +1430,25 @@ class Desk:
             )
         except Block as exc:
             why = str(exc)
+            # No order exists. Only a positive, insufficient placement gap may wait;
+            # an observed touch, a failed broker request or any other veto is terminal.
+            if (
+                self.retest
+                and n is None
+                and why == "retest_placement_gap"
+                and time.monotonic() < window.end_mono
+                and time.time() < d.signal_s + self.lim.max_entry_age_s
+            ):
+                if window.last_wait_reason != why:
+                    self.emit(
+                        "retest_wait_for_legal_gap",
+                        symbol=name,
+                        tf=d.tf,
+                        signal=d.close_s,
+                    )
+                window.last_wait_reason = why
+                self.waiting[(name, d.tf)] = window
+                return WAITING
         if why == "manual_reconciliation_required":
             return why
         return (

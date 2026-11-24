@@ -35,6 +35,10 @@ py -3 .\journal.py --open-browser
 
 `--repo` is optional: it only reads the account-specific `reports/hull_runtime/<account-key>/demo.jsonl`. Without it, intact Hull entry comments supply the timeframe/leg. Extra log details, such as an initial requested SL/TP and the market-structure setup, may be blank. No account credentials go in the code or the CSV. With multiple terminals, pass `--terminal-path 'C:\…\terminal64.exe'` for the actual installation. Use `--magic` if you changed the default Hull entry magic **26111825**; do not reuse a magic shared with other strategies.
 
+## Direct-retest fills
+
+The [optional retest route](../docs/HULL_RETEST.md) uses `r<parent>x<child>_<close>_<leg>` and `confirmed_pair_retest_limit`, separate from `p…` market batches. An exact match on opening deal, order, position ID, symbol, side, magic, volume, price and time is required to attach retest evidence. A visible tag alone is not proof. New optional detail columns: `retest_limit`, `cross_candle_close`, `retest_segment`, `retest_expiry_utc`, `submit_to_fill_ms` (the last is ticket-only; differing component values stay blank). A completed retest setup needs the terminal batch settlement's exact fill IDs and fully closed broker volume. Without enough evidence a legitimate closed ticket can exist without a completed setup. A plan, pending acknowledgement, touch or expiration is never a ticket or P/L row. Old CSVs still import; keep the same SQLite checkpoint.
+
 ## Files and timing
 
 | File | What it means |

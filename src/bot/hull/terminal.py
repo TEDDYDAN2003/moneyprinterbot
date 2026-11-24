@@ -14,6 +14,7 @@ from pathlib import Path
 from bot.broker import DemoSafetyError, _account_order_lock
 from bot.config.entry_sessions import sessions_for_runner
 
+from . import retest
 from .config import (
     BATCH_ENTRY_POLICY,
     COUNTS,
@@ -23,6 +24,7 @@ from .config import (
     NATIVE_TF,
     PAIR_MODE,
     PAIRS,
+    RETEST,
     RETIRED_LIMITS,
     TARGET_POLICY,
     TF_NAME,
@@ -320,6 +322,9 @@ def run(
         raise ValueError(
             "Paired execution needs native M5/M10/M15 parent structure and structure_timeframe: null"
         )
+    limits_mode = h.entry_route == RETEST
+    if limits_mode and not paired:
+        raise ValueError("direct_retest_limit requires paired_structure")
     pairs = {p: PAIRS[p] for p in frames} if paired else {}
     native_frames = (
         tuple(sorted(set(frames) | set(pairs.values()))) if paired else frames
@@ -363,6 +368,11 @@ def run(
                 session_issues.append(f"{name} ({code}): {gate.issue}; no new entries")
             specs[name] = {
                 "key": code,
+                **(
+                    {"retest_capability": retest.capability(mt, i) or "supported"}
+                    if limits_mode
+                    else {}
+                ),
                 "bid_chart_verified": getattr(i, "chart_mode", None)
                 == getattr(mt, "SYMBOL_CHART_MODE_BID", 0),
                 **p.model_dump(),
@@ -400,7 +410,18 @@ def run(
             "timeframes": [TF_NAME[f] for f in frames],
             "structure_timeframe": h.indicator.structure_timeframe or "Chart",
             "new_ticket_exit_policy": h.exit_policy,
-            "new_ticket_target_policy": TARGET_POLICY,
+            "new_ticket_target_policy": retest.GOAL if limits_mode else TARGET_POLICY,
+            "entry_route": h.entry_route,
+            **(
+                {
+                    "limit_policy": retest.POLICY,
+                    "retest_fraction": h.retest_fraction,
+                    "retest_atr_cap": h.retest_atr_cap,
+                    "fill_expiration": "successor_trigger_close_or_earlier_session_end",
+                }
+                if limits_mode
+                else {}
+            ),
             "execution_mode": h.execution_mode,
             "trigger_timeframe": "per_parent"
             if paired
@@ -451,6 +472,11 @@ def run(
             "retired_limits": list(RETIRED_LIMITS),
             "indicator": h.indicator.model_dump(),
         }
+        unsupported = [
+            n
+            for n, x in specs.items()
+            if limits_mode and x["retest_capability"] != "supported"
+        ]
         if preflight:
             from bot.broker import snapshot
 
@@ -458,7 +484,9 @@ def run(
             summary["open_positions"] = len(ps)
             summary["pending_orders"] = len(os)
             summary["history_check"] = {}
-            issues = list(session_issues)
+            issues = list(session_issues) + [
+                n + ": " + specs[n]["retest_capability"] for n in unsupported
+            ]
             legacy = [k for k in RETIRED_LIMITS if k in cfg["hull"].get("limits", {})]
             if legacy:
                 issues.append(
@@ -597,6 +625,10 @@ def run(
             summary["review_before_demo"] = issues
         print(json.dumps(summary, indent=2, allow_nan=False), flush=True)
         if preflight:
+            if unsupported:
+                raise DemoSafetyError(
+                    "Retest pending capability unverified: " + ", ".join(unsupported)
+                )
             if session_issues:
                 raise DemoSafetyError("; ".join(session_issues))
             if minute_mode and not summary["m1_history_ready"]:
@@ -687,6 +719,22 @@ def run(
                         record = skip_book.setdefault(name, {}).setdefault(str(tf), {})
                         lane.h.gate.bind(record, d.persist if armed else None)
 
+            if d.retest:
+                d.retest.recover(frames)
+                if (
+                    armed
+                    and unsupported
+                    and not (
+                        d.retest.active
+                        or d.exits
+                        or d.ladders.book
+                        or state.get("target_by_ticket")
+                    )
+                ):
+                    raise DemoSafetyError(
+                        "Required broker limit/bracket/specified-expiry capability missing: "
+                        + ", ".join(unsupported)
+                    )
             if armed and (
                 paired or any(rec.get("trigger_tf") for rec in d.owners.book.values())
             ):
@@ -734,7 +782,12 @@ def run(
                         raise DemoSafetyError(
                             "Open paired-origin ticket needs its original symbol, parent/trigger and indicator settings; do not change managers while open"
                         )
-                    if paired and child is None and (origin or pos.magic == h.magic):
+                    if (
+                        paired
+                        and child is None
+                        and (origin or pos.magic == h.magic)
+                        and not (d.retest and d.retest.claims(pos))
+                    ):
                         raise DemoSafetyError(
                             "Unverified or legacy Hull exposure: do not switch to paired execution while open"
                         )
@@ -795,6 +848,8 @@ def run(
 
                 d.watch_other_symbols = other_protection
             d.verify_signal = verify
+            if d.retest:
+                locks.callback(d.retest.shutdown)
             num = 0
             sync = 0.0
             history_ok = not armed

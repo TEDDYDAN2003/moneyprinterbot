@@ -12,7 +12,7 @@ import sqlite3
 import tempfile
 from collections import defaultdict
 from datetime import UTC, datetime
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, Decimal
 from pathlib import Path
 
 from hull_analytics import add_dimensions
@@ -48,9 +48,16 @@ TAG = re.compile(r"h([1-9]\d{0,3})_(\d{9,11})_([1-9]\d{0,3})\Z")
 MINUTE_TAG = re.compile(r"m(5|15|30|45)_(\d{9,11})_([1-9]\d{0,3})\Z")
 # Journal is standalone; accepting historical tags never authorizes trading.
 PAIRS = {5: 3, 10: 5, 15: 10}
-PAIR_TAG = re.compile(r"p(5|10|15)x(3|5|10)_(\d{9,11})_([1-9]\d{0,3})\Z")
+PAIR_TAG = re.compile(r"[pr](5|10|15)x(3|5|10)_(\d{9,11})_([1-9]\d{0,3})\Z")
 PAIR_STOP = "confirmed_pair_trigger_candle_wick_v1"
 PAIR_ENTRY = "closed_pair_structure_cross_v1"
+RETEST_FIELDS = (
+    "retest_limit",
+    "cross_candle_close",
+    "retest_segment",
+    "retest_expiry_utc",
+    "submit_to_fill_ms",
+)
 PAIR_SHARED = ("parent_structure_close_utc", "confirmed_pair_bias")
 LIVE_TAG = re.compile(r"i([1-9]\d{0,3})_([1-9]\d{11,13})_([1-9]\d{0,3})\Z")
 LIVE_KEY_MIN = 10**11  # disjoint from every accepted legacy seconds key
@@ -65,7 +72,7 @@ CROSS_SHARED = (
     "mss_skip_exception",
 )
 SEND_FIELDS = ("send_quote_utc", "send_bid", "send_ask")
-LOG_FORMAT = 6  # incremental index: replay available demo.jsonl once, do not reset broker history
+LOG_FORMAT = 7  # incremental index: replay available demo.jsonl once, do not reset broker history
 CASH = ("gross_profit", "commission", "swap", "fee")
 FIELDS = [
     "schema_version",
@@ -115,6 +122,7 @@ FIELDS = [
     *SEND_FIELDS,
     "trigger_timeframe",
     *PAIR_SHARED,
+    *RETEST_FIELDS,
 ]
 NUMERIC = {
     "schema_version",
@@ -135,6 +143,9 @@ NUMERIC = {
     "frozen_cross_sl",
     "send_bid",
     "send_ask",
+    "retest_limit",
+    "cross_candle_close",
+    "submit_to_fill_ms",
 }
 REASONS = {
     0: "Desktop",
@@ -197,6 +208,9 @@ def db_open(path):
       CREATE TABLE IF NOT EXISTS receipts(id TEXT PRIMARY KEY,symbol TEXT, tag TEXT,side TEXT,sl TEXT,tp TEXT);
       CREATE TABLE IF NOT EXISTS cross_receipts(id TEXT PRIMARY KEY, wick TEXT NOT NULL, sl TEXT NOT NULL,
           waiver TEXT NOT NULL, send_ms INTEGER NOT NULL, bid TEXT NOT NULL, ask TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS retest_windows(symbol TEXT,tf INTEGER,signal INTEGER,PRIMARY KEY(symbol,tf,signal));
+      CREATE TABLE IF NOT EXISTS retest_deals(id TEXT PRIMARY KEY,evidence TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS retest_settled(symbol TEXT,tf INTEGER,signal INTEGER,side TEXT,deals TEXT NOT NULL,PRIMARY KEY(symbol,tf,signal,side));
       CREATE TABLE IF NOT EXISTS pair_context(id TEXT PRIMARY KEY,parent_close INTEGER NOT NULL,bias INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS pair_finished(symbol TEXT,tf INTEGER,signal INTEGER,outcome TEXT,PRIMARY KEY(symbol,tf,signal));
       CREATE TABLE IF NOT EXISTS labels(symbol TEXT,tf INTEGER,signal INTEGER,side TEXT,model TEXT,
@@ -269,7 +283,7 @@ def tf_name(minutes):
 
 def tag(s):
     text = str(s or "")
-    if text.startswith("p"):
+    if text.startswith(("p", "r")):
         m = PAIR_TAG.fullmatch(text)
         if not m:
             return None
@@ -396,6 +410,217 @@ def index_cross_receipt(c, ev, vals, ref):
         raise ValueError("Conflicting cross-candle receipts for the same deal")
 
 
+def index_retest(c, ev, magic):
+    """Store only confirmed-fill evidence. make_views independently joins broker deal fields."""
+    sy = ev["symbol"]
+    tf = ev["tf"]
+    stamp = ev["signal"]
+    child = ev["trigger_tf"]
+    if PAIRS.get(tf) != child or not isinstance(stamp, int):
+        raise ValueError("invalid retest pair")
+    if ev["event"] == "retest_batch_settled":
+        ids = ev["fill_deals"]
+        n = ev["planned"]
+        states = ev["outcomes"]
+        sign = ev["side"]
+        if not (
+            isinstance(ids, list)
+            and all(type(v) is int and v > 0 for v in ids)
+            and len(set(ids)) == len(ids)
+            and sign in (-1, 1)
+            and isinstance(n, int)
+            and 1 <= n <= 10
+            and len(states) <= n
+            and set(states)
+            <= {
+                "filled",
+                "flat",
+                "partial_flatten",
+                "rejected",
+                "expired",
+                "cancelled",
+                "not_sent",
+            }
+            and bool(ids)
+            == any(x in ("filled", "flat", "partial_flatten") for x in states)
+        ):
+            raise ValueError("invalid settled batch")
+        key = (sy, tf, stamp, "BUY" if sign == 1 else "SELL")
+        value = enc(sorted(str(v) for v in ids))
+        old = c.execute(
+            "SELECT deals FROM retest_settled WHERE symbol=? AND tf=? AND signal=? AND side=?",
+            key,
+        ).fetchone()
+        if old and old[0] != value:
+            value = "null"  # ambiguous: no complete setup
+        c.execute(
+            "INSERT OR REPLACE INTO retest_settled VALUES(?,?,?,?,?)", (*key, value)
+        )
+        return
+    q = ev["request"]
+    a = ev["audit"]
+    bar = ev["trigger_bar"]
+    leg = ev["leg"]
+    sgn = a["entry_side"]
+    tag_text = q["comment"]
+    tick, atr, fraction, cap = (
+        dec(ev[k]) for k in ("tick", "atr", "fraction", "atr_cap")
+    )
+    price, sl, tp, qty = (dec(q[k]) for k in ("price", "sl", "tp", "volume"))
+    fill, vol, bid, ask = (
+        dec(ev[k]) for k in ("price", "fill_lots", "send_bid", "send_ask")
+    )
+    o, h, l, close = (dec(bar[k]) for k in ("o", "h", "l", "c"))
+    wick = l if sgn == 1 else h
+    body = sgn * (close - o) > 0
+    span = abs(close - o) if body else close - l if sgn == 1 else h - close
+    depth = sgn * (close - price)
+    upper = min(span, cap * atr)
+    wanted = max(tick, min(upper, fraction * span))
+    submit, send, filled, exp = (
+        ev[k] for k in ("submit_ms", "send_ms", "fill_ms", "expiry")
+    )
+    entry_age = dec(ev["max_entry_age_s"])
+    quote_age = dec(ev["max_quote_age_s"])
+    did = ev["deal"]
+    parent_end = a["parent_structure_close_s"]
+    if not (
+        all(
+            type(v) is int and v > 0
+            for v in (ev["order"], ev["position_id"], did, submit, send, filled, exp)
+        )
+        and ev["entry_route"] == "direct_retest_limit"
+        and ev["pricing_policy"] == "confirmed_pair_direct_retest_v1"
+        and sgn in (-1, 1)
+        and tag_text.startswith("r")
+        and tag(tag_text) == (tf, stamp, leg)
+        and q["symbol"] == sy
+        and q["magic"] == magic
+        and q["action"] == 5
+        and q["type"] == (2 if sgn == 1 else 3)
+        and q["type_time"] == 2
+        and q["type_filling"] == 2
+        and q["expiration"] == exp
+        and type(leg) is int
+        and 1 <= leg <= 10
+        and a["entry_policy"] == PAIR_ENTRY
+        and a["initial_stop_policy"] == PAIR_STOP
+        and a["entry_reason"] == "ready"
+        and a["parent_tf"] == tf
+        and a["trigger_tf"] == child
+        and a["trigger_structure_close_s"] == stamp
+        and a["trigger_structure_bias"] == a["parent_structure_bias"] == sgn
+        and 0 <= stamp - parent_end < tf * 60
+        and bar["t"] == a["cross_candle_open_s"] == stamp - child * 60
+        and 0 < l <= min(o, close) <= max(o, close) <= h
+        and tick > 0
+        and atr > 0
+        and 0 < fraction <= 1
+        and 0 < cap <= 1
+        and tick <= depth <= upper
+        and price
+        == tick
+        * max(
+            (min(close - sgn * tick, close - sgn * upper) / tick).to_integral_value(
+                rounding=ROUND_CEILING
+            ),
+            min(
+                (max(close - sgn * tick, close - sgn * upper) / tick).to_integral_value(
+                    rounding=ROUND_FLOOR
+                ),
+                ((close - sgn * wanted) / tick).to_integral_value(
+                    rounding=ROUND_HALF_UP
+                ),
+            ),
+        )
+        and ev["segment"]
+        == ("body" if body else "lower_wick" if sgn == 1 else "upper_wick")
+        and sl == dec(a["frozen_cross_sl"])
+        and wick == dec(a["cross_candle_wick"])
+        and (wick - sl) * sgn >= tick
+        and min(sl, price, tp, fill) > 0
+        and all(v % tick == 0 for v in (sl, price, tp))
+        and sgn * (tp - price) >= tick
+        and 0 < vol <= qty
+        and 0 < bid <= ask
+        and sgn * ((ask if sgn == 1 else bid) - price) >= tick
+        and sgn * (fill - price) <= 0
+        and a.get("mss_skip_exception") in ("", None, "failed_counter_mss_return")
+        and 0 < entry_age <= 30
+        and 0 < quote_age <= 15
+        and stamp * 1000 <= send <= submit <= stamp * 1000 + entry_age * 1000
+        and submit - send <= quote_age * 1000
+        and submit <= filled < exp * 1000
+        and exp <= stamp + child * 60
+    ):
+        raise ValueError("invalid pending fill receipt")
+    proof = {
+        "meta": [sy, tag_text, "BUY" if sgn == 1 else "SELL", plain(sl), plain(tp)],
+        "broker": [
+            str(ev["order"]),
+            str(ev["position_id"]),
+            filled,
+            plain(fill),
+            plain(vol),
+            magic,
+        ],
+        "fields": dict(
+            zip(
+                (*CROSS_SHARED, *SEND_FIELDS, *PAIR_SHARED),
+                (
+                    PAIR_STOP,
+                    plain(wick),
+                    plain(sl),
+                    a.get("mss_skip_exception") or "",
+                    iso(send),
+                    plain(bid),
+                    plain(ask),
+                    iso(parent_end * 1000),
+                    "bullish" if sgn == 1 else "bearish",
+                ),
+                strict=True,
+            )
+        ),
+    }
+    proof["fields"].update(
+        zip(
+            RETEST_FIELDS,
+            (
+                plain(price),
+                plain(close),
+                ev["segment"],
+                iso(exp * 1000),
+                str(filled - submit),
+            ),
+            strict=True,
+        )
+    )
+    value = enc(proof)
+    key = str(did)
+    old = c.execute("SELECT evidence FROM retest_deals WHERE id=?", (key,)).fetchone()
+    if old and old[0] != value:
+        value = "null"
+    c.execute("INSERT OR REPLACE INTO retest_deals VALUES(?,?)", (key, value))
+
+
+def matching_retest(evidence, deal):
+    if not evidence or deal["typ"] not in (0, 1) or deal["ent"] != 0:
+        return False
+    return (
+        evidence["broker"]
+        == [
+            deal["order"],
+            deal["pid"],
+            deal["ms"],
+            plain(deal["price"]),
+            plain(deal["volume"]),
+            deal["magic"],
+        ]
+        and evidence["meta"][0] == deal["symbol"]
+        and evidence["meta"][2] == ("BUY", "SELL")[deal["typ"]]
+    )
+
+
 def import_log(c, path, magic):
     """Optional exact joins from the account-scoped ARMED log. Never use a preview as a fill."""
     if path is None or not path.is_file():
@@ -428,6 +653,8 @@ def import_log(c, path, magic):
                 w in line
                 for w in (
                     b'"demo_result"',
+                    b'"retest_fill_receipt"',
+                    b'"retest_batch_settled"',
                     b'"closed_label"',
                     b'"live_hull_cross"',
                     b'"label_decision"',
@@ -442,7 +669,9 @@ def import_log(c, path, magic):
                     continue  # same account's audit can contain several strategy identities
                 typ = ev["event"]
                 sy = str(ev["symbol"])
-                if typ == "demo_result":
+                if typ in ("retest_fill_receipt", "retest_batch_settled"):
+                    index_retest(c, ev, magic)
+                elif typ == "demo_result":
                     q = ev["request"]
                     key = str(int(ev.get("deal") or 0))
                     parsed = tag(q.get("comment"))
@@ -450,6 +679,7 @@ def import_log(c, path, magic):
                         int(key) > 0
                         and ("retcode" not in ev or ev["retcode"] in (10009, 10010))
                         and parsed
+                        and not q["comment"].startswith("r")
                         and int(q["magic"]) == magic
                         and q["symbol"] == sy
                         and int(q["type"]) in (0, 1)
@@ -601,6 +831,11 @@ def sync(c, mt, now, *, days=30, magic=MAGIC, repo=None, reconcile=False):
         tracked = {x[0] for x in c.execute("SELECT pid FROM tracked")}
         receipt_tags = dict(c.execute("SELECT id,tag FROM receipts"))
         receipt_ids = receipt_tags.keys()
+        retest = {
+            k: json.loads(v)
+            for k, v in c.execute("SELECT id,evidence FROM retest_deals")
+        }
+        retest_windows = set(c.execute("SELECT symbol,tf,signal FROM retest_windows"))
         windows = set(c.execute("SELECT symbol,signal FROM windows"))
         covered_from = min(start, floor if floor is not None else start)
         events = defaultdict(dict)
@@ -695,13 +930,30 @@ def sync(c, mt, now, *, days=30, magic=MAGIC, repo=None, reconcile=False):
             # A long-lived ticket can close inside the backfill but open before it. Fetch its
             # original signal window to find siblings (including legs already flat before the window).
             for ent in entries:
-                ref = tag(ent["comment"]) or tag(receipt_tags.get(ent["id"]))
+                evidence = retest.get(ent["id"])
+                verified = matching_retest(evidence, ent)
+                text = (
+                    ent["comment"]
+                    if tag(ent["comment"])
+                    else evidence["meta"][1]
+                    if verified
+                    else receipt_tags.get(ent["id"])
+                )
+                ref = tag(text)
                 sy = ent["symbol"]
                 if not ref:
                     continue
-                stamp = ref[1]
+                tf, stamp, _ = ref
+                resting = text.startswith("r")
                 lower, upper = signal_window(stamp)
-                if lower >= covered_from or upper > now or (sy, stamp) in windows:
+                if resting:
+                    upper = stamp + PAIRS[tf] * 60
+                known_window = (
+                    (sy, tf, stamp) in retest_windows
+                    if resting
+                    else (sy, stamp) in windows
+                )
+                if lower >= covered_from or upper > now or known_window:
                     continue
                 related = mt.history_deals_get(dt(lower - 1), dt(upper + 1))
                 if related is None:
@@ -724,8 +976,15 @@ def sync(c, mt, now, *, days=30, magic=MAGIC, repo=None, reconcile=False):
                         events[d["pid"]][d["id"]] = d
                         if d["pid"] not in visited:
                             queue.append(d["pid"])
-                windows.add((sy, stamp))
-                c.execute("INSERT OR IGNORE INTO windows VALUES(?,?)", (sy, stamp))
+                if resting:
+                    retest_windows.add((sy, tf, stamp))
+                    c.execute(
+                        "INSERT OR IGNORE INTO retest_windows VALUES(?,?,?)",
+                        (sy, tf, stamp),
+                    )
+                else:
+                    windows.add((sy, stamp))
+                    c.execute("INSERT OR IGNORE INTO windows VALUES(?,?)", (sy, stamp))
                 dirty = True
             if (
                 entries
@@ -806,6 +1065,13 @@ def make_views(c):
     active = set(get(c, "active", []))
     floor = get(c, "floor")
     receipts = {r[0]: r[1:] for r in c.execute("SELECT * FROM receipts")}
+    retest = {
+        k: json.loads(v) for k, v in c.execute("SELECT id,evidence FROM retest_deals")
+    }
+    settled = {
+        (sy, tf, ts, side): json.loads(v)
+        for sy, tf, ts, side, v in c.execute("SELECT * FROM retest_settled")
+    }
     cross = {
         did: dict(
             zip(
@@ -858,6 +1124,7 @@ def make_views(c):
         (s, t, stamp): o for s, t, stamp, o in c.execute("SELECT * FROM pair_finished")
     }
     windows = set(c.execute("SELECT symbol,signal FROM windows"))
+    retest_windows = set(c.execute("SELECT symbol,tf,signal FROM retest_windows"))
     live_meta = get(c, "active_meta", {})
     raw = defaultdict(list)
     for pid, body in c.execute("SELECT pid,body FROM deals"):
@@ -894,6 +1161,10 @@ def make_views(c):
         brackets, proofs = [], []
         for d in ins:
             meta = receipts.get(d["id"])
+            evidence = retest.get(d["id"])
+            if matching_retest(evidence, d) and not meta:
+                meta = evidence["meta"]
+                proofs.append(evidence["fields"])
             k = tag(d["comment"])
             if k:
                 refs.add(k)
@@ -910,16 +1181,23 @@ def make_views(c):
         start = a["ms"]
         link = next(iter(refs)) if len(refs) == 1 and len(tag_kinds) == 1 else None
         is_minute = tag_kinds == {"m"}
-        paired = tag_kinds == {"p"}
+        pending = tag_kinds == {"r"}
+        paired = tag_kinds == {"p"} or pending
         model = ""
         gid = ""
         r = None
         if link:
             tf, stamp, _leg = link
             lane = f"{tf_name(tf)}>{tf_name(PAIRS[tf])}" if paired else tf_name(tf)
+            if pending:
+                lane = "R:" + lane
             gid = f"{sy}|{lane}|{stamp}|{side}"
             model = (
-                ("paired_structure_cross" if len(proofs) == len(ins) else "")
+                (
+                    ("direct_retest_limit" if pending else "paired_structure_cross")
+                    if len(proofs) == len(ins)
+                    else ""
+                )
                 if paired
                 else labels.get((sy, tf, stamp, side), "")
             )
@@ -1000,6 +1278,8 @@ def make_views(c):
                 r["entry_timing"] = (
                     "live_hull_cross"
                     if is_live
+                    else "confirmed_pair_retest_limit"
+                    if pending
                     else "confirmed_pair_close"
                     if paired
                     else "confirmed_m1_close"
@@ -1011,7 +1291,12 @@ def make_views(c):
                     # All component fills must have exact, non-conflicting receipts.
                     # Never infer these fields from a start time or the nearest setup.
                     if len(proofs) == len(ins):
-                        for k in (*CROSS_SHARED, *SEND_FIELDS, *PAIR_SHARED):
+                        for k in (
+                            *CROSS_SHARED,
+                            *SEND_FIELDS,
+                            *PAIR_SHARED,
+                            *(RETEST_FIELDS if pending else ()),
+                        ):
                             vs = {v[k] for v in proofs}
                             if len(vs) == 1:
                                 r[k] = vs.pop()
@@ -1061,7 +1346,7 @@ def make_views(c):
             if not link:
                 unlinked += 1
         if link:
-            members[(sy, tf, stamp, side, paired)].append(r)
+            members[(sy, tf, stamp, side, "r" if pending else paired)].append(r)
     missing = defaultdict(set)
     for did, (sy, comment, side, _, _) in receipts.items():
         ref = tag(comment)
@@ -1071,6 +1356,8 @@ def make_views(c):
     for key, rs in members.items():
         sy, tf, stamp, side, paired = key
         begin_window, end_window = signal_window(stamp)
+        if paired == "r":
+            end_window = max(end_window, stamp + PAIRS[tf] * 60)
         result = (pair_finished if paired else finished).get((sy, tf, stamp), "")
         # A receipt without a broker deal, an unresolved sibling or any open leg prevents completion.
         final_receipt = (
@@ -1084,11 +1371,26 @@ def make_views(c):
         blocked = (
             None in rs
             or key in missing
-            or (floor > begin_window and (sy, stamp) not in windows)
+            or (
+                floor > begin_window
+                and (
+                    (sy, tf, stamp) not in retest_windows
+                    if paired == "r"
+                    else (sy, stamp) not in windows
+                )
+            )
             or any(
                 a <= end_window and b >= begin_window for a, b in unknown.get(sy, [])
             )
         )
+        if paired == "r":
+            ids = sorted(
+                did for x in rs if x is not None for did in x["entry_deals"].split(";")
+            )
+            final_receipt = settled.get((sy, tf, stamp, side)) == ids and all(
+                x and x["setup_type"] == "direct_retest_limit" for x in rs
+            )
+            blocked = blocked or not final_receipt
         if blocked or (not final_receipt and now < end_window):
             wait += 1
             if not blocked and now < end_window:
@@ -1110,7 +1412,13 @@ def make_views(c):
             ticket_count=str(len(rs)),
             setup_type=first["setup_type"]
             if not paired
-            or all(x["setup_type"] == "paired_structure_cross" for x in rs)
+            or all(
+                x["setup_type"]
+                == (
+                    "direct_retest_limit" if paired == "r" else "paired_structure_cross"
+                )
+                for x in rs
+            )
             else "",
             **{
                 k: first[k]
@@ -1140,7 +1448,11 @@ def make_views(c):
         )
         # A setup may have many executable quotes. Leave those ticket-only; show
         # stop evidence only if ALL of its settled tickets agree on the same stop.
-        shared = (*CROSS_SHARED, *PAIR_SHARED)
+        shared = (
+            *CROSS_SHARED,
+            *PAIR_SHARED,
+            *(RETEST_FIELDS[:-1] if paired == "r" else ()),
+        )
         frozen = {tuple(x[k] for k in shared) for x in rs}
         if len(frozen) == 1:
             r.update(zip(shared, frozen.pop(), strict=True))

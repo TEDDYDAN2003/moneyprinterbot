@@ -61,6 +61,8 @@ class Reading:
         None  # native, immutable close-time evidence for paired mode
     )
 
+    cross_bar: Bar | None = None  # immutable trigger OHLC; never a forming candle
+
     @property
     def paired(self):
         return self.trigger_tf is not None and PAIRS.get(self.tf) == self.trigger_tf
@@ -435,5 +437,6 @@ class Hull:
             curves.get("high", (None, 0))[1],
             tick,
             stop_tick_size=self.tick_size if anchor is not None else None,
+            cross_bar=c if anchor is not None else None,
         )
         return r if self.price_only else self.gate.apply(r, observe=observe_first)

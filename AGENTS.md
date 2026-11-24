@@ -1,5 +1,7 @@
 # Dynamic Hull: replay charts, run the demo or sync the journal
 
+**Entry route:** market orders remain the default. For paired candle-relative BUY/SELL limits, use the [direct retest guide](docs/HULL_RETEST.md). Changes and tests do not authorize arming.
+
 **Active Python desk:** [paired entries, child exits and private-YAML migration](docs/HULL_PAIRS.md). M5 → M3, M10 → M5, M15 → M10. No M1 trigger; M30/M45 are historical/study frames, not active parents. [Previous M1 release](docs/HULL_M1.md).
 
 **Wickless is a separate bot:** for `WICKLESS OBSERVE`, use the pasted Wickless JSON and the [Wickless operator guide](docs/WICKLESS.md), not Hull profiles, tickets or commands. Ordinary setup, implementation and test requests never send orders.

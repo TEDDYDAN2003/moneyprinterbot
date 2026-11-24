@@ -196,6 +196,7 @@ class PairBook:
             and cr.label != -r.side
             and cr.active_source == r.active_source
             and c is not None
+            and (r.cross_bar is None or r.cross_bar == c)
             and c.t == r.anchor_s == r.close_s - r.candle_tf * 60
             and r.anchor == (c.l if r.side == 1 else c.h)
             and r.stop_tick_size == child.tick_size
@@ -351,7 +352,12 @@ class PairBook:
         return True
 
     def poll(self, d, name, clock, *, history_ok, bid_chart):
+        retest = getattr(d, "retest", None)
         if not bid_chart:
+            if retest and name in retest.active:
+                retest.invalidate(
+                    retest.active[name], "unverified_bid_chart", flatten=True
+                )
             self.pending.clear()
             self.wait_notice.clear()
             for sym, tf in list(d.waiting):
@@ -363,6 +369,19 @@ class PairBook:
             r = self._refresh(d, name, tf, lane, clock)
             if r is not None:
                 closed.append(r)
+        if retest and name in retest.active:
+            b = retest.active[name]
+            relevant = (b["parent"], b["child"])
+            now = clock()
+            if not history_ok or any(
+                not self.healthy.get(f)
+                or not asof(self.streams[f].h.structure.view, f, now)
+                or self.streams[f].h.structure.view.bias != b["side"]
+                for f in relevant
+            ):
+                retest.invalidate(
+                    b, "pending_pair_context_unavailable_or_changed", flatten=True
+                )
         for r in closed:
             self._protect(d, name, r)
         self.watch(d, name, clock, all_triggers=True)

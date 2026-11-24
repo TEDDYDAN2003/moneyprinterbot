@@ -54,6 +54,9 @@ def tape(
     delay=None,
     missing=None,
     neutral=None,
+    broker=None,
+    route=None,
+    on_phase=None,
 ):
     symbols = sorted(set(parents) | {PAIRS[p] for p in parents})
     signs = signs or {}
@@ -91,7 +94,7 @@ def tape(
             return 1995
         return 2000.0
 
-    mt = MT()
+    mt = MT() if broker is None else broker
     mt.i.trade_tick_size = 0.025
 
     def rates(name, tf, pos, count):
@@ -129,6 +132,8 @@ def tape(
 
     def pause(_):
         phase[0] += 1
+        if on_phase:
+            on_phase(mt, phase[0], now())
 
     mt.copy_rates_from_pos = rates
     mt.symbol_info_tick = tick
@@ -150,6 +155,8 @@ def tape(
     scanner_clock(mp, now, pause)
     cfg = load_yaml(ROOT / "config.yaml")
     cfg["run"]["mode"] = "demo"
+    if route:
+        cfg["hull"]["entry_route"] = route
     cfg["hull"].update(eligible_timeframes=[f"M{p}" for p in parents])
     cfg["hull"]["indicator"]["swing_len"] = 1
     if case == "mismatch_chart":

@@ -1,5 +1,7 @@
 # Dynamic Hull → protected MT5 demo tickets
 
+**Entry route:** market orders remain the default. For paired candle-relative BUY/SELL limits, use the [direct retest guide](HULL_RETEST.md). Changes and tests do not authorize arming.
+
 **Active Python desk:** [paired entries, child exits and private-YAML migration](HULL_PAIRS.md). M5 → M3, M10 → M5, M15 → M10. No M1 trigger; M30/M45 are historical/study frames, not active parents. [Previous M1 release](HULL_M1.md).
 
 `trade`, `demo` and `trade-all` run the Python companion for Windows MT5 Desktop, not an Expert Advisor. No webhook or database is required. The template selects M5/M10/M15 as parents; M3/M5/M10 supply their respective triggers. The descriptions of historical parent-close trades are not an extra source of entries. Install only when flat, with no unresolved exposure or running manager to interrupt.

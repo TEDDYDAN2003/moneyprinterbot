@@ -24,6 +24,7 @@ SIGNAL_TF = {"M5": 5, "M15": 15, "M30": 30, "M45": 45}
 # Parent -> native trigger. These are exact pairs, not independent execution lanes.
 PAIRS = {5: 3, 10: 5, 15: 10}
 PAIR_FRAMES = {f"M{p}": p for p in PAIRS}
+RETEST = "direct_retest_limit"
 PAIR_MODE = "paired_structure"
 PAIR_STOP = "confirmed_pair_trigger_candle_wick_v1"
 PAIR_POLICY = "closed_pair_structure_cross_v1"
@@ -126,6 +127,11 @@ class HullConfig(Strict):
     ] = "parent_close"
     entry_timing: Literal["confirmed_cross_next_bar"] = CLOSE_TIMING
     eligible_timeframes: tuple[str, ...] = ()  # no default trading authorization
+    entry_route: Literal["market_next_quote", "direct_retest_limit"] = (
+        "market_next_quote"
+    )
+    retest_fraction: float = Field(0.20, gt=0, le=1)
+    retest_atr_cap: float = Field(0.10, gt=0, le=1)
     exit_policy: Literal["profit_ladder_70_30_v1", "fixed_tp"] = LADDER
     indicator: Indicator = Indicator()
     limits: Limits = Limits()
@@ -183,6 +189,8 @@ class HullConfig(Strict):
         st = NATIVE_TF.get(self.indicator.structure_timeframe)
         if self.eligible_timeframes:
             self.lanes()  # reject an incompatible allowlist even before terminal initialization
+        if self.entry_route == RETEST and self.execution_mode != PAIR_MODE:
+            raise ValueError("direct_retest_limit requires paired_structure")
         if self.execution_mode == PAIR_MODE and st:
             raise ValueError(
                 "paired_structure requires each chart's own structure: set structure_timeframe: null"

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "xauusd-adaptive-bot"
-version = "0.4.0"
+version = "0.5.0"
 description = "Dynamic Hull 16 MT5 demo scanner and independent Wickless M15 companion"
 requires-python = ">=3.11"
 dependencies = [
