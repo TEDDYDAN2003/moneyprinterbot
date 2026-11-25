@@ -15,8 +15,12 @@ from bot.hull.orders import Block, Grid, target
 NAME = "XAUUSDm"
 
 
-def filled(hull_desk, side=1, *, base=10.0, lots=0.1, single=True, slip=None):
+def filled(
+    hull_desk, side=1, *, base=10.0, lots=0.1, single=True, slip=None, early=None
+):
     mt, d, log = hull_desk("medium")
+    if early is not None:
+        d.h = d.h.model_copy(update={"pre_ladder_breakeven": early})
     key, p = d.syms[NAME]
     d.syms[NAME] = (key, p.model_copy(update={"lots": lots, "target_usd": base}))
     mt.retprice = slip
@@ -50,11 +54,14 @@ def log_for(log, k):
 
 @pytest.mark.parametrize("side", [1, -1])
 @pytest.mark.parametrize("base,lots", [(10.0, 0.10), (25.0, 0.50)])
+@pytest.mark.parametrize("early", [None, False], ids=["default", "disabled"])
 def test_each_rung_from_actual_fill_and_original_per_ticket_cash(
-    hull_desk, side, base, lots
+    hull_desk, side, base, lots, early
 ):
     fill = 2000.12 if side == 1 else 1999.98
-    mt, d, log, p = filled(hull_desk, side, base=base, lots=lots, slip=fill)
+    mt, d, log, p = filled(
+        hull_desk, side, base=base, lots=lots, slip=fill, early=early
+    )
     r = d.ladders.book[str(p.ticket)]
     assert r["configured_target_usd"] == base
     assert r["entry_spread_usd"] == pytest.approx(0.1 * lots * 100)
@@ -67,12 +74,21 @@ def test_each_rung_from_actual_fill_and_original_per_ticket_cash(
     p.profit = 99 * base  # stale, even above the original goal; NOT the trigger
     quote(mt, p, 0.699 * base)
     d.supervise()
+    # Profit alone cannot set the halfway stop.
     assert (p.sl, p.tp) == initial and not mt.requests
+    quote(mt, p, 0)
+    d.supervise()  # now return to the actual fill
+    initial_amends = int(early is not False)
+    assert len(mt.requests) == initial_amends and r["rung"] == 0
+    half = (fill + initial[0]) / 2  # exact grid midpoint on these fills
+    expected_sl = pytest.approx(half) if initial_amends else initial[0]
+    assert (p.sl, p.tp) == (expected_sl, initial[1])
+    assert not log_for(log, "profit_ladder_step")
     for i in range(1, 9):
         trigger, lock, tp = percentages(i)
         quote(mt, p, base * trigger / 100)
         d.supervise()
-        assert len(mt.positions) == 1 and len(mt.requests) == i
+        assert len(mt.positions) == 1 and len(mt.requests) == initial_amends + i
         assert mt.requests[-1] == {
             "action": mt.TRADE_ACTION_SLTP,
             "position": p.ticket,
@@ -98,7 +114,7 @@ def test_each_rung_from_actual_fill_and_original_per_ticket_cash(
         d.supervise()
         quote(mt, p, base * (trigger - 5) / 100)
         d.supervise()
-        assert len(mt.requests) == i
+        assert len(mt.requests) == initial_amends + i
     assert (
         json.loads(d.path.read_text())["ladder_by_ticket"][str(p.ticket)]["rung"] == 8
     )
@@ -110,7 +126,8 @@ def test_executable_side_and_already_crossed_tp_or_stop_wins(hull_desk, side):
         mt, d, _, p = filled(hull_desk, side)
         quote(mt, p, 7.2, spread=0.2)
         d.supervise()
-        assert not mt.requests  # wrong quote side exceeds 70%
+        assert not mt.requests  # only the wrong quote side exceeds 70%; no pullback yet
+        assert d.ladders.book[str(p.ticket)]["rung"] == 0
         quote(mt, p, usd)
         d.supervise()
         assert not mt.requests and d.ladders.book[str(p.ticket)]["rung"] == 0
@@ -178,7 +195,8 @@ def test_fail_closed_without_loosening_or_adopting_positions(hull_desk, changed)
     elif changed == "future":
         mt.q.time_msc += 5000
     elif changed == "freeze":
-        mt.i.trade_freeze_level = 201  # desired lock only .10 behind bid
+        # Neither change is legal: the rung SL and the unmodified fill-floor TP are too close.
+        mt.i.trade_freeze_level = 401
     elif changed == "manual":
         p.magic = 77
     elif changed == "external_sl":
@@ -415,7 +433,13 @@ def test_tick_supervisor_runs_between_native_bar_closes_on_resumed_tickets(
     ][-n:]
     clock = [T + 30.0]
     mono = [450.0]
-    samples = [7.7, 11.0, 14.3]
+    samples = [
+        0.1,
+        0.0,
+        7.7,
+        11.0,
+        14.3,
+    ]  # profitable, pullback, then the original rungs
     sleeps = []
     quote(mt, p, samples[0], stamp=int(clock[0] * 1000) - 1)
 
@@ -436,7 +460,7 @@ def test_tick_supervisor_runs_between_native_bar_closes_on_resumed_tickets(
         (1,),
         armed=True,
         poll=10,
-        iterations=3,
+        iterations=len(samples),
     )
     events = [
         json.loads(l)
@@ -444,7 +468,7 @@ def test_tick_supervisor_runs_between_native_bar_closes_on_resumed_tickets(
         .read_text()
         .splitlines()
     ]
-    assert sleeps == [0.25, 0.25] and not any(
+    assert sleeps == [0.25] * 4 and not any(
         e["event"] == "closed_label" for e in events
     )
     assert [e["rung"] for e in events if e["event"] == "profit_ladder_step"] == [
@@ -455,6 +479,15 @@ def test_tick_supervisor_runs_between_native_bar_closes_on_resumed_tickets(
     assert all(req["action"] == mt.TRADE_ACTION_SLTP for req in mt.requests)
     summary = events[0]["summary"]
     assert summary["new_ticket_exit_policy"] == LADDER
+    assert (
+        summary["new_ticket_breakeven_policy"]
+        == "actual_fill_pullback_half_initial_risk_v1"
+    )
+    assert [
+        e["rung"]
+        for e in events
+        if e["event"] == "profit_ladder_pullback_half_confirmed"
+    ] == [0]
     assert summary["new_ticket_target_policy"] == "base_plus_entry_spread_v1"
     for view in summary["specs"][NAME]["target_preview_by_side"].values():
         assert view["initial_goal_usd"] == pytest.approx(11)

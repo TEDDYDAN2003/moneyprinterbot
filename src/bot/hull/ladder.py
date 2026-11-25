@@ -9,13 +9,15 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from decimal import Decimal
 
+from .config import FILL_BREAKEVEN, PULLBACK_HALF
 from .orders import Block, target, valid_cash
 
 
 @dataclass(frozen=True, slots=True)
 class Protection:
-    rung: int  # zero = original swing stop and 100% target
+    rung: int  # zero = no percentage step yet; TP is the original target
     sl: float
     tp: float
 
@@ -59,11 +61,10 @@ def inside(side, mark, pair):
     return side * (mark - pair.sl) > 0 and side * (pair.tp - mark) > 0
 
 
-def legal(grid, side, mark, old, new):
+def _legal_levels(grid, side, mark, old, new):
     gap, tol = max(grid.gap, grid.tick), grid.tick * 1e-6
     return (
         inside(side, mark, old)
-        and new.rung > old.rung
         and min(new.sl, new.tp) > 0
         and side * (new.sl - old.sl) >= 0
         and side * (new.tp - old.tp) >= 0
@@ -73,14 +74,61 @@ def legal(grid, side, mark, old, new):
     )
 
 
-def propose(grid, side, lots, entry, base, old, mark, cash):
-    """Next pair from this executable quote, or None; existing hard exits win ties/gaps."""
+def legal(grid, side, mark, old, new):
+    return new.rung > old.rung and _legal_levels(grid, side, mark, old, new)
+
+
+@dataclass(frozen=True, slots=True)
+class EarlyStop:
+    """A frozen policy and basis, supplied only when the ticket's quote history permits it."""
+
+    policy: str
+    initial_sl: float | None = None
+
+    def candidate(self, grid, side, entry, old, mark):
+        if (
+            old.rung != 0
+            or side not in (-1, 1)
+            or not math.isfinite(entry)
+            or entry <= 0
+        ):
+            return None
+        move = side * (mark - entry)
+        if self.policy == PULLBACK_HALF:
+            origin = self.initial_sl
+            if (
+                move > 0
+                or type(origin) not in (int, float)
+                or not math.isfinite(origin)
+                or origin <= 0
+                or side * (entry - origin) <= 0
+            ):
+                return None
+            # Use the *original broker SL*, never the current SL or the signal/limit price.
+            basis = (Decimal(str(entry)) + Decimal(str(origin))) / 2
+        elif self.policy == FILL_BREAKEVEN and move > 0:
+            basis = Decimal(str(entry))
+        else:
+            return None
+        # Round toward protection; never round in the direction of a larger loss.
+        sl = grid.price(grid.index(basis, up=side == 1))
+        if (
+            side * (Decimal(str(sl)) - basis) < 0
+            or side * (sl - old.sl) <= grid.tick * 1e-6
+        ):
+            return None
+        new = Protection(0, sl, old.tp)
+        return new if _legal_levels(grid, side, mark, old, new) else None
+
+
+def propose(grid, side, lots, entry, base, old, mark, cash, *, early=None):
+    """Prefer the standard rung. A pre-ladder amendment never extends TP."""
     if not inside(side, mark, old):
         return None
     profit = valid_cash(cash, side, lots, entry, mark)
     rung = reached(profit, base)
     if rung <= old.rung:
-        return None
+        return early.candidate(grid, side, entry, old, mark) if early else None
     _, lock_pct, tp_pct = percentages(rung)
     slope = profit / abs(mark - entry) if mark != entry else None
     sl, _ = target(
@@ -93,12 +141,24 @@ def propose(grid, side, lots, entry, base, old, mark, cash):
     better = max if side == 1 else min
     new = Protection(rung, better(sl, old.sl), better(tp, old.tp))
     if not legal(grid, side, mark, old, new):
+        if (
+            early
+            and (floor := early.candidate(grid, side, entry, old, mark)) is not None
+        ):
+            return floor
         raise Block("ladder_stops_or_freeze_distance")
     return new
 
 
-def still_valid(grid, side, lots, entry, base, old, new, mark, cash):
-    """Check again immediately before a modification, without pricing a different order."""
+def still_valid(grid, side, lots, entry, base, old, new, mark, cash, *, early=None):
+    """Revalidate the exact request. Never send a different pair on an old precheck."""
+    if new.rung == 0:
+        # If a full rung became executable during precheck, discard this weaker unsent request.
+        return (
+            early is not None
+            and propose(grid, side, lots, entry, base, old, mark, cash, early=early)
+            == new
+        )
     _, lock_pct, tp_pct = percentages(new.rung)
     return (
         legal(grid, side, mark, old, new)

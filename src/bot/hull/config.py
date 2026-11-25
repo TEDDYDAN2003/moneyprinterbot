@@ -30,6 +30,8 @@ PAIR_STOP = "confirmed_pair_trigger_candle_wick_v1"
 PAIR_POLICY = "closed_pair_structure_cross_v1"
 TF_NAME = {v: k for k, v in (NATIVE_TF | SIGNAL_TF | {"M8": 8}).items()}
 LADDER = "profit_ladder_70_30_v1"
+FILL_BREAKEVEN = "actual_fill_first_legal_quote_v1"  # previously enrolled tickets only
+PULLBACK_HALF = "actual_fill_pullback_half_initial_risk_v1"
 FIXED = "fixed_tp"
 TARGET_POLICY = "base_plus_entry_spread_v1"  # all newly opened Hull tickets, never retrofit saved goals
 DYNAMIC_HULL_LENGTH = 16  # shared base period for the active scanner
@@ -135,11 +137,18 @@ class HullConfig(Strict):
     retest_quote_drift_ticks: int = Field(1, ge=1, le=5000)  # max ticks price may move between plan and send without blocking
     retest_market_fallback: bool = False  # fall back to market order at current price if retest order is ruined before any leg fills
     exit_policy: Literal["profit_ladder_70_30_v1", "fixed_tp"] = LADDER
+    pre_ladder_breakeven: bool = Field(True, strict=True)  # frozen only at new ladder enrollment
     indicator: Indicator = Indicator()
     limits: Limits = Limits()
     magic: int = Field(26111825, gt=0, lt=2**31)
     enabled: tuple[str, ...] = ("XAUUSD",)
     symbols: dict[str, Profile] = Field(min_length=1)
+
+    @property
+    def new_ticket_breakeven_policy(self) -> str:
+        if self.exit_policy == LADDER and self.pre_ladder_breakeven:
+            return PULLBACK_HALF
+        return "off"
 
     @field_validator("indicator")
     @classmethod

@@ -26,6 +26,7 @@ hull:
   retest_fraction: 0.20  # fraction of the body or near wick, measured from the trigger close
   retest_atr_cap: 0.10  # maximum pullback in units of the closed trigger ATR
   exit_policy: profit_ladder_70_30_v1  # frozen base + spread: placement quote for limits, entry quote for market orders
+  pre_ladder_breakeven: true  # new ladder tickets only: after profit then a return to fill, halve the original stop distance
   enabled: [XAUUSD]
   magic: 26111825
   indicator:

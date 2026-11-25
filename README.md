@@ -18,6 +18,8 @@ By default, use the first valid quote of the **next entry-chart candle**. For th
 
 **Know the size before arming.** The paper template selects only XAUUSD at 0.10 lot and a $10 base **per ticket**. Slow requests 10 tickets; medium 4 or 3; fast 7 or 6. A fully filled slow gold batch is 1.00 lot, **not three batches**. The gross target adds a spread cushion in USD (entry quote for market orders; frozen placement quote for limits). The existing [per-ticket profit ladder](docs/HULL_DEMO.md#profit-ladder-for-new-tickets) and [entry sessions](docs/ENTRY_SESSIONS.md) still apply. The stop is a price rule, not a cash-loss ceiling. Configured funding/risk, drift and session checks still apply; no return or exact fill is promised.
 
+**Return-to-entry stop:** For new Hull ladder tickets, entry is a reference price, not a hard stop. After Bid (BUY) or Ask (SELL) first shows a gross profit and then returns to or crosses entry, the scanner can tighten SL halfway from the original stop to the actual fill, leaving TP unchanged. A buy filled at 100 with SL 90 can move to SL 95, not 100. A stronger profit-ladder stop still takes priority. On by default via `hull.pre_ladder_breakeven`; existing positions keep their saved policy. [Examples, limits and broker confirmation](docs/HULL_DEMO.md#profit-ladder-for-new-tickets).
+
 ## Start safely on Windows
 
 Open PowerShell in the **bot root** (the folder containing `config.yaml` and `HullJournal`). Keeping the same working directory matters: the scanner appends its audit files relative to it. For a new install:

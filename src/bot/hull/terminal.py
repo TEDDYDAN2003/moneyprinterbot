@@ -410,6 +410,7 @@ def run(
             "timeframes": [TF_NAME[f] for f in frames],
             "structure_timeframe": h.indicator.structure_timeframe or "Chart",
             "new_ticket_exit_policy": h.exit_policy,
+            "new_ticket_breakeven_policy": h.new_ticket_breakeven_policy,
             "new_ticket_target_policy": retest.GOAL if limits_mode else TARGET_POLICY,
             "entry_route": h.entry_route,
             **(

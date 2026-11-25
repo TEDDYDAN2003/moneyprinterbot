@@ -8,8 +8,16 @@ from dataclasses import asdict
 
 from bot.broker import fresh
 
-from .config import LADDER, TARGET_POLICY
-from .ladder import Protection, executable, inside, percentages, propose, still_valid
+from .config import FILL_BREAKEVEN, LADDER, PULLBACK_HALF, TARGET_POLICY
+from .ladder import (
+    EarlyStop,
+    Protection,
+    executable,
+    inside,
+    percentages,
+    propose,
+    still_valid,
+)
 from .orders import Block, Grid
 
 
@@ -24,6 +32,43 @@ def pair(record):
 def matches_levels(p, levels, grid):
     tol = grid.tick * 1e-6
     return abs(p.sl - levels.sl) <= tol and abs(p.tp - levels.tp) <= tol
+
+
+def early_policy(r):
+    # Never infer or migrate a policy from today's YAML. Old hard-BE tickets stay hard-BE.
+    if r["rung"] == 0:
+        policy = r.get("breakeven_policy")
+        if policy == PULLBACK_HALF and not r.get("pullback_half_confirmed"):
+            return policy
+        if policy == FILL_BREAKEVEN and not r.get("breakeven_confirmed"):
+            return policy
+    return None
+
+
+def profit_ms(r):
+    w = r.get("pullback_profit")
+    if w is None:
+        return 0
+    if (
+        not isinstance(w, dict)
+        or type(w.get("time_msc")) is not int
+        or w["time_msc"] < max(1, r["opened_msc"])
+        or type(w.get("mark")) not in (int, float)
+        or not math.isfinite(w["mark"])
+        or w["mark"] <= 0
+        or r["side"] * (w["mark"] - r["entry"]) <= 0
+    ):
+        raise Block("invalid_pullback_profit_evidence")
+    return w["time_msc"]
+
+
+def eligible_early(r, ms):
+    policy = early_policy(r)
+    if policy == FILL_BREAKEVEN:
+        return EarlyStop(policy)
+    if policy == PULLBACK_HALF and 0 < profit_ms(r) < ms:
+        return EarlyStop(policy, r.get("initial_sl"))
+    return None  # no second, chronologically distinct quote yet
 
 
 class TicketLadders:
@@ -45,6 +90,8 @@ class TicketLadders:
         key = str(p.ticket)
         self.d.state.setdefault("ladder_by_ticket", {})[key] = {
             "policy": LADDER,
+            "breakeven_policy": self.d.h.new_ticket_breakeven_policy,
+            "initial_sl": float(p.sl),  # verified once at enrollment
             "tf": self.d.owners.lane(p),
             "symbol": p.symbol,
             "identifier": int(getattr(p, "identifier", p.ticket)),
@@ -114,10 +161,41 @@ class TicketLadders:
         levels = pair(intent)
         if not self.same_position(p, key, r) or not matches_levels(p, levels, grid):
             return False
+        early = levels.rung == 0
+        if early:
+            kind = intent.get("kind")
+            context = eligible_early(r, intent["tick_time_msc"])
+            if context is None or kind != context.policy:
+                self.hold(key, r, "pre_ladder_intent_requires_review")
+                return False
+            # TP was sent verbatim; do not accept a partial bracket update.
+            if p.tp != levels.tp:
+                return False
+            if kind == PULLBACK_HALF:
+                if p.sl != levels.sl or context.initial_sl != intent.get("initial_sl"):
+                    return False
+                r["pullback_half_confirmed"] = True
+                event = "profit_ladder_pullback_half_confirmed"
+            else:
+                if r["side"] * (p.sl - r["entry"]) < 0:
+                    return False
+                r["breakeven_confirmed"] = True
+                event = "profit_ladder_breakeven_confirmed"
         r.update(**asdict(levels), confirmed_tick_msc=intent["tick_time_msc"])
         del r["pending"]
         self.d.persist()
         self.noted.pop(key, None)
+        if early:
+            self.d.emit(
+                event,
+                ticket=int(key),
+                symbol=p.symbol,
+                side=r["side"],
+                entry=r["entry"],
+                lots=r["lots"],
+                **intent,
+            )
+            return True
         trigger, lock, tp = percentages(levels.rung)
         self.d.emit(
             "profit_ladder_step",
@@ -137,7 +215,7 @@ class TicketLadders:
     def tick(self, q, r):
         if not fresh(q, time.time(), self.d.lim.max_quote_age_s):
             raise Block("ladder_quote_unavailable_or_stale")
-        if q.time_msc < max(r["opened_msc"], r["confirmed_tick_msc"]):
+        if q.time_msc < max(r["opened_msc"], r["confirmed_tick_msc"], profit_ms(r)):
             raise Block("ladder_out_of_order_quote")
         return executable(r["side"], q.bid, q.ask)
 
@@ -186,6 +264,10 @@ class TicketLadders:
             if not matches_levels(p, old, grid):
                 self.hold(key, r, "ladder_external_levels_review")
                 return
+            policy = early_policy(r)
+            if policy:
+                # Preserve the exact broker TP (not a reconstruction from the target or spread).
+                old = Protection(old.rung, p.sl, p.tp)
             if self.d.state.get("manual_hold"):
                 self.note(key, r, "manual_reconciliation_required")
                 return
@@ -202,10 +284,30 @@ class TicketLadders:
                 key, r, old, mark, q.time_msc
             ) or time.monotonic() < self.cooldown.get(key, 0):
                 return
+            if (
+                policy == PULLBACK_HALF
+                and not profit_ms(r)
+                and r["side"] * (mark - r["entry"]) > 0
+            ):
+                # Observation, not an order. Do not infer a prior excursion from candles,
+                # a different ticket, ask-on-BUY, bid-on-SELL, or a displayed profit.
+                r["pullback_profit"] = {"time_msc": int(q.time_msc), "mark": mark}
+                self.d.persist()
+                self.d.emit(
+                    "profit_ladder_pullback_profit_seen",
+                    ticket=int(key),
+                    symbol=name,
+                    entry=r["entry"],
+                    side=r["side"],
+                    **r["pullback_profit"],
+                )
+            early = eligible_early(r, q.time_msc)
             args = r["side"], r["lots"], r["entry"], r["base_usd"]
-            cache_key = (name, args, old, mark)
+            cache_key = (name, args, old, mark, early)
             if cache_key not in plans:
-                plans[cache_key] = propose(grid, *args, old, mark, self.d.cash(name))
+                plans[cache_key] = propose(
+                    grid, *args, old, mark, self.d.cash(name), early=early
+                )
             new = plans[cache_key]
             if new is not None:
                 self.modify(p, key, r, grid, old, new, args, q)
@@ -242,6 +344,15 @@ class TicketLadders:
             "tick_time_msc": int(sampled.time_msc),
             "mark": executable(r["side"], sampled.bid, sampled.ask),
         }
+        if new.rung == 0:
+            kind = early_policy(r)
+            r["pending"].update(kind=kind, previous_sl=old.sl)
+            if kind == PULLBACK_HALF:
+                r["pending"].update(
+                    initial_sl=r["initial_sl"],
+                    profit_tick_msc=profit_ms(r),
+                    profit_mark=r["pullback_profit"]["mark"],
+                )
         d.persist()
         d.account()
         try:
@@ -259,7 +370,19 @@ class TicketLadders:
                 last.time_msc < sampled.time_msc
                 or current_grid != grid
                 or self.barrier_seen(key, r, old, mark, last.time_msc)
-                or not still_valid(grid, *args, old, new, mark, d.cash(p.symbol))
+                or (
+                    new.rung == 0
+                    and (live[0].tp != new.tp or r["side"] * (new.sl - live[0].sl) <= 0)
+                )
+                or not still_valid(
+                    grid,
+                    *args,
+                    old,
+                    new,
+                    mark,
+                    d.cash(p.symbol),
+                    early=eligible_early(r, last.time_msc),
+                )
                 or not fresh(last, time.time(), d.lim.max_quote_age_s)
                 or d.kill.exists()
             ):
