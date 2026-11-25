@@ -55,6 +55,13 @@ REQUIRED = SINGLES | {
     "tests/test_hull_m1_execution.py",
     "docs/HULL_DEMO.md",
     "MT5/FC-Dynamic-Hull-Lanes.mq5",
+    "HullJournal/Start-Journal-Demo-Controls.cmd",
+    "HullJournal/demo_control.py",
+    "HullJournal/demo_worker.py",
+    "HullJournal/ui/demo_controls.js",
+    "HullJournal/ui/demo_controls.tpl",
+    "HullJournal/tests/test_demo_control.py",
+    "tests/test_hull_journal_controls.py",
     "HullJournal/ledger.py",
     "HullJournal/journal.py",
     "HullJournal/Hull-Journal.html",
@@ -91,6 +98,7 @@ def build(out):
     # Git normalises tracked text; Windows launchers and CSVs ship with CRLF.
     for n in (
         "HullJournal/Start-Journal.cmd",
+        "HullJournal/Start-Journal-Demo-Controls.cmd",
         "run_preflight.ps1",
         "run_arm_demo.ps1",
         "HullJournal/examples/tickets.csv",

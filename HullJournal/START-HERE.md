@@ -1,8 +1,28 @@
 # Hull Ledger | Analytics edition · Windows quick start
 
-**Active Python desk:** [paired entries, child exits and private-YAML migration](../docs/HULL_PAIRS.md). M5 → M3, M10 → M5, M15 → M10. No M1 trigger; M30/M45 are historical/study frames, not active parents. [Previous M1 release](../docs/HULL_M1.md).
+**Active Python desk:** [paired entries, child exits and private-YAML migration](../docs/HULL_PAIRS.md). Use the `parent_to_trigger` mapping in **this checkout’s preflight**. At `8155e89` it is M5 → M4, M10 → synthetic M8, M15 → M12 (or your configured subset). No M1 trigger; M30/M45 are historical/study frames, not active parents. [Previous M1 release](../docs/HULL_M1.md).
 
-A read-only journal for the Hull bot’s **actual MT5 hedging-demo fills**. It does not send orders, subscribe to TradingView, change the scanner, or require a cloud/database account. A BUY arrow, shadow plan or attempted order is never a trade in this ledger.
+Read-only reporting for the Hull bot’s **actual MT5 hedging-demo fills**. The collector never sends orders. The optional local controls below can launch the separate demo scanner; no cloud account is involved. A BUY arrow, shadow plan or attempted order is never a trade in this ledger.
+
+## Optional: start the demo scanner from the local journal
+
+**Windows MT5 desktop only.** The normal `Start-Journal.cmd`, offline HTML, CSV imports and a hosted copy remain read-only. There is no remote shell, public trading URL, stop button or automatic restart. Do not forward this port, reverse-proxy it, or expose it on the LAN.
+
+1. Use the full updated **bot checkout**, its `.venv` with `.[test]`, MT5 and tzdata installed, and its existing **`config.demo.local.yaml`**. Use a dedicated USD hedging demo account. The private file must specify `run.mode: demo`, paired execution, a nonempty `hull.enabled`, and explicit `lots`, `target_usd` and `rate` for every enabled profile. The scanner selects exactly `hull.enabled` and the lots, base targets, rates, route and allowed parents from that same file. It does **not** run `run_arm_demo.ps1`, copy its profile list, apply journal filters, or use the paper template as a fallback.
+2. From `HullJournal`, double-click **`Start-Journal-Demo-Controls.cmd`**. This opens the journal, not an armed scanner. If your reporter is already running, close **only that reporter** before restarting with controls. Keep the original account, magic, terminal selection and data folder. For non-default paths use the regular journal options, e.g. from the bot root:
+
+   ```powershell
+   & .\.venv\Scripts\python.exe .\HullJournal\journal.py --repo . --out .\HullJournal\data --demo-controls --open-browser
+   ```
+
+   Substitute your existing `--out`, `--terminal-path` and `--magic` if different. The private YAML's selected terminal must match the journal. Keep `--poll-seconds` at 10 or less for controls. The page is served on **http://127.0.0.1:8765/** by default, not on the internet.
+3. Wait for **MT5 · live**. In **Demo scanner**, click **Run read-only preflight**. It checks for standard Hull and Wickless scanner processes, validates the private config, reads MT5's actual permissions, broker names, paired history, positions and orders, checks for outstanding manager state and the emergency marker, and requires the bot regression suite to pass. It can take a few minutes. MT5 can add the selected symbols to Market Watch for quotes; preflight cannot send, modify or cancel an order. A failed or incomplete check cannot issue an arm approval. If tests fail, reproduce them with `.\.venv\Scripts\python.exe -m pytest -q tests` and fix the underlying problem; do not remove tests or weaken safety settings. A known optional positive risk cap is shown for review, not treated as an error.
+4. Inspect the **account key, magic, exact broker symbols, lots per ticket, USD base per ticket, tickets per batch, max batch lots, route, fallback and parent→trigger mapping**. A slow profile can request ten tickets. To change anything, edit the **private YAML locally** then run preflight again. The browser cannot supply command lines, symbols, paths or sizing. Normal signal, session, quote and funding rules still apply after startup.
+5. Only when you intend demo orders: **Review & arm demo… → type `ARM DEMO` → Arm demo now**. Approval is one-use, tied to that review and expires in two minutes. The separate process repeats account, broker-profile and readiness checks, verifies reviewed code/config and flat inventory under the scanner's existing account locks, then starts the normal Dynamic Hull scanner. The journal distinguishes **Starting · unverified**, **Demo armed** (matching startup receipt + live process) and **Process exited**. An accepted click is not a trade or a fill.
+
+Leave MT5 and the separate scanner console running. Closing the page or reporter does **not** stop or flatten the scanner. After a journal restart, it does not adopt a process just because a PID exists: inspect the scanner on the desktop. An identified standard scanner process, inaccessible process inventory, unresolved exposure, stale journal snapshot or failed checks block another launch. The inventory is not a detector for arbitrary EAs or custom scripts. Verify on the desktop that nothing else is trading the dedicated account. If you are unsure, inspect MT5 and the original manager; do **not** kill processes, delete locks or clear account state to force a launch.
+
+**Compatibility at the pulled base (`8155e89`):** the local bot suite failed **112 tests before this launcher was added**. After the launcher change the same 112 tests failed (634 passed); the regression gate correctly blocked approval. This is not a cleared scanner release. The existing journal parser also recognizes the older M5/M3, M10/M5 and M15/M10 tags, not all the newer M4/M8/M12 trigger tags. Newer fills may lack timeframe/setup attribution in the ledger; a blank setup is not evidence of no fill. The launcher uses the scanner’s actual preflight mapping, not the journal’s historical parser.
 
 ## Upgrade an existing journal without losing history
 
@@ -33,7 +53,7 @@ py -3 .\journal.py --open-browser
 
 **Timezone support:** If your existing Windows environment lacks IANA rules, install `tzdata` in that interpreter (e.g. `& $python -m pip install tzdata`). If unavailable the reporter still journals cash and writes `Timezone data unavailable`; the dashboard can derive sessions from UTC using the browser’s timezone database. It never substitutes a guessed fixed London/New York offset.
 
-`--repo` is optional: it only reads the account-specific `reports/hull_runtime/<account-key>/demo.jsonl`. Without it, intact Hull entry comments supply the timeframe/leg. Extra log details, such as an initial requested SL/TP and the market-structure setup, may be blank. No account credentials go in the code or the CSV. With multiple terminals, pass `--terminal-path 'C:\…\terminal64.exe'` for the actual installation. Use `--magic` if you changed the default Hull entry magic **26111825**; do not reuse a magic shared with other strategies.
+For the **ordinary reporter**, `--repo` is optional: it only reads the account-specific `reports/hull_runtime/<account-key>/demo.jsonl`. Without it, intact Hull entry comments supply the timeframe/leg. Extra log details, such as an initial requested SL/TP and the market-structure setup, may be blank. No account credentials go in the code or the CSV. With multiple terminals, pass `--terminal-path 'C:\…\terminal64.exe'` for the actual installation. Use `--magic` if you changed the default Hull entry magic **26111825**; do not reuse a magic shared with other strategies.
 
 ## Direct-retest fills
 
@@ -95,7 +115,7 @@ py -3 .\journal.py --once --backfill-days 90 --reconcile
 py -3 .\journal.py --help
 ```
 
-Use the same `--repo`, `--out`, `--magic` and terminal selection as your normal run. The local service binds only to loopback and exposes just the dashboard and its snapshot (no account login, directory listing or writable API). The private files are not encrypted: protect the Windows folder. For a consistent backup, stop the reporter and copy the whole `data` folder. Do not publish private CSVs or the cache by accident.
+Use the same `--repo`, `--out`, `--magic` and terminal selection as your normal run. The default local service binds only to loopback and exposes just the dashboard and its snapshot. Only the explicitly enabled control mode adds the constrained demo actions described above; neither mode exposes a terminal shell, login endpoint or directory listing. The private files are not encrypted: protect the Windows folder. For a consistent backup, stop the reporter and copy the whole `data` folder. Do not publish private CSVs or the cache by accident.
 
 ## Verification, no MT5 needed
 
