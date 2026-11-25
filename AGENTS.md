@@ -2,7 +2,7 @@
 
 **Entry route:** market orders remain the default. For paired candle-relative BUY/SELL limits, use the [direct retest guide](docs/HULL_RETEST.md). Changes and tests do not authorize arming.
 
-**Active Python desk:** [paired entries, child exits and private-YAML migration](docs/HULL_PAIRS.md). Confirm the exact mapping in this revision’s preflight (M5 → M4, M10 → synthetic M8, M15 → M12 at `8155e89`). No M1 trigger; M30/M45 are historical/study frames, not active parents. [Previous M1 release](docs/HULL_M1.md).
+**Active Python desk:** [paired entries, child exits and private-YAML migration](docs/HULL_PAIRS.md). M5 → M3, M10 → M5, M15 → M10. No M1 trigger; M30/M45 are historical/study frames, not active parents. [Previous M1 release](docs/HULL_M1.md).
 
 **Wickless is a separate bot:** for `WICKLESS OBSERVE`, use the pasted Wickless JSON and the [Wickless operator guide](docs/WICKLESS.md), not Hull profiles, tickets or commands. Ordinary setup, implementation and test requests never send orders.
 
@@ -74,8 +74,6 @@ Want to watch first? Run `& $py -m bot.cli trade-all --config $cfg --paired-conf
 ```
 
 Confirm `DEMO ARMED` and the intended profiles. Leave this window and MT5 open. Ctrl+C stops the scanner; attached SL/TP stay at the broker, but software exits and ladder updates stop. **Do not stop it with tickets still needing management.**
-
-**Operator alternative:** [Opt-in local journal controls](HullJournal/START-HERE.md#optional-start-the-demo-scanner-from-the-local-journal) use the actual private YAML selection, not the example profile list. A request to build, open, preflight or test the UI is never permission to click its arm confirmation.
 
 ## B. Sync the journal
 

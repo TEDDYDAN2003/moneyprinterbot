@@ -195,3 +195,52 @@ def test_changed_cash_conversion_without_quote_move_is_not_a_reprice_license(hul
     mt.order_calc_profit, mt.order_check = price, check
     assert desk.batch(NAME, sig()) == "quote_or_plan_changed"
     assert len(checks) == 1 and not mt.requests and not desk.state.get("manual_hold")
+
+
+def test_multi_leg_batch_survives_fast_tick_jitter_and_sends_all_legs_in_burst(
+    hull_desk,
+):
+    mt, desk, _ = hull_desk("slow")
+    first = mt.q
+    r = sig(1999.95, side=1)
+    ticks = 0
+    service_calls = 0
+    watch_calls = 0
+
+    def tick(_):
+        nonlocal ticks
+        ticks += 1
+        # Simulate fast tick jitter on leg 2 (moves twice within tolerance before stabilizing).
+        if ticks in (5, 6):
+            return NS(
+                time_msc=first.time_msc + ticks * 5,
+                bid=first.bid + 0.002,
+                ask=first.ask + 0.002,
+            )
+        if ticks in (7, 8):
+            return NS(
+                time_msc=first.time_msc + ticks * 5,
+                bid=first.bid + 0.004,
+                ask=first.ask + 0.004,
+            )
+        return NS(
+            time_msc=first.time_msc + ticks * 5,
+            bid=first.bid + 0.004,
+            ask=first.ask + 0.004,
+        )
+
+    def count_service():
+        nonlocal service_calls
+        service_calls += 1
+
+    def count_watch(_):
+        nonlocal watch_calls
+        watch_calls += 1
+
+    mt.symbol_info_tick = tick
+    desk.service_if_due = count_service
+    desk.watch_other_symbols = count_watch
+    assert desk.batch(NAME, r) == "demo_batch_sent"
+    assert len(mt.requests) == len(mt.positions) == 10
+    assert service_calls == 1 and watch_calls == 1
+

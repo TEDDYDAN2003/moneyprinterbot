@@ -1148,7 +1148,9 @@ class Desk:
         expected = set()
         n = None
         sent = 0
-        recheck = None  # one bounded *unsent* reprice per leg, never a send retry
+        recheck = None  # bounded *unsent* reprice per leg, never a send retry
+        reprices = 0
+        max_reprices = 10 if (force_market or self.h.retest_market_fallback) else 1
         try:
             while True:
                 left, plan, q, i = self.prepare(
@@ -1175,7 +1177,11 @@ class Desk:
                         )
                         + 1e-9
                     )
-                elif (q.bid, q.ask) != recheck or Grid.from_info(i) != base_grid:
+                elif (
+                    max(abs(q.bid - base_bid), abs(q.ask - base_ask)) > tolerance
+                    or Grid.from_info(i) != base_grid
+                    or (max_reprices == 1 and (q.bid, q.ask) != recheck)
+                ):
                     raise Block("final_quote_or_safety_changed")
                 if n is None:
                     n = left
@@ -1264,14 +1270,14 @@ class Desk:
                     or Grid.from_info(i2) != base_grid
                 ):
                     raise Block("quote_or_plan_changed")
-                if recheck is not None and checked_prices != recheck:
+                if max_reprices == 1 and recheck is not None and checked_prices != recheck:
                     raise Block("final_quote_or_safety_changed")
                 if again != plan:
                     # A move on just the non-entry side can now change the goal.
-                    # One unsent reprice inside the original one-tick band, sharing
+                    # Bounded unsent reprice inside the tolerance band, sharing
                     # the final-quote budget. Never patch a broker-checked request.
                     if (
-                        recheck is None
+                        reprices < max_reprices
                         and checked_prices != (q.bid, q.ask)
                         and (
                             force_market
@@ -1290,6 +1296,7 @@ class Desk:
                             or again.entry_spread_usd != plan.entry_spread_usd
                         )
                     ):
+                        reprices += 1
                         recheck = checked_prices
                         continue
                     raise Block("quote_or_plan_changed")
@@ -1323,7 +1330,7 @@ class Desk:
                         self.kill.exists()
                         or max(abs(q3.bid - base_bid), abs(q3.ask - base_ask))
                         > tolerance
-                        or (recheck is not None and final_prices != checked_prices)
+                        or (reprices >= max_reprices and final_prices != checked_prices)
                     ):
                         raise Block("final_quote_or_safety_changed")
                     gate = self.session_gate(name)
@@ -1335,10 +1342,10 @@ class Desk:
                     self.persist()
                     raise
                 if final_prices != checked_prices:
-                    # One tick can still cross a spread cap, stop distance or
-                    # funding limit. Rebuild and broker-check the actual new request
-                    # once, at this exact quote, on the same signal/deadline. Never
-                    # edit the price of an already checked request and send it blind.
+                    # Rebuild and broker-check the actual new request at this exact
+                    # quote on the same signal/deadline. Never edit the price of an
+                    # already checked request and send it blind.
+                    reprices += 1
                     recheck = final_prices
                     self.state.pop("manual_hold")  # no send was made
                     self.persist()
@@ -1428,13 +1435,14 @@ class Desk:
                 expected.add(ticket)
                 sent += 1
                 recheck = None
+                reprices = 0
                 self.state.pop("manual_hold")
                 self.persist()
                 if sent == n:
+                    self.service_if_due()
+                    if self.watch_other_symbols is not None:
+                        self.watch_other_symbols(name)
                     return "demo_batch_sent"
-                self.service_if_due()
-                if self.watch_other_symbols is not None:
-                    self.watch_other_symbols(name)
         except TimingBlock as exc:
             check = exc.check
             wait = (

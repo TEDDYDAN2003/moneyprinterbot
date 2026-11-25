@@ -1,7 +1,7 @@
 # Keep audit policies, fixtures and the standalone companions byte-stable across platforms.
 src/bot/** text eol=lf
 HullJournal/** text eol=lf
-HullJournal/Start-Journal*.cmd text eol=crlf
+HullJournal/Start-Journal.cmd text eol=crlf
 HullJournal/examples/*.csv text eol=crlf
 MT5/** text eol=lf
 WicklessDesk/** text eol=lf

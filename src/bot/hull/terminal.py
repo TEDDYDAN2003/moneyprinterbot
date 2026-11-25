@@ -306,13 +306,7 @@ def run(
     preflight=False,
     poll=1.0,
     iterations=None,
-    *,
-    journal_guard=None,
 ):
-    if journal_guard is not None and not (preflight or armed):
-        raise DemoSafetyError(
-            "Journal controls only support preflight or a guarded demo start"
-        )
     # No timeframe flag, old local YAML, or direct invocation can enable an unapproved lane.
     frames = h.lanes(frames)
     minute_mode = h.execution_mode == M1_MODE
@@ -483,7 +477,7 @@ def run(
             for n, x in specs.items()
             if limits_mode and x["retest_capability"] != "supported"
         ]
-        if preflight or journal_guard is not None:
+        if preflight:
             from bot.broker import snapshot
 
             ps, os = snapshot(mt)
@@ -631,13 +625,7 @@ def run(
                     for name, checks in summary["history_check"].items()
                 )
             summary["review_before_demo"] = issues
-        if journal_guard is None:
-            print(json.dumps(summary, indent=2, allow_nan=False), flush=True)
-        elif armed:
-            print(
-                "Journal confirmation received; verifying readiness before arming.",
-                flush=True,
-            )
+        print(json.dumps(summary, indent=2, allow_nan=False), flush=True)
         if preflight:
             if unsupported:
                 raise DemoSafetyError(
@@ -653,9 +641,7 @@ def run(
                 raise DemoSafetyError(
                     "Paired native bid history unavailable or stale; do not arm"
                 )
-            return (
-                journal_guard.review(mt, summary) if journal_guard is not None else summary
-            )
+            return summary
         root.mkdir(parents=True, exist_ok=True)
 
         def emit(event, **fields):
@@ -685,8 +671,6 @@ def run(
                     )
                 )  # coexistence with old checkout in this directory
             state = json.loads(path.read_text()) if armed and path.exists() else {}
-            if journal_guard is not None:
-                journal_guard.verify(mt, summary, state)
             d = Desk(
                 mt, cfg, h, syms, identity, state, path, emit, armed, sessions=sessions
             )
@@ -872,8 +856,6 @@ def run(
             sync = 0.0
             history_ok = not armed
             emit("started", summary=summary)
-            if journal_guard is not None:
-                journal_guard.started()
             while iterations is None or num < iterations:
                 num += 1
                 now = time.time()

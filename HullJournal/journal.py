@@ -1,4 +1,4 @@
-"""Hull Ledger • read-only local reporting; explicit, optional Windows demo controls. Run: python journal.py --help"""
+"""Hull Ledger • local, read-only journal companion. Run: python journal.py --help"""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import argparse
 import hashlib
 import json
 import os
-import secrets
 import sqlite3
 import sys
 import threading
@@ -67,9 +66,6 @@ class Desktop:
     def __init__(self):
         self.lock = threading.Lock()
         self.rows = {"tickets": [], "setups": []}
-        self.control_enabled = False
-        self.control_terminal = None
-        self.updated = 0.0
         self.rev = "initial"
         self.status = {
             "state": "waiting",
@@ -78,24 +74,12 @@ class Desktop:
             "counts": {},
         }
 
-    def set(self, status, rows=None, rev=None, *, terminal=None):
+    def set(self, status, rows=None, rev=None):
         with self.lock:
             self.status = {**self.status, **status}
-            self.updated, self.control_terminal = time.monotonic(), terminal
             if rows is not None:
                 self.rows = rows
                 self.rev = rev
-
-    def control_identity(self):
-        with self.lock:
-            if (
-                self.status.get("state") == "live"
-                and self.status.get("currency") == "USD"
-                and self.control_terminal
-                and time.monotonic() - self.updated < 30
-            ):
-                return (self.status["account_key"], self.control_terminal)
-            return None
 
     def snapshot(self, previous):
         with self.lock:
@@ -163,25 +147,15 @@ class Reporter:
             .date()
             .isoformat(),
         }
-        terminal = None
-        if self.ui.control_enabled:
-            from demo_control import terminal_key
-
-            terminal = terminal_key(mt.terminal_info())
-        self.ui.set(status, rows, rev, terminal=terminal)
+        self.ui.set(status, rows, rev)
         return status
 
 
-def make_server(ui, port, control=None):
-    nonce = secrets.token_urlsafe(24)
-    mode = 'data-feed="collector"' + (
-        f' data-demo-key="{control.key}"' if control else ""
-    )
+def make_server(ui, port):
     template = (
         (HERE / "Hull-Journal.html")
         .read_text("utf8")
-        .replace('data-feed="file"', mode, 1)
-        .replace("<script", f'<script nonce="{nonce}"')
+        .replace('data-feed="file"', 'data-feed="collector"', 1)
         .encode()
     )
 
@@ -189,17 +163,12 @@ def make_server(ui, port, control=None):
         def log_message(self, *args):
             pass
 
-        def host(self):
-            hs = self.headers.get_all("Host", [])
-            if len(hs) == 1 and hs[0].casefold() in {
+        def do_GET(self):
+            host = self.headers.get("Host", "").casefold()
+            if host not in {
                 f"127.0.0.1:{self.server.server_port}",
                 f"localhost:{self.server.server_port}",
             }:
-                return hs[0].casefold()
-            return None
-
-        def do_GET(self):
-            if not self.host():
                 return self.send_error(403)
             u = urlsplit(self.path)
             if u.path in ("/", "/Hull-Journal.html"):
@@ -208,69 +177,13 @@ def make_server(ui, port, control=None):
             elif u.path == "/api/snapshot":
                 body = ui.snapshot(parse_qs(u.query).get("since", [""])[0])
                 ct = "application/json; charset=utf-8"
-            elif control and self.path == "/api/demo/status":
-                return self.json_reply(200, control.status())
             elif u.path == "/favicon.ico":
                 self.send_response(204)
                 self.end_headers()
                 return
             else:
                 return self.send_error(404)
-            self.send_bytes(200, ct, body)
-
-        def json_reply(self, code, obj):
-            self.send_bytes(
-                code,
-                "application/json; charset=utf-8",
-                json.dumps(obj, allow_nan=False).encode(),
-            )
-
-        def do_POST(self):
-            if not self.host():
-                return self.send_error(403)
-            paths = {"/api/demo/check": "check", "/api/demo/arm": "arm"}
-            if not control or self.path not in paths:
-                return self.send_error(404)
-            token = self.headers.get_all("X-Hull-Control", [])
-            if (
-                self.headers.get_all("Origin", []) != ["http://" + self.host()]
-                or self.headers.get("Sec-Fetch-Site", "same-origin") != "same-origin"
-                or len(token) != 1
-                or not token[0].isascii()
-                or not secrets.compare_digest(control.key, token[0])
-            ):
-                return self.send_error(403)
-            sizes = self.headers.get_all("Content-Length", [])
-            if (
-                self.headers.get_all("Content-Type", []) != ["application/json"]
-                or self.headers.get("Transfer-Encoding")
-                or len(sizes) != 1
-                or not sizes[0].isascii()
-                or not sizes[0].isdecimal()
-                or len(sizes[0]) > 3
-                or not 1 <= int(sizes[0]) <= 256
-            ):
-                return self.send_error(400)
-            from demo_control import ControlError
-
-            try:
-                self.connection.settimeout(10)
-                data = json.loads(self.rfile.read(int(sizes[0])).decode("utf-8"))
-            except (ValueError, OSError):
-                return self.send_error(400)
-            try:
-                result = control.action(paths[self.path], data)
-            except ControlError as exc:
-                return self.json_reply(409, {"error": str(exc)})
-            self.json_reply(200, result)
-
-        def send_bytes(self, code, ct, body):
-            self.send_response(code)
-            self.send_header("X-Frame-Options", "DENY")
-            self.send_header(
-                "Content-Security-Policy",
-                f"default-src 'none'; script-src 'nonce-{nonce}'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
-            )
+            self.send_response(200)
             self.send_header("Content-Type", ct)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
@@ -290,7 +203,7 @@ def main(argv=None):
     p.add_argument(
         "--repo",
         type=Path,
-        help="Bot root for read-only receipt metadata; also the fixed checkout used by opt-in demo controls.",
+        help="Hull bot folder; optional exact receipt/structure metadata (reads demo.jsonl only).",
     )
     p.add_argument(
         "--terminal-path",
@@ -333,18 +246,7 @@ def main(argv=None):
         action="store_true",
         help="On first poll also reread every tracked position for older broker corrections.",
     )
-    p.add_argument(
-        "--demo-controls",
-        action="store_true",
-        help="Opt in to local Windows demo launch controls (private YAML only). Does not start a scanner.",
-    )
     args = p.parse_args(argv)
-    if args.demo_controls and (
-        os.name != "nt" or args.once or not args.repo or args.poll_seconds > 10
-    ):
-        p.error(
-            "--demo-controls requires Windows, --repo, continuous reporting and --poll-seconds <= 10"
-        )
     if not (
         1 <= args.backfill_days <= 3650
         and 0.5 <= args.poll_seconds <= 300
@@ -380,19 +282,7 @@ def main(argv=None):
             previous = None
             try:
                 if not args.once:
-                    control = None
-                    if args.demo_controls:
-                        from demo_control import DemoControl, LocalRunner
-
-                        ui.control_enabled = True
-                        control = DemoControl(
-                            LocalRunner(args.repo, args.magic), ui.control_identity
-                        )
-                        print(
-                            "Local DEMO launch controls enabled. No scanner starts automatically.",
-                            flush=True,
-                        )
-                    srv = make_server(ui, args.port, control)
+                    srv = make_server(ui, args.port)
                     threading.Thread(
                         target=srv.serve_forever, name="journal-dashboard", daemon=True
                     ).start()

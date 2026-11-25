@@ -36,18 +36,11 @@ s = (
         "__MARKET_DATA__",
         js(json.loads((assets / "market_windows.json").read_text(encoding="utf8"))),
     )
-    .replace(
-        "__DEMO_SECTION__", (assets / "demo_controls.tpl").read_text(encoding="utf8")
-    )
     .replace("__STYLE__", (assets / "style.css").read_text(encoding="utf8"))
     .replace(
         "__SCRIPT__",
         (assets / "app.js")
         .read_text(encoding="utf8")
-        .replace(
-            "/* DEMO_CONTROL_MODULE */",
-            (assets / "demo_controls.js").read_text(encoding="utf8"),
-        )
         .replace(
             "/* ANALYTICS_MODULE */",
             (assets / "analytics.js").read_text(encoding="utf8")

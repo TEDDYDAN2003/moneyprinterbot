@@ -1,7 +1,5 @@
 # Dynamic Hull 16 · MT5 demo desk
 
-**Local journal launch controls (optional):** On the Windows MT5 desktop, open `HullJournal/Start-Journal-Demo-Controls.cmd` for a read-only preflight and explicit, demo-only launch using `hull.enabled` in your private YAML. The normal journal stays read-only. Use the updated checkout for this feature; the previously published desk ZIP predates these controls. [Steps and safety checks](HullJournal/START-HERE.md#optional-start-the-demo-scanner-from-the-local-journal).
-
 This is the **Dynamic Hull scanner, its trade journal, and its read-only chart tools**. The checked-in [config](config.yaml) observes; it does not send orders. Broker access requires your Windows MT5 desktop on a dedicated **USD hedging demo** account. No live-money mode, cloud database, webhook or trained model is needed.
 
 [Download the current desk](downloads/Dynamic-Hull-Desk.zip) · [Operating guide](docs/HULL_DEMO.md) · [Journal setup](HullJournal/START-HERE.md) · [Profile picker](docs/Hull-demo-start.html)
@@ -10,11 +8,11 @@ This is the **Dynamic Hull scanner, its trade journal, and its read-only chart t
 
 | Parent (owns the batch) | Entry chart (owns the crossover and initial stop) |
 |---|---|
-| M5 | M4 |
-| M10 | M8 (built from two M4 bars) |
-| M15 | M12 |
+| M5 | M3 |
+| M10 | M5 |
+| M15 | M10 |
 
-A BUY requires a **completed bullish Hull cross on the entry chart** and bullish structure on **both charts of that pair** at that close. Mirror for a SELL. No parent Hull cross, M1 timing, M30/M45 vote or additional BOS requirement. For example, M15 → M12 can buy while M5 is bearish. Opposing eligible pairs at the same close skip; otherwise the highest qualifying parent owns **one batch for the symbol**, never a fallback or top-up. The parent first-cross skip and failed-counter-MSS return exception remain.
+A BUY requires a **completed bullish Hull cross on the entry chart** and bullish structure on **both charts of that pair** at that close. Mirror for a SELL. No parent Hull cross, M1 timing, M30/M45 vote or additional BOS requirement. For example, M15 → M10 can buy while M5 is bearish. Opposing eligible pairs at the same close skip; otherwise the highest qualifying parent owns **one batch for the symbol**, never a fallback or top-up. The parent first-cross skip and failed-counter-MSS return exception remain.
 
 By default, use the first valid quote of the **next entry-chart candle**. For the [optional direct-retest limit route](docs/HULL_RETEST.md), stage a BUY below or a SELL above the closed trigger candle instead; no breakout or market entry first. Freeze SL at least one trade tick beyond the completed **trigger** candle's wick, with the configured ATR cushion. A verified opposing cross on that trade’s own trigger chart can exit early; parent opposite-cross/MSS protection and broker SL/TP remain. [Full timing rules, worked example, audit fields and Windows migration](docs/HULL_PAIRS.md). Old [M1](docs/HULL_M1.md) and [parent-close](docs/HULL_STRUCTURE.md) behavior remains documented for historical trades.
 
