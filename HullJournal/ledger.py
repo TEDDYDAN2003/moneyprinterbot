@@ -817,7 +817,7 @@ def sync(c, mt, now, *, days=30, magic=MAGIC, repo=None, reconcile=False):
         if deep
         else last - 300
     )
-    start = max(0, start)
+    start = max(floor or 0, start)
     held = set()
     dirty = old is None or (floor is not None and start < floor)
     path = (

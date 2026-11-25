@@ -201,7 +201,7 @@ public:
       bool redraw=false;
       if(latest!=sourceOpen||state.count==0){
          bool warm=state.count==0||tick.time-state.closed>3*tf*60;
-         MqlRates rows[];datetime tail;int n=Fetch(tf,false,warm?1200:4,rows,tail);
+         MqlRates rows[];datetime tail;int n=Fetch(tf,false,warm?1000:4,rows,tail);
          int required=MathMax(22,MathMax(AtrLength+1,2*Swing+2));
          if(n<(warm?required:1)){text="Insufficient closed history";return false;}
          if(warm)Reset();

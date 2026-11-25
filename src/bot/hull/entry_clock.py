@@ -80,6 +80,9 @@ class QuoteCheck:
         }
 
 
+CLOCK_SKEW_TOLERANCE_S = 2.0
+
+
 def check_quote(
     signal,
     now,
@@ -92,8 +95,8 @@ def check_quote(
 ):
     """Only confirmed labels may wait for a missing, pre-close or aged-out first tick.
 
-    Broken prices and a broker clock in the future are hard failures. For an
-    expiry, preserve the independent tick status as evidence of what was seen.
+    Broken prices and a broker clock materially in the future (> CLOCK_SKEW_TOLERANCE_S)
+    are hard failures. Small sub-2s skew (e.g. Windows NTP drift) is tolerated.
     The rate/tick timestamps are UTC epochs; never reinterpret broker time here.
     """
     missing = tick_msc is None and bid is None and ask is None
@@ -102,7 +105,7 @@ def check_quote(
         status = "quote_missing"
     elif ms is None or ms <= 0 or b is None or a is None or not 0 < b <= a:
         status = "invalid_quote"
-    elif ms / 1000 > now:
+    elif ms / 1000 > now + CLOCK_SKEW_TOLERANCE_S:
         status = "quote_clock_ahead"
     elif ms / 1000 < signal:
         status = "quote_precedes_signal_close"

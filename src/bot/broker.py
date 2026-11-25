@@ -113,7 +113,7 @@ def fresh(tick, now, max_age):
     return (
         all(math.isfinite(v) for v in (ts, tick.bid, tick.ask))
         and 0 < tick.bid <= tick.ask
-        and 0 <= now - ts <= max_age
+        and -2.0 <= now - ts <= max_age
     )
 
 

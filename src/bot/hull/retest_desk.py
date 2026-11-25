@@ -13,7 +13,8 @@ from dataclasses import asdict
 from bot.broker import DemoSafetyError, _side_is_allowed, fresh, snapshot
 from bot.config.entry_sessions import EntrySessionVeto
 
-from .config import LADDER, PAIR_MODE, PAIRS, RETEST
+from .config import LADDER, PAIR_MODE, PAIRS, RETEST, TF_NAME
+from .notifier import notify_blocked_setup
 from .orders import Block, Exposure, Grid, Plan, room
 from .retest import GOAL, POLICY, capability, level, placement_check
 
@@ -25,6 +26,14 @@ DONE = {
     "rejected",
     "not_sent",
     "partial_flatten",
+}
+
+RETEST_MARKET_FALLBACK_REASONS = {
+    "retest_quote_drift",
+    "retest_already_touched",
+    "retest_placement_gap",
+    "no_one_tick_pullback_inside_candle_and_atr_cap",
+    "no_tradable_retest_tick",
 }
 
 
@@ -141,6 +150,14 @@ class RetestDesk:
                 order=l.get("order"),
                 reason=reason,
             )
+            notify_blocked_setup(
+                symbol=b["name"],
+                tf=TF_NAME.get(b.get("parent", 0), b.get("parent", "?")),
+                trigger_tf=TF_NAME.get(b.get("child", 0), b.get("child")),
+                side=b.get("side", 0),
+                reason=reason,
+                extra="batch flattened",
+            )
 
     def known(self):
         return {
@@ -150,15 +167,21 @@ class RetestDesk:
             if l.get("order") and l["status"] not in DONE
         }
 
-    def identity(self, o, b, l):
+    def identity(self, o, b, l, *, historical=False):
         q = l["request"]
         ms = getattr(o, "time_setup_msc", 0)
+        magic_ok = o.magic == q["magic"] or (
+            historical and o.magic == 0 and getattr(o, "state", 0) == 4
+        )
+        comment_ok = o.comment == q["comment"] or (
+            historical and o.comment == "" and getattr(o, "state", 0) == 4
+        )
         return (
             o.ticket == l.get("order")
             and o.symbol == q["symbol"]
-            and o.magic == q["magic"]
+            and magic_ok
             and o.type == q["type"]
-            and o.comment == q["comment"]
+            and comment_ok
             and b["stamp"] * 1000 <= ms < b["expiry"] * 1000
             and approx(o.volume_initial, q["volume"])
             and approx(o.price_open, q["price"], b["tick"] * 1e-6)
@@ -324,9 +347,11 @@ class RetestDesk:
             self.capacity(b, r, plan, 1)
             current, _ = d._entry_quote(name, w, "shadow_limit_decision")
             self.guard(b, w, g, current)
-            if current.time_msc < q.time_msc or max(
-                abs(current.bid - q.bid), abs(current.ask - q.ask)
-            ) > g.tick * (1 + 1e-9):
+            if current.time_msc < q.time_msc or (
+                not d.h.retest_market_fallback
+                and max(abs(current.bid - q.bid), abs(current.ask - q.ask))
+                > g.tick * (d.h.retest_quote_drift_ticks + 1e-9)
+            ):
                 raise Block("retest_quote_drift")
             b["shadow_after_ms"] = max(current.time_msc, int(d.now() * 1000))
         self.active[name] = b
@@ -379,9 +404,36 @@ class RetestDesk:
             outcome = "retest_batch_placed"
         except (Block, EntrySessionVeto) as e:
             outcome = str(e)
+            ack_so_far = sum(bool(l.get("order")) for l in b["legs"])
+            if (
+                d.h.retest_market_fallback
+                and outcome in RETEST_MARKET_FALLBACK_REASONS
+            ):
+                if ack_so_far == 0:
+                    self.active.pop(name, None)
+                    d.open_lanes.discard((name, r.tf))
+                    d.persist()
+                else:
+                    ps, os = snapshot(mt)
+                    if not any(p.symbol == name for p in ps):
+                        orders = {o.ticket: o for o in os}
+                        for l in b["legs"]:
+                            o = orders.get(l.get("order"))
+                            if o is not None:
+                                self.remove(b, l, o)
+                        self.active.pop(name, None)
+                        d.open_lanes.discard((name, r.tf))
+                        d.persist()
+                    elif outcome not in {
+                        "entry_window_expired",
+                        "retest_activated_during_dispatch",
+                        "retest_already_touched",
+                        "retest_placement_gap",
+                    }:
+                        self.invalidate(b, outcome)
             # A pure clock cutoff or the intended pullback stops *new* submissions;
             # it doesn't void legal siblings already resting at the same price.
-            if outcome not in {
+            elif outcome not in {
                 "entry_window_expired",
                 "retest_activated_during_dispatch",
                 "retest_already_touched",
@@ -529,8 +581,12 @@ class RetestDesk:
                 q2, _ = d._entry_quote(name, w, "limit_pre_send")
             self.guard(b, w, g, q2)
             if (
-                max(abs(q2.bid - q.bid), abs(q2.ask - q.ask)) > g.tick * (1 + 1e-9)
-                or q2.time_msc < q.time_msc
+                q2.time_msc < q.time_msc
+                or (
+                    not d.h.retest_market_fallback
+                    and max(abs(q2.bid - q.bid), abs(q2.ask - q.ask))
+                    > g.tick * (d.h.retest_quote_drift_ticks + 1e-9)
+                )
             ):
                 raise Block("retest_quote_drift")
             now = d._quote_clock(d.session_gate(name), w, q2, "retest_send").checked
@@ -595,7 +651,7 @@ class RetestDesk:
                 10034,
                 10035,
             )
-            and not order
+            and (not order or not mt.orders_get(ticket=order))
         ):
             l["status"] = "rejected"
         else:
@@ -618,6 +674,8 @@ class RetestDesk:
             status=l["status"],
         )
         if l["status"] != "working":
+            if l["status"] == "rejected" and ret == 10015 and d.h.retest_market_fallback:
+                raise Block("retest_already_touched")
             raise Block(l.get("review", "retest_placement_rejected"))
 
     def remove(self, b, l, o):
@@ -829,11 +887,11 @@ class RetestDesk:
             tab = mt.history_orders_get(ticket=tid)
             if not tab:
                 return self.await_history(b, l)
-            if len(tab) != 1 or not self.identity(tab[0], b, l):
+            if len(tab) != 1 or not self.identity(tab[0], b, l, historical=True):
                 self.hold(b, l, "historical_order_identity_mismatch")
                 return
             o = tab[0]
-            if not self.intact(o, b, l):
+            if o.state != 4 and not self.intact(o, b, l):
                 self.invalidate(
                     b, "historical_brackets_or_expiry_changed", flatten=True
                 )
@@ -842,27 +900,32 @@ class RetestDesk:
         else:
             o = working
         state = o.state
-        pid = getattr(o, "position_id", 0)
+        pid = getattr(o, "position_id", 0) or tid
         name = b["name"]
         side = b["side"]
         plan = Plan(**b["plan"])
         tol = b["tick"] * 1e-6
-        ds = mt.history_deals_get(
-            ticket=tid
-        )  # MT5 filters deals by *opening order ticket*
+        # MT5 python API history_deals_get filters by position_id (which equals order ticket tid on fill)
+        ds = mt.history_deals_get(position=pid)
+        if ds is None:
+            ds = mt.history_deals_get(ticket=tid)
         if ds is None:
             return self.await_history(b, l)
-        if not ds:
+        opening_ds = [x for x in ds if getattr(x, "order", 0) == tid and x.entry == mt.DEAL_ENTRY_IN]
+        if not opening_ds and ds and any(getattr(x, "order", 0) == tid for x in ds):
+            opening_ds = [x for x in ds if getattr(x, "order", 0) == tid]
+        if not opening_ds:
             if (
                 working is None
                 and state != 4
-                and not pid
+                and not getattr(o, "position_id", 0)
                 and approx(o.volume_initial, o.volume_current)
             ):
                 l["status"] = {2: "cancelled", 5: "rejected", 6: "expired"}[state]
                 d.persist()
                 return
             return self.await_history(b, l)
+        ds = opening_ds
         if working is not None and not pid and ds:
             pid = ds[0].position_id
         if (

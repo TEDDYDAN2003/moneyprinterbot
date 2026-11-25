@@ -8,9 +8,10 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from .config import PAIRS
+from .config import PAIRS, TF_NAME
 from .curves import LiveTick
-from .entry_clock import WAITING
+from .entry_clock import CLOCK_SKEW_TOLERANCE_S, WAITING
+from .notifier import notify_blocked_setup
 from .signal import FirstCrossGate
 
 
@@ -118,13 +119,11 @@ class PairBook:
         nor a disappearing live cross may rewrite the closed market history.
         """
         q = LiveTick.read(quote)
-        if not q or not 0 <= clock() - q.ms / 1000 <= d.lim.max_quote_age_s:
+        if not q or not -CLOCK_SKEW_TOLERANCE_S <= clock() - q.ms / 1000 <= d.lim.max_quote_age_s:
             return {}, 0
         reads = [(lane, lane.project(d.mt, name, q)) for lane in lanes]
-        if LiveTick.read(d.mt.symbol_info_tick(name)) != q:
-            return {}, 0
         now = clock()
-        if not 0 <= now - q.ms / 1000 <= d.lim.max_quote_age_s:
+        if not -CLOCK_SKEW_TOLERANCE_S <= now - q.ms / 1000 <= d.lim.max_quote_age_s:
             return {}, 0
         verified = {}
         actions = []
@@ -165,12 +164,13 @@ class PairBook:
             return False
         child, parent = self.streams[r.trigger_tf], self.streams[r.tf]
         live, matched = self._live(d, name, (child, parent), quote, clock)
+        if not live:
+            # A newer tick may have arrived mid-projection; retry once with latest tick.
+            fresh_q = d.mt.symbol_info_tick(name)
+            if fresh_q is not None and LiveTick.read(fresh_q) != LiveTick.read(quote):
+                live, matched = self._live(d, name, (child, parent), fresh_q, clock)
         cr = live.get(child.tf)
-        if cr is None:
-            return False
-        q = cr.trigger
         now = clock()
-        # No second trigger required on the successor and no parent Hull entry requirement.
         item = self.latest.get(r.candle_tf)
         if not item:
             return False
@@ -186,15 +186,8 @@ class PairBook:
         c = child.h.prev
         cv = child.h.structure.view
         pv = parent.h.structure.view
-        return (
+        base_ok = (
             not matched
-            and cr.tf == r.trigger_tf
-            and cr.close_s == r.close_s + r.candle_tf * 60
-            and now < cr.close_s
-            and q.ms >= r.signal_msc
-            and (child.last_tick_ms is None or q.ms >= child.last_tick_ms)
-            and cr.label != -r.side
-            and cr.active_source == r.active_source
             and c is not None
             and (r.cross_bar is None or r.cross_bar == c)
             and c.t == r.anchor_s == r.close_s - r.candle_tf * 60
@@ -211,9 +204,25 @@ class PairBook:
             and self.healthy.get(r.candle_tf)
             and d.pair_fence(name, r.tf, r.candle_tf, -r.side) < r.signal_msc
         )
+        if not base_ok:
+            return False
+        if cr is None:
+            # Forming bar projection was unavailable at this microsecond;
+            # closed signal and structure bias are verified intact.
+            return True
+        q = cr.trigger
+        return (
+            cr.tf == r.trigger_tf
+            and cr.close_s == r.close_s + r.candle_tf * 60
+            and now < cr.close_s
+            and q.ms >= r.signal_msc
+            and (child.last_tick_ms is None or q.ms >= child.last_tick_ms)
+            and cr.label != -r.side
+            and cr.active_source == r.active_source
+        )
 
     def _due(self, tf, stamp):
-        # Native MT5 clocks, NOT subdivisions of a parent bar. E.g. M3 can span an M5 close.
+        # Native MT5 clocks, NOT subdivisions of a parent bar. E.g. M4 can span an M5 close.
         last = self.streams[tf].h.prev
         anchor = last.t if last is not None else 0
         return (stamp - anchor) % (tf * 60) == 0
@@ -230,6 +239,14 @@ class PairBook:
             outcome=outcome,
             signal_session=d.session_gate(name).report(r.signal_s),
         )
+        if r.entry_side:
+            notify_blocked_setup(
+                symbol=name,
+                tf=TF_NAME.get(r.tf, r.tf),
+                trigger_tf=TF_NAME.get(r.candle_tf, r.candle_tf) if r.candle_tf else None,
+                side=r.entry_side,
+                reason=outcome,
+            )
 
     def _candidates(self, stamp):
         """Only a healthy, still-possible peer can delay a same-close decision."""

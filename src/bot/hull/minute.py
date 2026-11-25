@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from .curves import LiveTick
-from .entry_clock import WAITING
+from .entry_clock import CLOCK_SKEW_TOLERANCE_S, WAITING
 from .feed import Stream, sample
 from .orders import cross_candle_stop
 from .signal import FirstCrossGate
@@ -100,7 +100,7 @@ class MinuteBook:
         """One bid/ask/time snapshot on both sides of the native forming-bar read."""
         q = LiveTick.read(quote)
         now = clock()
-        if not q or not 0 <= now - q.ms / 1000 <= d.lim.max_quote_age_s:
+        if not q or not -CLOCK_SKEW_TOLERANCE_S <= now - q.ms / 1000 <= d.lim.max_quote_age_s:
             return None
         r = self.m.project(d.mt, name, q)
         after = LiveTick.read(d.mt.symbol_info_tick(name))
@@ -110,7 +110,7 @@ class MinuteBook:
             or r.trigger != q
             or now >= r.close_s
             or after != q
-            or not 0 <= now - q.ms / 1000 <= d.lim.max_quote_age_s
+            or not -CLOCK_SKEW_TOLERANCE_S <= now - q.ms / 1000 <= d.lim.max_quote_age_s
             or (self.last_live and q.ms < self.last_live.ms)
         ):
             return None

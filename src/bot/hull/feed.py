@@ -11,7 +11,8 @@ from bot.hull.bar import Bar
 
 from .config import TF_NAME
 from .curves import LiveTick
-from .m45 import BASE, rates45
+from .entry_clock import CLOCK_SKEW_TOLERANCE_S
+from .m45 import BASE, rates8, rates45
 from .signal import Hull
 from .structure import InternalStructure, Structure
 
@@ -19,6 +20,8 @@ from .structure import InternalStructure, Structure
 def rates(mt, name, tf, pos, count):
     if tf == 45:
         return rates45(mt, name, pos, count)
+    if tf == 8:
+        return rates8(mt, name, pos, count)
     period = getattr(mt, "TIMEFRAME_" + TF_NAME[tf])
     return mt.copy_rates_from_pos(name, period, pos, count)
 
@@ -37,7 +40,7 @@ class StructureTape:
 
     def __init__(self, tf, depth, max_chart_tf, stop_bars):
         self.tf, self.depth = tf, depth
-        self.keep = 1200 + ceil((stop_bars + 4) * max_chart_tf / tf)
+        self.keep = 1000 + ceil((stop_bars + 4) * max_chart_tf / tf)
         self.required = 2 * depth + 2 + ceil((stop_bars + 2) * max_chart_tf / tf)
         self.engine = InternalStructure(depth)
         self.ends, self.views = [], []
@@ -46,7 +49,7 @@ class StructureTape:
     def refresh(self, mt, name, now):
         step = self.tf * 60
         reload = not self.ready or not self.ends or now - self.ends[-1] > 3 * step
-        rows = rates(mt, name, self.tf, 1, self.keep if reload else 4)
+        rows = rates(mt, name, self.tf, 1, min(self.keep, 999) if reload else 4)
         if rows is None or len(rows) < (self.required if reload else 1):
             self.ready = False
             return "history_unavailable"
@@ -123,7 +126,7 @@ class Stream:
         step = self.tf * 60
         reload = self.h.prev is None or now - self.h.prev.t > step * 4
         rows = rates(
-            mt, name, self.tf, 1, max(self.min_bars + 2, 1200) if reload else 4
+            mt, name, self.tf, 1, min(max(self.min_bars + 2, 999), 999) if reload else 4
         )
         if rows is None or len(rows) < (self.min_bars if reload else 1):
             self.baseline_due = True
@@ -228,18 +231,16 @@ class Stream:
             return None
         try:
             b = candle(rows[0])
-            if (
-                self.tf == 45
-                and not rows[0]["last_m15"]
-                <= tick.ms / 1000
-                < rows[0]["last_m15"] + BASE
-            ):
-                return None
+            if self.tf in (8, 45):
+                base_sec = 240 if self.tf == 8 else BASE
+                last_key = "last_m4" if self.tf == 8 else "last_m15"
+                if not rows[0][last_key] <= tick.ms / 1000 < rows[0][last_key] + base_sec:
+                    return None
         except (ValueError, TypeError, OverflowError, IndexError, KeyError):
             return None
-        if b.t != start or b.c != tick.bid:
+        if b.t != start:
             return None
-        return b
+        return Bar(b.t, b.o, max(b.h, tick.bid), min(b.l, tick.bid), tick.bid)
 
     def project(self, mt, name, tick):
         b = self.current_bar(mt, name, tick)
@@ -280,13 +281,13 @@ def sample(mt, name, lanes, clock, max_age):
     A bad lane cannot suppress a protective exit observed on another valid lane.
     """
     q = LiveTick.read(mt.symbol_info_tick(name))
-    if not q or not 0 <= clock() - q.ms / 1000 <= max_age:
+    if not q or not -CLOCK_SKEW_TOLERANCE_S <= clock() - q.ms / 1000 <= max_age:
         return [], False
     readings = [(s, s.project(mt, name, q)) for s in lanes]
     if LiveTick.read(mt.symbol_info_tick(name)) != q:
         return [], False
     now = clock()
-    if not 0 <= now - q.ms / 1000 <= max_age:
+    if not -CLOCK_SKEW_TOLERANCE_S <= now - q.ms / 1000 <= max_age:
         return [], False
     out, complete = [], True
     for s, r in readings:
@@ -312,14 +313,14 @@ def verify_before_leg(mt, name, lanes, signal, quote, clock, max_age, on_opposit
     outer poll. It never recursively opens a reversal from inside an order send.
     """
     q = LiveTick.read(quote)
-    if not q or not 0 <= clock() - q.ms / 1000 <= max_age:
+    if not q or not -CLOCK_SKEW_TOLERANCE_S <= clock() - q.ms / 1000 <= max_age:
         return False
     lane = lanes[signal.tf]
     r = lane.project(mt, name, q)
     now = clock()
     if (
         LiveTick.read(mt.symbol_info_tick(name)) != q
-        or not 0 <= now - q.ms / 1000 <= max_age
+        or not -CLOCK_SKEW_TOLERANCE_S <= now - q.ms / 1000 <= max_age
         or r is None
         or r.trigger != q
         or now >= r.close_s

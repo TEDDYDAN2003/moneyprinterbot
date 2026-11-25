@@ -24,7 +24,8 @@ from bot.hull.terminal import dispatch
         (8, -1, 1.0, 1.0, "quote_precedes_signal_close", False),
         (0.25, None, None, None, "quote_missing", True),
         (0.25, None, 1.0, 1.0, "invalid_quote", False),
-        (0.25, 251, 1.0, 1.0, "quote_clock_ahead", False),
+        (0.25, 900, 1.0, 1.0, "ready", False),
+        (0.25, 2251, 1.0, 1.0, "quote_clock_ahead", False),
         (0.25, 200, float("nan"), 1.0, "invalid_quote", False),
         (0.25, 200, 1.001, 1.0, "invalid_quote", False),
         (-0.25, -300, 1.0, 1.0, "signal_clock_ahead", False),
@@ -135,7 +136,7 @@ def test_first_quote_resumption_rechecks_guards_and_never_repeats_exit(
     elif change == "invalid_tick":
         mt.q.bid = 0
     elif change == "future_tick":
-        mt.q.time_msc = (T + 1) * 1000
+        mt.q.time_msc = (T + 5) * 1000
     if change == "stop":
         d.cancel_all_waits()
     elif change == "supersede":

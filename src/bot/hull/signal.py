@@ -279,7 +279,8 @@ class FirstCrossGate:
                 bar is None or self.record.get("waived_from") == s.failed_counter_mss_s
             )
         )
-        skip = older or ((bar is None or r.close_s <= bar) and not waive)
+        # User-requested: do not skip the first cross after an MSS; trade all aligned crosses.
+        skip = older
         if observe and not older and bar is None:
             self.record["bar"] = r.close_s
             if waive:

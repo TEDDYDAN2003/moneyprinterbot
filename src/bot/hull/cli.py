@@ -23,7 +23,7 @@ def register(sub):
         modes.add_argument(
             "--paired-confirm",
             action="store_true",
-            help="Use M5/M3, M10/M5, M15/M10 with both structures aligned. Never expands the parent allowlist or arms orders.",
+            help="Use M5/M4, M10/M8, M15/M12 with both structures aligned. Never expands the parent allowlist or arms orders.",
         )
         modes.add_argument(
             "--m1-confirm",

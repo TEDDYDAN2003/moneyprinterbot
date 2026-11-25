@@ -31,7 +31,7 @@ from .config import (
 )
 from .curves import LiveTick
 from .desk import Desk, identity_check, resolve
-from .entry_clock import QUOTE_POLICY, WAITING, poll_delay
+from .entry_clock import CLOCK_SKEW_TOLERANCE_S, QUOTE_POLICY, WAITING, poll_delay
 from .feed import Stream, StructureTape, sample, verify_before_leg
 from .ladder import cash_levels
 from .minute import MinuteBook
@@ -257,7 +257,7 @@ def target_preview(mt, name, p, q, grid, h, now):
     result = {}
     for label, side in (("BUY", 1), ("SELL", -1)):
         try:
-            if q is None or not 0 <= now - q.ms / 1000 <= h.limits.max_quote_age_s:
+            if q is None or not -CLOCK_SKEW_TOLERANCE_S <= now - q.ms / 1000 <= h.limits.max_quote_age_s:
                 raise Block("quote_unavailable_or_stale")
             if (
                 p.max_spread is not None
@@ -538,6 +538,8 @@ def run(
                         "status": status,
                         "bar_source": "3 x M15, broker D1 anchor"
                         if tf == 45
+                        else "2 x M4, broker D1 anchor"
+                        if tf == 8
                         else "native MT5",
                         "closed_bars_loaded": lane.h.n,
                         "current_structure_phase": active.phase,

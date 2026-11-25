@@ -45,7 +45,7 @@ from .orders import (
 )
 from .ownership import Owners
 from .retest import make_retest_plan
-from .retest_desk import RetestDesk
+from .retest_desk import RETEST_MARKET_FALLBACK_REASONS, RetestDesk
 from .signal import Reading
 
 
@@ -310,7 +310,9 @@ class Desk:
             if ms >= reading.signal_msc:
                 raise Block("same_side_batch_at_signal_close")
 
-    def prepare(self, name, d, window, stage, expected=None, remaining=None):
+    def prepare(
+        self, name, d, window, stage, expected=None, remaining=None, *, force_market=False
+    ):
         if TF_NAME.get(d.tf) not in self.h.eligible_timeframes:
             raise Block("timeframe_not_eligible")
         if not d.entry_side:
@@ -379,7 +381,7 @@ class Desk:
         q, _ = self._entry_quote(name, window, stage)
         plan = (
             make_retest_plan(d, p, grid, q.bid, q.ask, self.cash(name), self.h)
-            if self.retest
+            if (self.retest and not force_market)
             else make_plan(d, p, grid, q.bid, q.ask, self.cash(name))
         )
         margin = _finite_or_none(
@@ -1140,7 +1142,7 @@ class Desk:
             return "first_quote_wait_superseded"
         return self._attempt(name, w)
 
-    def _attempt(self, name, window):
+    def _attempt(self, name, window, *, force_market=False):
         d = window.reading
         window.polls += 1
         expected = set()
@@ -1160,17 +1162,39 @@ class Desk:
                     else "next_leg",
                     expected,
                     None if n is None else n - sent,
+                    force_market=force_market,
                 )
                 if recheck is None:
                     base_bid, base_ask = q.bid, q.ask
                     base_grid = Grid.from_info(i)
-                    tolerance = base_grid.tick * (1 + 1e-9)
+                    tolerance = base_grid.tick * (
+                        (
+                            self.h.retest_quote_drift_ticks
+                            if (force_market or self.h.retest_market_fallback)
+                            else 3
+                        )
+                        + 1e-9
+                    )
                 elif (q.bid, q.ask) != recheck or Grid.from_info(i) != base_grid:
                     raise Block("final_quote_or_safety_changed")
                 if n is None:
                     n = left
-                    if self.retest:
-                        return self.retest.stage(name, window, plan, n, q, i)
+                    if self.retest and not force_market:
+                        outcome = self.retest.stage(name, window, plan, n, q, i)
+                        if (
+                            self.h.retest_market_fallback
+                            and outcome in RETEST_MARKET_FALLBACK_REASONS
+                            and not self.retest.active.get(name)
+                        ):
+                            self.emit(
+                                "retest_market_fallback",
+                                symbol=name,
+                                tf=d.tf,
+                                signal=d.close_s,
+                                reason=outcome,
+                            )
+                            return self._attempt(name, window, force_market=True)
+                        return outcome
                     preview_s = time.time()
                     self.session_gate(name).require("batch_preview", decision=preview_s)
                     self.emit(
@@ -1224,7 +1248,13 @@ class Desk:
                     raise Block(why)
                 # Do not send the inspected plan after a change in exposures/quote, a kill, or a stale signal.
                 _, again, q2, i2 = self.prepare(
-                    name, d, window, "pre_send", expected, n - sent
+                    name,
+                    d,
+                    window,
+                    "pre_send",
+                    expected,
+                    n - sent,
+                    force_market=force_market,
                 )
                 # Remote one-tick tolerance, anchored to the ORIGINAL quote for this
                 # leg. Both sides must fit, AND the broker-checked plan must still match.
@@ -1243,10 +1273,22 @@ class Desk:
                     if (
                         recheck is None
                         and checked_prices != (q.bid, q.ask)
-                        and again.entry == plan.entry
+                        and (
+                            force_market
+                            or self.h.retest_market_fallback
+                            or again.entry == plan.entry
+                        )
                         and again.sl == plan.sl
-                        and again.risk_usd == plan.risk_usd
-                        and again.entry_spread_usd != plan.entry_spread_usd
+                        and (
+                            force_market
+                            or self.h.retest_market_fallback
+                            or again.risk_usd == plan.risk_usd
+                        )
+                        and (
+                            force_market
+                            or self.h.retest_market_fallback
+                            or again.entry_spread_usd != plan.entry_spread_usd
+                        )
                     ):
                         recheck = checked_prices
                         continue
@@ -1434,6 +1476,7 @@ class Desk:
             # an observed touch, a failed broker request or any other veto is terminal.
             if (
                 self.retest
+                and not self.h.retest_market_fallback
                 and n is None
                 and why == "retest_placement_gap"
                 and time.monotonic() < window.end_mono
@@ -1449,6 +1492,22 @@ class Desk:
                 window.last_wait_reason = why
                 self.waiting[(name, d.tf)] = window
                 return WAITING
+            if (
+                self.h.retest_market_fallback
+                and self.retest
+                and not force_market
+                and sent == 0
+                and why in RETEST_MARKET_FALLBACK_REASONS
+                and not self.retest.active.get(name)
+            ):
+                self.emit(
+                    "retest_market_fallback",
+                    symbol=name,
+                    tf=d.tf,
+                    signal=d.close_s,
+                    reason=why,
+                )
+                return self._attempt(name, window, force_market=True)
         if why == "manual_reconciliation_required":
             return why
         return (
