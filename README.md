@@ -6,6 +6,8 @@ This is the **Dynamic Hull scanner, its trade journal, and its read-only chart t
 
 ## How a trade works now
 
+**Pair check before operating:** The documented setup below lists the older trigger charts. The scanner in base `2c460e2` instead maps M5→M4, M10→M8 and M15→M12. The stop correction does not change or authorize that mapping. Do not arm while the preflight pairs differ from the ones you intended.
+
 | Parent (owns the batch) | Entry chart (owns the crossover and initial stop) |
 |---|---|
 | M5 | M3 |
@@ -18,7 +20,7 @@ By default, use the first valid quote of the **next entry-chart candle**. For th
 
 **Know the size before arming.** The paper template selects only XAUUSD at 0.10 lot and a $10 base **per ticket**. Slow requests 10 tickets; medium 4 or 3; fast 7 or 6. A fully filled slow gold batch is 1.00 lot, **not three batches**. The gross target adds a spread cushion in USD (entry quote for market orders; frozen placement quote for limits). The existing [per-ticket profit ladder](docs/HULL_DEMO.md#profit-ladder-for-new-tickets) and [entry sessions](docs/ENTRY_SESSIONS.md) still apply. The stop is a price rule, not a cash-loss ceiling. Configured funding/risk, drift and session checks still apply; no return or exact fill is promised.
 
-**Return-to-entry stop:** For new Hull ladder tickets, entry is a reference price, not a hard stop. After Bid (BUY) or Ask (SELL) first shows a gross profit and then returns to or crosses entry, the scanner can tighten SL halfway from the original stop to the actual fill, leaving TP unchanged. A buy filled at 100 with SL 90 can move to SL 95, not 100. For SELL tickets, the midpoint is moved farther from entry by the current spread and rounded up to the trade tick, while it remains inside the original stop; if it cannot, the existing stop stays. The same live-spread adjustment applies to new SELL stops at entry and ordinary profit-ladder moves. BUY stops are unchanged because their chart reference and broker trigger both use Bid. A stronger profit-ladder stop still takes priority. On by default via `hull.pre_ladder_breakeven`; existing positions keep their saved policy. [Examples, limits and broker confirmation](docs/HULL_DEMO.md#profit-ladder-for-new-tickets).
+**Return-to-entry stop (new ladder tickets):** First the executable quote must show a profit (Bid for BUY, Ask for SELL). Only on a **later** return to or through the actual fill can the scanner tighten the stop to the midpoint between the fill and the **original broker SL**, rounded toward entry. TP stays unchanged. A BUY filled at 100 with SL 90 can move to 95. A SELL filled at 100 with raw Bid-chart SL 110 and spread 2 starts with broker SL **112** and can move to **106**. Spread translates the initial SELL candle stop **once**; neither the midpoint nor a cash-priced ladder rung adds it again. A stronger legal rung takes priority. Existing tickets retain their recorded rules; no installed SL is widened. [Timing, limits and broker confirmation](docs/HULL_DEMO.md#profit-ladder-for-new-tickets).
 
 ## Start safely on Windows
 
@@ -44,7 +46,7 @@ A pull or ZIP extraction does not update a running process. In the private YAML,
 
 ### Standing instructions for the desktop agent
 
-On a start, restart, profile change or arming request, read [the profile picker](docs/Hull-demo-start.html) and the [desktop procedure](docs/HULL_DESKTOP.md). A pasted selection or [`HULL START trio-slow`](docs/HULL_START_PROMPT.md) requests **observation only** with those exact profiles. Compare the latest `started.summary.checkout_head_at_start` and `source_module` with the intended build. Look for `entry_timing: confirmed_cross_next_bar`, `entry_quote_policy: first_fresh_post_close_tick_v1` and `new_ticket_stop_policy: confirmed_pair_trigger_candle_wick_v1`, `stop_spread_policy: sell_ask_stop_with_live_spread_buffer_v1`, with `pair_history_ready: true` in preflight. Sending demo orders requires a **separate, explicit `ARM DEMO`**, fresh preflight with that private demo config and unchanged profiles. Never trade to test logging.
+On a start, restart, profile change or arming request, read [the profile picker](docs/Hull-demo-start.html) and the [desktop procedure](docs/HULL_DESKTOP.md). A pasted selection or [`HULL START trio-slow`](docs/HULL_START_PROMPT.md) requests **observation only** with those exact profiles. Compare the latest `started.summary.checkout_head_at_start` and `source_module` with the intended build. Look for `entry_timing: confirmed_cross_next_bar`, `entry_quote_policy: first_fresh_post_close_tick_v1` and `new_ticket_stop_policy: confirmed_pair_trigger_candle_wick_v1`, `stop_spread_policy: sell_ask_entry_only_exact_risk_v2`, with `pair_history_ready: true` in preflight. Sending demo orders requires a **separate, explicit `ARM DEMO`**, fresh preflight with that private demo config and unchanged profiles. Never trade to test logging.
 
 ## Where to find a decision or a trade
 

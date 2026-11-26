@@ -122,7 +122,7 @@ def test_real_scanner_one_close_one_batch_not_the_forming_cross(
     )  # not the close print, not a replay, not a later batch
     assert prechecks == mt.requests
     assert all(
-        q["sl"] == expected
+        q["sl"] == round(expected + (0.05 if side == -1 else 0), 3)
         and q["price"] == (successor + 0.05 if side == 1 else successor)
         and q["tp"] > 0
         and q["comment"].startswith(f"h{tf}_{T}_")
@@ -166,7 +166,7 @@ def test_no_pip_or_old_swing_fallback_if_tick_unavailable(tick):
 
 @pytest.mark.parametrize("side", [-1, 1])
 @pytest.mark.parametrize("veto", ["gap", "broker_distance", "grid_change", "risk"])
-def test_skip_instead_of_moving_frozen_stop_after_close_or_adding_spread(
+def test_skip_instead_of_reanchoring_invalid_frozen_chart_stop(
     hull_desk, side, veto
 ):
     mt, d, _ = hull_desk("medium")
@@ -177,9 +177,9 @@ def test_skip_instead_of_moving_frozen_stop_after_close_or_adding_spread(
     assert r.entry_side == side
     sl = r.raw_sl
     if veto == "gap":
-        # SELL closes on ask: the bid can still be below the chart's high.
-        mt.q.bid = sl if side == 1 else sl - 0.05
-        mt.q.ask = mt.q.bid + 0.1
+        # Bid hits the raw chart stop, so Ask hits the translated SELL SL.
+        mt.q.bid = sl
+        mt.q.ask = round(sl + 0.1, mt.i.digits)
     elif veto == "broker_distance":
         mt.i.trade_freeze_level = 5000
     elif veto == "grid_change":
@@ -310,7 +310,7 @@ def test_new_candle_and_each_new_fill_price_cannot_move_frozen_stop(hull_desk, s
     assert (
         {r["sl"] for r in mt.requests}
         == {p.sl for p in mt.positions}
-        == {closed.raw_sl}
+        == {round(closed.raw_sl + (0.1 if side == -1 else 0), mt.i.digits)}
     )
     assert {v["frozen_cross_sl"] for k, v in events if k == "demo_result"} == {
         closed.raw_sl

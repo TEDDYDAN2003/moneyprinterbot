@@ -5,12 +5,12 @@ from __future__ import annotations
 import math
 from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, Decimal
 
+from .config import STOP_SPREAD_POLICY
 from .orders import (
     Block,
     Plan,
     cross_candle_stop,
     protected_prices,
-    spread_adjusted_stop,
     spread_goal,
     target,
     valid_cash,
@@ -120,7 +120,7 @@ def make_retest_plan(r, p, g, bid, ask, cash, h):
     pad = h.indicator.atr_buffer * r.atr + h.indicator.extra_pips * p.pip_size
     if r.raw_sl != cross_candle_stop(r.anchor, r.side, pad, g.tick):
         raise Block("retest_stop_unverified")
-    _, _, sl, _ = protected_prices(r, p, g, bid, ask)
+    _, _, sl, _, raw_sl, stop_spread_buffer = protected_prices(r, p, g, bid, ask)
     entry, _ = level(b, r.side, r.atr, g.tick, h.retest_fraction, h.retest_atr_cap)
     risk = -valid_cash(cash, r.side, p.lots, entry, sl)
     if risk <= 0:
@@ -130,8 +130,6 @@ def make_retest_plan(r, p, g, bid, ask, cash, h):
         g, r.side, p.lots, entry, goal, cash, cash_per_price=risk / abs(entry - sl)
     )
     placement_check(r.side, entry, sl, tp, g, bid, ask, p.max_spread)
-    raw_sl = g.price(g.index(r.raw_sl, r.side == -1))
-    _, stop_spread_buffer = spread_adjusted_stop(g, r.side, raw_sl, ask - bid)
     return Plan(
         r.side,
         p.lots,
@@ -142,5 +140,7 @@ def make_retest_plan(r, p, g, bid, ask, cash, h):
         reward,
         p.target_usd,
         spread,
-        stop_spread_buffer,
+        stop_spread_buffer=stop_spread_buffer,
+        raw_chart_sl=raw_sl,
+        stop_spread_policy=STOP_SPREAD_POLICY,
     )

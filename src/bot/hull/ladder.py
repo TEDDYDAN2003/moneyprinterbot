@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from .config import FILL_BREAKEVEN, PULLBACK_HALF
-from .orders import Block, spread_adjusted_stop, target, valid_cash
+from .orders import Block, target, valid_cash
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +79,15 @@ def legal(grid, side, mark, old, new):
     return new.rung > old.rung and _legal_levels(grid, side, mark, old, new)
 
 
+def _v1_stop(grid, side, level, spread):
+    # Reproduce the previous release, including its float/grid behavior, ONLY for
+    # tickets it already manages. New chart translations use decimal quote components.
+    if side == -1 and spread > 0:
+        adjusted = grid.price(grid.index(level + spread, True))
+        return adjusted, adjusted - level
+    return level, 0.0
+
+
 @dataclass(frozen=True, slots=True)
 class EarlyStop:
     """A frozen policy and basis, supplied only when the ticket's quote history permits it."""
@@ -86,7 +95,7 @@ class EarlyStop:
     policy: str
     initial_sl: float | None = None
 
-    def candidate(self, grid, side, entry, old, mark, spread=0.0):
+    def candidate(self, grid, side, entry, old, mark, legacy_spread=None):
         if (
             old.rung != 0
             or side not in (-1, 1)
@@ -111,13 +120,11 @@ class EarlyStop:
             basis = Decimal(str(entry))
         else:
             return None
-        # Round the midpoint toward protection, then buffer a short's Ask stop
-        # with the live spread. The buffer must remain inside the original SL.
+        # Entry and original broker SL are already executable prices. Round
+        # toward entry; ONLY the historical live-spread policy added spread again.
         sl = grid.price(grid.index(basis, up=side == 1))
-        if self.policy == PULLBACK_HALF:
-            sl, stop_spread_buffer = spread_adjusted_stop(
-                grid, side, sl, spread
-            )
+        if self.policy == PULLBACK_HALF and legacy_spread is not None:
+            sl, stop_spread_buffer = _v1_stop(grid, side, sl, legacy_spread)
             if (
                 side * (Decimal(str(entry)) - Decimal(str(sl))) <= 0
                 or side * (Decimal(str(sl)) - Decimal(str(origin))) < 0
@@ -127,15 +134,15 @@ class EarlyStop:
             stop_spread_buffer = 0.0
             if side * (Decimal(str(sl)) - basis) < 0:
                 return None
-        if (
-            side * (sl - old.sl) <= grid.tick * 1e-6
-        ):
+        if side * (sl - old.sl) <= grid.tick * 1e-6:
             return None
         new = Protection(0, sl, old.tp, stop_spread_buffer)
         return new if _legal_levels(grid, side, mark, old, new) else None
 
 
-def propose(grid, side, lots, entry, base, old, mark, cash, *, early=None, spread=0.0):
+def propose(
+    grid, side, lots, entry, base, old, mark, cash, *, early=None, legacy_spread=None
+):
     """Prefer the standard rung. A pre-ladder amendment never extends TP."""
     if not inside(side, mark, old):
         return None
@@ -143,7 +150,7 @@ def propose(grid, side, lots, entry, base, old, mark, cash, *, early=None, sprea
     rung = reached(profit, base)
     if rung <= old.rung:
         return (
-            early.candidate(grid, side, entry, old, mark, spread=spread)
+            early.candidate(grid, side, entry, old, mark, legacy_spread=legacy_spread)
             if early
             else None
         )
@@ -152,7 +159,11 @@ def propose(grid, side, lots, entry, base, old, mark, cash, *, early=None, sprea
     raw_sl, _ = target(
         grid, side, lots, entry, base * (lock_pct / 100), cash, cash_per_price=slope
     )
-    sl, spread_buffer = spread_adjusted_stop(grid, side, raw_sl, spread)
+    sl, spread_buffer = (
+        (raw_sl, 0.0)
+        if legacy_spread is None
+        else _v1_stop(grid, side, raw_sl, legacy_spread)
+    )
     tp, _ = target(
         grid, side, lots, entry, base * (tp_pct / 100), cash, cash_per_price=slope
     )
@@ -160,19 +171,36 @@ def propose(grid, side, lots, entry, base, old, mark, cash, *, early=None, sprea
     better = max if side == 1 else min
     selected_sl = better(sl, old.sl)
     selected_buffer = (
-        spread_buffer
-        if selected_sl == sl and sl != old.sl
-        else old.stop_spread_buffer
+        spread_buffer if selected_sl == sl and sl != old.sl else old.stop_spread_buffer
     )
     new = Protection(rung, selected_sl, better(tp, old.tp), selected_buffer)
-    if new.sl != old.sl and valid_cash(cash, side, lots, entry, new.sl) <= 0:
+    # The solver already valued its selected ticks. If retaining an older,
+    # stronger price instead, require its current cash value to meet the floor too.
+    if legacy_spread is None and (
+        (
+            new.sl != sl
+            and valid_cash(cash, side, lots, entry, new.sl) + 1e-9
+            < base * (lock_pct / 100)
+        )
+        or (
+            new.tp != tp
+            and valid_cash(cash, side, lots, entry, new.tp) + 1e-9
+            < base * (tp_pct / 100)
+        )
+    ):
+        raise Block("ladder_retained_level_below_cash_floor")
+    if (
+        legacy_spread is not None
+        and new.sl != old.sl
+        and valid_cash(cash, side, lots, entry, new.sl) <= 0
+    ):
         raise Block("ladder_spread_buffer_erases_lock")
     if not legal(grid, side, mark, old, new):
         if (
             early
             and (
                 floor := early.candidate(
-                    grid, side, entry, old, mark, spread=spread
+                    grid, side, entry, old, mark, legacy_spread=legacy_spread
                 )
             )
             is not None
@@ -183,7 +211,18 @@ def propose(grid, side, lots, entry, base, old, mark, cash, *, early=None, sprea
 
 
 def still_valid(
-    grid, side, lots, entry, base, old, new, mark, cash, *, early=None, spread=0.0
+    grid,
+    side,
+    lots,
+    entry,
+    base,
+    old,
+    new,
+    mark,
+    cash,
+    *,
+    early=None,
+    legacy_spread=None,
 ):
     """Revalidate the exact request. Never send a different pair on an old precheck."""
     if new.rung == 0:
@@ -200,15 +239,25 @@ def still_valid(
                 mark,
                 cash,
                 early=early,
-                spread=spread,
+                legacy_spread=legacy_spread,
             )
             == new
         )
     _, lock_pct, tp_pct = percentages(new.rung)
+    if legacy_spread is None:
+        # The cash solver prices a broker exit, not a Bid-chart line. Revalue the
+        # *exact* SL/TP on final check (including nonlinear FX/rounding).
+        return (
+            legal(grid, side, mark, old, new)
+            and reached(valid_cash(cash, side, lots, entry, mark), base) >= new.rung
+            and valid_cash(cash, side, lots, entry, new.sl) + 1e-9
+            >= base * (lock_pct / 100)
+            and valid_cash(cash, side, lots, entry, new.tp) + 1e-9
+            >= base * (tp_pct / 100)
+        )
+    # Compatibility only: do not silently change a running v1 ticket on restart.
     raw_sl, _ = target(grid, side, lots, entry, base * (lock_pct / 100), cash)
-    adjusted_sl, buffer = spread_adjusted_stop(
-        grid, side, raw_sl, new.stop_spread_buffer
-    )
+    adjusted_sl, buffer = _v1_stop(grid, side, raw_sl, new.stop_spread_buffer)
     better = max if side == 1 else min
     expected_sl = better(adjusted_sl, old.sl)
     expected_buffer = (
@@ -221,7 +270,7 @@ def still_valid(
     tol = grid.tick * 1e-6
     actual_lock = valid_cash(cash, side, lots, entry, new.sl)
     spread_ok = (
-        new.sl == old.sl or side == 1 or spread <= new.stop_spread_buffer + tol
+        new.sl == old.sl or side == 1 or legacy_spread <= new.stop_spread_buffer + tol
     )
     lock_ok = (
         actual_lock + 1e-9 >= base * (lock_pct / 100)

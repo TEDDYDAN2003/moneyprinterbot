@@ -1,5 +1,7 @@
 # Dynamic Hull: paired entries and exits
 
+**Version note:** The original setup and examples below describe M3/M5/M10 triggers. Base `2c460e2` actually selects M4/M8/M12 respectively. Do not interpret an older approval, or journal recognition of either generation, as authorization to run different pairs. The entry-stop correction does not change signal selection.
+
 The active **Python demo desk** uses a parent for direction and exactly one smaller chart for timing. All four distinct charts are native MT5 bid charts. **M1 never triggers an entry or exit in this policy. M30 and M45 are not parents.**
 
 | Owner (parent) | Required trigger close | Fast trigger exit for tickets it opened |
@@ -43,7 +45,7 @@ Native clocks need not line up. At an **11:36 M3 close**, M5 → M3 uses the M5 
    .\run_arm_demo.ps1 -Observe
    ```
 
-   Expect `READ ONLY`, `execution_mode: paired_structure`, `trigger_timeframe: per_parent`, `parent_to_trigger: {M5: M3, M10: M5, M15: M10}` (or your selected subset), `pair_history_ready: true` in preflight, `new_ticket_stop_policy: confirmed_pair_trigger_candle_wick_v1`, `stop_spread_policy: sell_ask_stop_with_live_spread_buffer_v1`, correct account, sizes, history and session mapping. `history_check` lists each chart once with both roles where applicable; readiness means loaded, current history, **not** that a pair is aligned. Review warnings. The observer only writes shadow decisions. Verify `checkout_head_at_start` and `source_module` in the latest `started` event. Stop that observer before any separately intended demo arming. **Running `run_arm_demo.ps1` without `-Observe` requests demo orders.**
+   Expect `READ ONLY`, `execution_mode: paired_structure`, `trigger_timeframe: per_parent`, `parent_to_trigger: {M5: M3, M10: M5, M15: M10}` (or your selected subset), `pair_history_ready: true` in preflight, `new_ticket_stop_policy: confirmed_pair_trigger_candle_wick_v1`, `stop_spread_policy: sell_ask_entry_only_exact_risk_v2`, correct account, sizes, history and session mapping. `history_check` lists each chart once with both roles where applicable; readiness means loaded, current history, **not** that a pair is aligned. Review warnings. The observer only writes shadow decisions. Verify `checkout_head_at_start` and `source_module` in the latest `started` event. Stop that observer before any separately intended demo arming. **Running `run_arm_demo.ps1` without `-Observe` requests demo orders.**
 
    For other profiles use the same explicit `--profile` arguments with `hull-preflight --config config.demo.local.yaml --paired-confirm` and `trade-all --config config.demo.local.yaml --paired-confirm` (without `--arm-demo` for observation). Do not widen thresholds to make a preflight pass. For import/setup see the [root README](../README.md#start-safely-on-windows).
 4. Do not switch managers with tickets open. Known M1/paired origins require their own manager, settings, selected parent and symbol. A paired start refuses unverified/legacy Hull exposure instead of assigning it a child. No private records need converting. Older [M1](HULL_M1.md) and [parent-close](HULL_STRUCTURE.md) policies are available for interpreting history, not additional lanes to run alongside this one. Wickless and MQ5/Pine/Free Chart studies are unchanged, not paired-fill displays.

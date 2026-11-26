@@ -27,7 +27,6 @@ from .config import (
     PAIR_MODE,
     PAIRS,
     RETEST,
-    STOP_SPREAD_POLICY,
     TARGET_POLICY,
     TF_NAME,
 )
@@ -40,6 +39,7 @@ from .orders import (
     Grid,
     count_for,
     make_plan,
+    quote_spread,
     room,
     target,
     valid_cash,
@@ -987,7 +987,8 @@ class Desk:
         if self.h.exit_policy == FIXED:
             self.state.setdefault("target_by_ticket", {})[str(p.ticket)] = plan.goal_usd
             self.persist()
-        if abs(p.sl - plan.sl) > tol or not (p.sl > 0 and p.tp > 0):
+        original_sl = p.sl
+        if abs(original_sl - plan.sl) > tol or not (p.sl > 0 and p.tp > 0):
             self.close_owned(p, "unverified_protection")
             return None, "protection_mismatch"
         # Always inspect the broker snapshot for foreign/unprotected exposure,
@@ -1025,7 +1026,7 @@ class Desk:
                 "action": mt.TRADE_ACTION_SLTP,
                 "symbol": name,
                 "position": p.ticket,
-                "sl": plan.sl,
+                "sl": original_sl,
                 "tp": tp,
                 "magic": self.h.magic,
             }
@@ -1047,12 +1048,13 @@ class Desk:
                 or verify[0].price_open != p.price_open
                 or verify[0].volume != p.volume
                 or abs(verify[0].tp - tp) > tol
-                or abs(verify[0].sl - plan.sl) > tol
+                or verify[0].sl != original_sl
             ):
                 return None, "target_alignment_unverified"
+            p = verify[0]
         if self.h.exit_policy == LADDER:
             # Do not enroll a pre-existing, partial, unknown or unverified ticket.
-            self.ladders.enroll(p, plan, tp, target_policy=target_policy)
+            self.ladders.enroll(p, plan, target_policy=target_policy)
         return p.ticket, "ok"
 
     def cancel_wait(self, name, tf, reason):
@@ -1151,7 +1153,8 @@ class Desk:
         sent = 0
         recheck = None  # bounded *unsent* reprice per leg, never a send retry
         reprices = 0
-        max_reprices = 10 if (force_market or self.h.retest_market_fallback) else 1
+        flexible_quote = force_market or self.h.retest_market_fallback
+        max_reprices = 10 if flexible_quote else 1
         try:
             while True:
                 left, plan, q, i = self.prepare(
@@ -1173,7 +1176,7 @@ class Desk:
                     tolerance = base_grid.tick * (
                         (
                             self.h.retest_quote_drift_ticks
-                            if (force_market or self.h.retest_market_fallback)
+                            if flexible_quote
                             else 3
                         )
                         + 1e-9
@@ -1214,17 +1217,15 @@ class Desk:
                         entry_session=self.session_gate(name).report(preview_s),
                         exit_policy=self.h.exit_policy,
                         target_policy=TARGET_POLICY,
-                        stop_spread_policy=STOP_SPREAD_POLICY,
-                        stop_spread_buffer_price=plan.stop_spread_buffer,
                         stop_spread_buffer_pips=(
                             plan.stop_spread_buffer / self.syms[name][1].pip_size
                         ),
-                        stop_spread_quote_price=q.ask - q.bid,
+                        stop_spread_quote_price=float(quote_spread(q.bid, q.ask)),
                         goal_per_leg=plan.goal_usd,  # indicative first leg, not a promise for siblings
                         risk_batch=n * plan.risk_usd,
                         **d.clock_fields(),
                         **d.entry_audit(),
-                        **asdict(plan),
+                        **(asdict(plan) | plan.stop_audit(q.bid, q.ask)),
                     )
                     if not self.armed:
                         return "shadow_plan_only"
@@ -1280,28 +1281,27 @@ class Desk:
                 if max_reprices == 1 and recheck is not None and checked_prices != recheck:
                     raise Block("final_quote_or_safety_changed")
                 if again != plan:
-                    # A move on just the non-entry side can now change the goal.
-                    # Bounded unsent reprice inside the tolerance band, sharing
-                    # the final-quote budget. Never patch a broker-checked request.
+                    # A tighter SELL translation on the same raw wick can lower
+                    # risk. Rebuild only an unsent leg inside its original budget;
+                    # never patch a checked request or alter an installed stop.
+                    tighter_sell = (
+                        plan.side == again.side == -1
+                        and again.raw_chart_sl == plan.raw_chart_sl
+                        and again.sl < plan.sl
+                        and quote_spread(q2.bid, q2.ask) < quote_spread(q.bid, q.ask)
+                        and again.risk_usd <= plan.risk_usd
+                    )
+                    unchanged_stop = again.sl == plan.sl and (
+                        flexible_quote or (
+                            again.risk_usd == plan.risk_usd
+                            and again.entry_spread_usd != plan.entry_spread_usd
+                        )
+                    )
                     if (
                         reprices < max_reprices
                         and checked_prices != (q.bid, q.ask)
-                        and (
-                            force_market
-                            or self.h.retest_market_fallback
-                            or again.entry == plan.entry
-                        )
-                        and again.sl == plan.sl
-                        and (
-                            force_market
-                            or self.h.retest_market_fallback
-                            or again.risk_usd == plan.risk_usd
-                        )
-                        and (
-                            force_market
-                            or self.h.retest_market_fallback
-                            or again.entry_spread_usd != plan.entry_spread_usd
-                        )
+                        and (flexible_quote or again.entry == plan.entry)
+                        and (unchanged_stop or tighter_sell)
                     ):
                         reprices += 1
                         recheck = checked_prices
@@ -1337,11 +1337,7 @@ class Desk:
                         self.kill.exists()
                         or max(abs(q3.bid - base_bid), abs(q3.ask - base_ask))
                         > tolerance
-                        or (
-                            d.side == -1
-                            and q3.ask - q3.bid
-                            > plan.stop_spread_buffer + base_grid.tick * 1e-7
-                        )
+                        or not plan.covers_spread(q3.bid, q3.ask)
                         or (reprices >= max_reprices and final_prices != checked_prices)
                     ):
                         raise Block("final_quote_or_safety_changed")
@@ -1425,13 +1421,12 @@ class Desk:
                     send_bid=q3.bid,
                     send_ask=q3.ask,
                     target_policy=TARGET_POLICY,
-                    stop_spread_policy=STOP_SPREAD_POLICY,
-                    stop_spread_buffer_price=plan.stop_spread_buffer,
+                    **plan.stop_audit(q.bid, q.ask),
                     stop_spread_buffer_pips=(
                         plan.stop_spread_buffer / self.syms[name][1].pip_size
                     ),
-                    planned_stop_spread_quote_price=q2.ask - q2.bid,
-                    stop_spread_quote_price=q3.ask - q3.bid,
+                    planned_stop_spread_quote_price=float(quote_spread(q.bid, q.ask)),
+                    stop_spread_quote_price=float(quote_spread(q3.bid, q3.ask)),
                     configured_target_usd=plan.configured_target_usd,
                     entry_spread_usd=plan.entry_spread_usd,
                     initial_goal_usd=plan.goal_usd,

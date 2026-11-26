@@ -8,7 +8,15 @@ from dataclasses import asdict
 
 from bot.broker import fresh
 
-from .config import FILL_BREAKEVEN, LADDER, PULLBACK_HALF, TARGET_POLICY
+from .config import (
+    FILL_BREAKEVEN,
+    LADDER,
+    LIVE_SPREAD_V1,
+    PRE_SPREAD,
+    PULLBACK_HALF,
+    STOP_SPREAD_POLICY,
+    TARGET_POLICY,
+)
 from .ladder import (
     EarlyStop,
     Protection,
@@ -18,7 +26,7 @@ from .ladder import (
     propose,
     still_valid,
 )
-from .orders import Block, Grid, valid_cash
+from .orders import Block, Grid, saved_stop_policy, valid_cash
 
 
 def opened_ms(p):
@@ -90,13 +98,17 @@ class TicketLadders:
     def needs_review(self):
         return any(r.get("pending") or r.get("hold") for r in self.book.values())
 
-    def enroll(self, p, plan, tp, *, target_policy=TARGET_POLICY):
+    def enroll(self, p, plan, *, target_policy=TARGET_POLICY):
         # Called only after a *new* fill and its protection have been reconciled.
         key = str(p.ticket)
         self.d.state.setdefault("ladder_by_ticket", {})[key] = {
             "policy": LADDER,
             "breakeven_policy": self.d.h.new_ticket_breakeven_policy,
-            "initial_sl": float(p.sl),  # verified once at enrollment
+            # Actual broker SL is immutable, even after an amendment.
+            "initial_sl": float(p.sl),
+            "raw_chart_sl": plan.raw_chart_sl,
+            "initial_stop_spread_buffer": plan.stop_spread_buffer,
+            "stop_spread_policy": plan.stop_spread_policy,
             "tf": self.d.owners.lane(p),
             "symbol": p.symbol,
             "identifier": int(getattr(p, "identifier", p.ticket)),
@@ -109,8 +121,8 @@ class TicketLadders:
             "entry_spread_usd": plan.entry_spread_usd,
             "base_usd": plan.goal_usd,
             "rung": 0,
-            "sl": plan.sl,
-            "tp": tp,
+            "sl": float(p.sl),
+            "tp": float(p.tp),
             "stop_spread_buffer": plan.stop_spread_buffer,
             "confirmed_tick_msc": 0,
         }
@@ -164,6 +176,11 @@ class TicketLadders:
     def confirm(self, p, key, r, grid):
         """Broker read-back, including after a crash/uncertain acknowledgement."""
         intent = r["pending"]
+        if "stop_spread_policy" in intent and intent[
+            "stop_spread_policy"
+        ] != saved_stop_policy(r):
+            self.hold(key, r, "ladder_intent_policy_mismatch_review")
+            return False
         levels = pair(intent)
         if not self.same_position(p, key, r) or not matches_levels(p, levels, grid):
             return False
@@ -187,14 +204,26 @@ class TicketLadders:
                     return False
                 r["breakeven_confirmed"] = True
                 event = "profit_ladder_breakeven_confirmed"
-        r.update(**asdict(levels), confirmed_tick_msc=intent["tick_time_msc"])
+        # Save the old generation before writing a current-format Protection. An
+        # untagged pre-spread record must not turn into v1 after its first read-back.
+        policy = saved_stop_policy(r)
+        r.update(
+            **asdict(levels),
+            stop_spread_policy=policy,
+            confirmed_tick_msc=intent["tick_time_msc"],
+        )
         del r["pending"]
         self.d.persist()
         self.noted.pop(key, None)
-        if early:
+        # A missing optional valuation cannot turn an accepted read-back into a
+        # deferred amendment or suppress its receipt. It is never a substitute for zero.
+        try:
             modeled_stop_pnl = valid_cash(
                 self.d.cash(p.symbol), r["side"], r["lots"], r["entry"], levels.sl
             )
+        except Block:
+            modeled_stop_pnl = None
+        if early:
             self.d.emit(
                 event,
                 ticket=int(key),
@@ -207,9 +236,6 @@ class TicketLadders:
             )
             return True
         trigger, lock, tp = percentages(levels.rung)
-        modeled_stop_pnl = valid_cash(
-            self.d.cash(p.symbol), r["side"], r["lots"], r["entry"], levels.sl
-        )
         self.d.emit(
             "profit_ladder_step",
             ticket=int(key),
@@ -219,7 +245,13 @@ class TicketLadders:
             lots=r["lots"],
             side=r["side"],
             trigger_pct=trigger,
+            # Rung schedule versus actual gross broker valuation; v1 can differ.
             lock_pct=lock,
+            modeled_lock_pct=(
+                100 * modeled_stop_pnl / r["base_usd"]
+                if modeled_stop_pnl is not None and r["base_usd"] > 0
+                else None
+            ),
             target_pct=tp,
             modeled_stop_pnl_usd=modeled_stop_pnl,
             **intent,
@@ -278,6 +310,10 @@ class TicketLadders:
             if not matches_levels(p, old, grid):
                 self.hold(key, r, "ladder_external_levels_review")
                 return
+            stop_policy = saved_stop_policy(r)
+            if stop_policy not in (PRE_SPREAD, LIVE_SPREAD_V1, STOP_SPREAD_POLICY):
+                self.hold(key, r, "unknown_ladder_stop_policy_review")
+                return
             policy = early_policy(r)
             if policy:
                 # Preserve the exact broker TP (not a reconstruction from the target or spread).
@@ -317,7 +353,8 @@ class TicketLadders:
                 )
             early = eligible_early(r, q.time_msc)
             args = r["side"], r["lots"], r["entry"], r["base_usd"]
-            cache_key = (name, args, old, mark, early, q.bid, q.ask)
+            legacy_spread = q.ask - q.bid if stop_policy == LIVE_SPREAD_V1 else None
+            cache_key = (name, args, old, mark, early, legacy_spread)
             if cache_key not in plans:
                 plans[cache_key] = propose(
                     grid,
@@ -326,7 +363,7 @@ class TicketLadders:
                     mark,
                     self.d.cash(name),
                     early=early,
-                    spread=q.ask - q.bid,
+                    legacy_spread=legacy_spread,
                 )
             new = plans[cache_key]
             if new is not None:
@@ -361,6 +398,7 @@ class TicketLadders:
         # the broker or hold; never infer an amendment from an ack or retry blind.
         r["pending"] = {
             **asdict(new),
+            "stop_spread_policy": saved_stop_policy(r),
             "tick_time_msc": int(sampled.time_msc),
             "mark": executable(r["side"], sampled.bid, sampled.ask),
         }
@@ -402,7 +440,9 @@ class TicketLadders:
                     mark,
                     d.cash(p.symbol),
                     early=eligible_early(r, last.time_msc),
-                    spread=last.ask - last.bid,
+                    legacy_spread=last.ask - last.bid
+                    if saved_stop_policy(r) == LIVE_SPREAD_V1
+                    else None,
                 )
                 or not fresh(last, time.time(), d.lim.max_quote_age_s)
                 or d.kill.exists()

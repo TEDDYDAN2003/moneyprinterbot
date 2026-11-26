@@ -13,7 +13,7 @@ from dataclasses import asdict
 from bot.broker import DemoSafetyError, _side_is_allowed, fresh, snapshot
 from bot.config.entry_sessions import EntrySessionVeto
 
-from .config import LADDER, PAIR_MODE, PAIRS, RETEST, TF_NAME
+from .config import LADDER, PAIR_MODE, PAIRS, RETEST, STOP_SPREAD_POLICY, TF_NAME
 from .notifier import notify_blocked_setup
 from .orders import Block, Exposure, Grid, Plan, room
 from .retest import GOAL, POLICY, capability, level, placement_check
@@ -346,7 +346,7 @@ class RetestDesk:
         if not d.armed:
             self.capacity(b, r, plan, 1)
             current, _ = d._entry_quote(name, w, "shadow_limit_decision")
-            self.guard(b, w, g, current)
+            self.guard(b, w, g, plan, current)
             if current.time_msc < q.time_msc or (
                 not d.h.retest_market_fallback
                 and max(abs(current.bid - q.bid), abs(current.ask - q.ask))
@@ -382,6 +382,7 @@ class RetestDesk:
             entry_policy=POLICY,
             target_policy=GOAL,
             limit=ref,
+            **plan.stop_audit(q.bid, q.ask),
             sl=plan.sl,
             tp=plan.tp,
             spread_usd=plan.entry_spread_usd,
@@ -456,12 +457,11 @@ class RetestDesk:
             )
         return outcome
 
-    def guard(self, b, w, g, q):
+    def guard(self, b, w, g, plan, q):
         d = self.d
         mt = self.mt
         name = b["name"]
         r = w.reading
-        plan = Plan(**b["plan"])
         p = d.syms[name][1]
         if (
             d.kill.exists()
@@ -492,6 +492,10 @@ class RetestDesk:
             or not _side_is_allowed(mt, info, "BUY" if r.side == 1 else "SELL")
         ):
             raise Block("retest_symbol_spec_changed")
+        # Siblings share one frozen placement bracket. Reject an under-buffered
+        # SELL, even within one tick of drift. This is NOT a market-fallback reason.
+        if not plan.covers_spread(q.bid, q.ask):
+            raise Block("retest_stop_spread_buffer_insufficient")
         placement_check(
             r.side, plan.entry, plan.sl, plan.tp, g, q.bid, q.ask, p.max_spread
         )
@@ -542,7 +546,7 @@ class RetestDesk:
         # Refresh mutable safety, not the candles, entry or target solver for every sibling.
         a = d.account()
         q, _ = d._entry_quote(name, w, "limit_precheck")
-        self.guard(b, w, g, q)
+        self.guard(b, w, g, plan, q)
         req = {
             "action": mt.TRADE_ACTION_PENDING,
             "symbol": name,
@@ -579,7 +583,7 @@ class RetestDesk:
                 q.ask,
             ):
                 q2, _ = d._entry_quote(name, w, "limit_pre_send")
-            self.guard(b, w, g, q2)
+            self.guard(b, w, g, plan, q2)
             if (
                 q2.time_msc < q.time_msc
                 or (
@@ -784,7 +788,9 @@ class RetestDesk:
                     d.syms[name][1].session == "configured" and d.hours.status(now)[0]
                 ):
                     self.invalidate(b, "entry_session_closed", flatten=True)
-                elif portfolio_veto or (why := room(d.lim, e, Plan(**b["plan"]), 0)):
+                elif portfolio_veto or (
+                    why := room(d.lim, e, Plan.from_saved(b["plan"]), 0)
+                ):
                     self.invalidate(b, portfolio_veto or why, flatten=True)
                 elif (
                     not valid_spec
@@ -809,7 +815,7 @@ class RetestDesk:
                 ):
                     self.invalidate(b, "working_symbol_inventory_changed", flatten=True)
                 if not d.armed:
-                    p = Plan(**b["plan"])
+                    p = Plan.from_saved(b["plan"])
                     hit = (
                         not b.get("cancel")
                         and fresh(q, now, d.lim.max_quote_age_s)
@@ -903,7 +909,7 @@ class RetestDesk:
         pid = getattr(o, "position_id", 0) or tid
         name = b["name"]
         side = b["side"]
-        plan = Plan(**b["plan"])
+        plan = Plan.from_saved(b["plan"])
         tol = b["tick"] * 1e-6
         # MT5 python API history_deals_get filters by position_id (which equals order ticket tid on fill)
         ds = mt.history_deals_get(position=pid)
@@ -1077,6 +1083,11 @@ class RetestDesk:
                 entry_route=RETEST,
                 pricing_policy=POLICY,
                 target_policy=GOAL,
+                # Recovery of a legacy placement must not manufacture v2 evidence.
+                **(
+                    plan.stop_audit(b["bid"], b["ask"])
+                    if plan.stop_spread_policy == STOP_SPREAD_POLICY else {}
+                ),
                 leg=l["leg"],
                 order=tid,
                 deal=x.ticket,

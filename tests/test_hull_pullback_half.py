@@ -24,7 +24,7 @@ def sweep(mt, d, p, dist, **options):
 
 
 @pytest.mark.parametrize(
-    "side,fill,half", [(1, 2000.123, 1999.862), (-1, 1999.987, 2000.293)]
+    "side,fill,half", [(1, 2000.123, 1999.862), (-1, 1999.987, 2000.343)]
 )
 @pytest.mark.parametrize("return_distance", [0, -0.03], ids=["touch", "through_entry"])
 def test_observed_profit_then_return_only_never_a_hard_be_or_rung(
@@ -413,11 +413,11 @@ def test_one_return_four_fills_not_batch_average(hull_desk, side):
     mt.i.trade_tick_size = 0.025
     req_entry = mt.q.ask if side == 1 else mt.q.bid
     fills = [round(req_entry + side * x, 3) for x in (0.012, 0.038, 0.062, 0.113)]
-    # On BUY the original wick stop is 1999.6; on SELL it is 2000.6.
+    # Original broker stops: BUY 1999.6; SELL 2000.6 raw + 0.1 spread = 2000.7.
     halves = (
         [1999.875, 1999.875, 1999.900, 1999.925]
         if side == 1
-        else [2000.275, 2000.275, 2000.250, 2000.225]
+        else [2000.325, 2000.325, 2000.300, 2000.275]
     )
     actual = iter(fills)
     send = mt.order_send

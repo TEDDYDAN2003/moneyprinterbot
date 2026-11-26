@@ -6,7 +6,6 @@ from dataclasses import replace
 from types import SimpleNamespace as NS
 
 import pytest
-from bot.hull.structure import Structure
 from hull_mt import ROOT, T, sig
 
 from bot.config.loader import load_yaml
@@ -15,6 +14,7 @@ from bot.hull.desk import Desk
 from bot.hull.ladder import cash_levels
 from bot.hull.orders import Block, Grid, make_plan, spread_goal, target
 from bot.hull.signal import LiveTick
+from bot.hull.structure import Structure
 from bot.hull.terminal import target_preview
 
 
@@ -57,7 +57,10 @@ def test_thirteen_dollar_cushion_per_filled_ticket_not_thirteen_for_batch(
     mt, d, log, r = us30(hull_desk, side, policy=policy)
     assert d.batch("US30m", r) == "demo_batch_sent"
     assert len(mt.requests) == len(mt.positions) == 10
-    assert all(p.tp == tp and p.sl == r.raw_sl and p.volume == 1 for p in mt.positions)
+    assert all(
+        p.tp == tp and p.sl == r.raw_sl + (13 if side == -1 else 0) and p.volume == 1
+        for p in mt.positions
+    )
     assert all(abs(p.tp - p.price_open) == 23 for p in mt.positions)
     assert all(
         x["initial_goal_usd"] == 23
@@ -125,7 +128,7 @@ def test_last_unsent_quote_each_sibling_and_actual_fill_have_distinct_roles(
         assert ev["request"]["tp"] == entry + side * goal
         assert (p.tp, p.sl, p.price_open) == (
             mt.retprice + side * goal,
-            r.raw_sl,
+            r.raw_sl + (s if side == -1 else 0),
             mt.retprice,
         )
         assert record["base_usd"] == goal and record["entry_spread_usd"] == s

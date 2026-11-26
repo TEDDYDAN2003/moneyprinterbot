@@ -182,11 +182,9 @@ def test_upgrade_appends_separate_logs_and_reopens_same_journal(
             assert row["send_bid"] == plain(receipt["send_bid"]) and row[
                 "send_ask"
             ] == plain(receipt["send_ask"])
-            assert (
-                row["initial_sl"]
-                == row["frozen_cross_sl"]
-                == plain(receipt["request"]["sl"])
-            )
+            assert row["initial_sl"] == plain(receipt["request"]["sl"])
+            assert row["frozen_cross_sl"] == plain(receipt["frozen_cross_sl"])
+            assert (row["initial_sl"] != row["frozen_cross_sl"]) == (side == -1)
             assert (
                 row["cross_candle_wick"] == plain(receipt["cross_candle_wick"])
                 and row["net_profit"] == "2.50"

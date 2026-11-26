@@ -6,7 +6,7 @@ import math
 from dataclasses import dataclass
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 
-from .config import COUNTS
+from .config import COUNTS, LIVE_SPREAD_V1, PRE_SPREAD, STOP_SPREAD_POLICY
 
 
 class Block(ValueError):
@@ -85,6 +85,28 @@ class Plan:
     # Price distance added to a short's bid-chart stop for its Ask-triggered SL.
     stop_spread_buffer: float = 0.0
 
+    raw_chart_sl: float | None = None
+    stop_spread_policy: str = PRE_SPREAD
+
+    @classmethod
+    def from_saved(cls, data):
+        # Decode the original serialized shape BEFORE applying dataclass defaults.
+        return cls(**(data | {"stop_spread_policy": saved_stop_policy(data)}))
+
+    def covers_spread(self, bid, ask):
+        return self.side == 1 or quote_spread(bid, ask) <= Decimal(
+            str(self.stop_spread_buffer)
+        )
+
+    def stop_audit(self, reference_bid, reference_ask):
+        return {
+            "stop_spread_policy": self.stop_spread_policy,
+            "raw_chart_sl": self.raw_chart_sl,
+            "stop_spread_buffer_price": self.stop_spread_buffer,
+            "stop_reference_bid": reference_bid,
+            "stop_reference_ask": reference_ask,
+        }
+
     @property
     def goal_usd(self):
         return self.configured_target_usd + self.entry_spread_usd
@@ -117,23 +139,36 @@ def spread_goal(side, lots, bid, ask, base, cash):
     return spread, goal
 
 
-def spread_adjusted_stop(grid, side, level, spread):
+def saved_stop_policy(record):
+    """Never infer an open ticket's rules from current configuration or *value* of its buffer."""
+    if "stop_spread_policy" in record:
+        return record["stop_spread_policy"]
+    if "raw_chart_sl" in record or "initial_stop_spread_buffer" in record:
+        return "missing_stop_policy_version"  # damaged newer shape; hold, never downgrade
+    return LIVE_SPREAD_V1 if "stop_spread_buffer" in record else PRE_SPREAD
+
+
+def quote_spread(bid, ask):
+    if not (math.isfinite(bid) and math.isfinite(ask) and 0 < bid <= ask):
+        raise Block("bad_quote")
+    # Subtract decimal quote components, not Decimal(str(ask - bid)). An on-grid
+    # FX level must never acquire another tick merely from binary subtraction.
+    return Decimal(str(ask)) - Decimal(str(bid))
+
+
+def spread_adjusted_stop(grid, side, level, bid, ask):
     """Translate a bid-chart short stop to its Ask trigger level, rounded outward.
 
     BUY stop loss is triggered on Bid, the same side used by the chart OHLC, so
     only SELL stops receive this spread buffer.
     """
-    if (
-        side not in (-1, 1)
-        or not math.isfinite(level)
-        or level <= 0
-        or not math.isfinite(spread)
-        or spread < 0
-    ):
+    spread = quote_spread(bid, ask)
+    if side not in (-1, 1) or not math.isfinite(level) or level <= 0:
         raise Block("invalid_stop_spread")
     if side == -1 and spread > 0:
-        adjusted = grid.price(grid.index(level + spread, True))
-        return adjusted, adjusted - level
+        raw = Decimal(str(level))
+        adjusted = Decimal(grid.index(raw + spread, True)) * Decimal(str(grid.tick))
+        return float(adjusted), float(adjusted - raw)
     return level, 0.0
 
 
@@ -234,20 +269,18 @@ def protected_prices(d, p, grid, bid, ask):
         raise Block(
             "cross_candle_stop_grid_changed"
         )  # never re-anchor or widen a frozen SL
-    sl, _ = spread_adjusted_stop(grid, side, raw_sl, ask - bid)
+    sl, buffer = spread_adjusted_stop(grid, side, raw_sl, bid, ask)
     dist = max(grid.gap, grid.tick)
     if sl <= 0 or side * (mark - sl) < dist - grid.tick * 1e-6:
         raise Block("initial_stop_breached_or_too_close")
-    return entry, mark, sl, dist
+    return entry, mark, sl, dist, raw_sl, buffer
 
 
 def make_plan(d, p, grid, bid, ask, cash):
-    entry, mark, sl, dist = protected_prices(d, p, grid, bid, ask)
-    side = d.side
-    raw_sl = grid.price(grid.index(d.raw_sl, side == -1))
-    _, stop_spread_buffer = spread_adjusted_stop(
-        grid, side, raw_sl, ask - bid
+    entry, mark, sl, dist, raw_sl, stop_spread_buffer = protected_prices(
+        d, p, grid, bid, ask
     )
+    side = d.side
     risk = -valid_cash(cash, side, p.lots, entry, sl)
     if risk <= 0:
         raise Block("nonpositive_cash_risk")
@@ -267,7 +300,9 @@ def make_plan(d, p, grid, bid, ask, cash):
         reward,
         p.target_usd,
         spread,
-        stop_spread_buffer,
+        stop_spread_buffer=stop_spread_buffer,
+        raw_chart_sl=raw_sl,
+        stop_spread_policy=STOP_SPREAD_POLICY,
     )
 
 

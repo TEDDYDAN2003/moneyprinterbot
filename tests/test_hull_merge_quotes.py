@@ -131,7 +131,7 @@ def test_pre_send_spread_change_uses_the_one_unsent_reprice(
     mt, desk, log = hull_desk("medium")
     r = sig(1999.95 if side == 1 else 2000.55, side=side)
     first = mt.q
-    # One tick narrower on the non-entry side: same price & risk, different cushion and TP.
+    # One tick narrower on the non-entry side: same entry, tighter SELL stop and risk; new goal/TP.
     moved = NS(
         time_msc=first.time_msc + 20,
         bid=2000.001 if side == 1 else first.bid,
@@ -155,6 +155,9 @@ def test_pre_send_spread_change_uses_the_one_unsent_reprice(
     status = desk.batch(NAME, r)
     assert (
         checks[0]["price"] == checks[1]["price"] and checks[0]["tp"] != checks[1]["tp"]
+    )
+    assert [req["sl"] for req in checks[:2]] == (
+        [2000.650, 2000.649] if side == -1 else [1999.95, 1999.95]
     )
     assert not desk.state.get("manual_hold") and not desk.waiting
     if moved_again:
@@ -243,4 +246,3 @@ def test_multi_leg_batch_survives_fast_tick_jitter_and_sends_all_legs_in_burst(
     assert desk.batch(NAME, r) == "demo_batch_sent"
     assert len(mt.requests) == len(mt.positions) == 10
     assert service_calls == 1 and watch_calls == 1
-

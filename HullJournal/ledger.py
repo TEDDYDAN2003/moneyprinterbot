@@ -47,8 +47,9 @@ NATIVE_MINUTES = {
 TAG = re.compile(r"h([1-9]\d{0,3})_(\d{9,11})_([1-9]\d{0,3})\Z")
 MINUTE_TAG = re.compile(r"m(5|15|30|45)_(\d{9,11})_([1-9]\d{0,3})\Z")
 # Journal is standalone; accepting historical tags never authorizes trading.
-PAIRS = {5: 3, 10: 5, 15: 10}
-PAIR_TAG = re.compile(r"[pr](5|10|15)x(3|5|10)_(\d{9,11})_([1-9]\d{0,3})\Z")
+LEGACY_PAIRS = {5: 3, 10: 5, 15: 10}
+PAIR_LANES = {*LEGACY_PAIRS.items(), (5, 4), (10, 8), (15, 12)}
+PAIR_TAG = re.compile(r"[pr](5|10|15)x(3|4|5|8|10|12)_(\d{9,11})_([1-9]\d{0,3})\Z")
 PAIR_STOP = "confirmed_pair_trigger_candle_wick_v1"
 PAIR_ENTRY = "closed_pair_structure_cross_v1"
 RETEST_FIELDS = (
@@ -72,7 +73,7 @@ CROSS_SHARED = (
     "mss_skip_exception",
 )
 SEND_FIELDS = ("send_quote_utc", "send_bid", "send_ask")
-LOG_FORMAT = 7  # incremental index: replay available demo.jsonl once, do not reset broker history
+LOG_FORMAT = 8  # incremental index: replay available demo.jsonl once, do not reset broker history
 CASH = ("gross_profit", "commission", "swap", "fee")
 FIELDS = [
     "schema_version",
@@ -197,6 +198,47 @@ def enc(v):
     )
 
 
+def pair_indices(c):
+    """The first journal knew only one child per parent. Keep its historical
+    indices, but never let M5/M3 settle or shorten the window for M5/M4.
+    Changes only receipt/window indices, not the deal history or checkpoint.
+    """
+    definitions = (
+        ("retest_windows", "", "", ""),
+        ("pair_finished", ",outcome TEXT", ",outcome", ""),
+        ("retest_settled", ",side TEXT,deals TEXT NOT NULL", ",side,deals", ",side"),
+    )
+    with c:
+        for table, fields, columns, key in definitions:
+            old_cols = {row[1] for row in c.execute(f"PRAGMA table_info({table})")}
+            migrate = bool(old_cols and "child" not in old_cols)
+            if migrate:
+                # Start the transaction before the first DDL (sqlite3's default
+                # transaction mode otherwise starts only at the first INSERT).
+                if not c.in_transaction:
+                    c.execute("BEGIN")
+                c.execute(f"ALTER TABLE {table} RENAME TO {table}_single_child")
+            c.execute(
+                f"CREATE TABLE IF NOT EXISTS {table}(symbol TEXT,tf INTEGER,child INTEGER,signal INTEGER{fields},PRIMARY KEY(symbol,tf,child,signal{key}))"
+            )
+            if migrate:
+                if table == "pair_finished":
+                    # V7 accepted these bare decision rows without a child. Keep the
+                    # hint unassigned until a child-specific log line is replayed;
+                    # otherwise it must not finish the wrong group early.
+                    c.execute(
+                        f"INSERT INTO {table} SELECT symbol,tf,0,signal{columns} FROM {table}_single_child"
+                    )
+                else:
+                    # Only recognized retest tags/settlements populated these two.
+                    for tf, child in LEGACY_PAIRS.items():
+                        c.execute(
+                            f"INSERT INTO {table} SELECT symbol,tf,?,signal{columns} FROM {table}_single_child WHERE tf=?",
+                            (child, tf),
+                        )
+                c.execute(f"DROP TABLE {table}_single_child")
+
+
 def db_open(path):
     c = sqlite3.connect(path)
     c.executescript("""PRAGMA journal_mode=WAL;
@@ -208,11 +250,8 @@ def db_open(path):
       CREATE TABLE IF NOT EXISTS receipts(id TEXT PRIMARY KEY,symbol TEXT, tag TEXT,side TEXT,sl TEXT,tp TEXT);
       CREATE TABLE IF NOT EXISTS cross_receipts(id TEXT PRIMARY KEY, wick TEXT NOT NULL, sl TEXT NOT NULL,
           waiver TEXT NOT NULL, send_ms INTEGER NOT NULL, bid TEXT NOT NULL, ask TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS retest_windows(symbol TEXT,tf INTEGER,signal INTEGER,PRIMARY KEY(symbol,tf,signal));
       CREATE TABLE IF NOT EXISTS retest_deals(id TEXT PRIMARY KEY,evidence TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS retest_settled(symbol TEXT,tf INTEGER,signal INTEGER,side TEXT,deals TEXT NOT NULL,PRIMARY KEY(symbol,tf,signal,side));
       CREATE TABLE IF NOT EXISTS pair_context(id TEXT PRIMARY KEY,parent_close INTEGER NOT NULL,bias INTEGER NOT NULL);
-      CREATE TABLE IF NOT EXISTS pair_finished(symbol TEXT,tf INTEGER,signal INTEGER,outcome TEXT,PRIMARY KEY(symbol,tf,signal));
       CREATE TABLE IF NOT EXISTS labels(symbol TEXT,tf INTEGER,signal INTEGER,side TEXT,model TEXT,
           PRIMARY KEY(symbol,tf,signal,side));
       CREATE TABLE IF NOT EXISTS live_triggers(symbol TEXT,tf INTEGER,signal INTEGER,side TEXT,bar_end INTEGER,bid TEXT,ask TEXT,
@@ -221,6 +260,7 @@ def db_open(path):
           PRIMARY KEY(symbol,ticket,at_ms,why));
       CREATE TABLE IF NOT EXISTS finished(symbol TEXT,tf INTEGER,signal INTEGER,outcome TEXT,
           PRIMARY KEY(symbol,tf,signal));""")
+    pair_indices(c)
     return c
 
 
@@ -282,13 +322,20 @@ def tf_name(minutes):
 
 
 def tag(s):
+    """Backwards-compatible public (parent, stamp, leg) view of a recognized tag."""
+    ref = _lane_tag(s)
+    return ref[:3] if ref else None
+
+
+def _lane_tag(s):
     text = str(s or "")
+    child = None
     if text.startswith(("p", "r")):
         m = PAIR_TAG.fullmatch(text)
         if not m:
             return None
         tf, child, stamp, leg = map(int, m.groups())
-        if PAIRS[tf] != child:
+        if (tf, child) not in PAIR_LANES:
             return None
     else:
         m = (
@@ -300,7 +347,11 @@ def tag(s):
             return None
         tf, stamp, leg = map(int, m.groups())
     maximum = 32_503_680_000 * (1000 if text.startswith("i") else 1)
-    return (tf, stamp, leg) if tf in NATIVE_MINUTES and 0 < stamp < maximum else None
+    return (
+        (tf, stamp, leg, child)
+        if tf in NATIVE_MINUTES and 0 < stamp < maximum
+        else None
+    )
 
 
 def trigger_ms(key):
@@ -327,15 +378,93 @@ def pair_clock_valid(ev, close_s, quote_ms):
     )
 
 
+def verified_entry_sl(ev, sign, raw, requested, bid, ask, *, pending=False):
+    """Verify raw Bid-chart evidence separately from the exact broker request.
+    V2 supplies both reference quote components; a limit can rest on a narrower
+    send spread, but never attest to a wider one than its frozen buffer covers.
+    Missing evidence is not permission to infer a buffer from the two prices.
+    """
+    if "stop_spread_policy" not in ev:
+        return requested == raw and not any(
+            k in ev
+            for k in (
+                "raw_chart_sl",
+                "stop_reference_bid",
+                "stop_reference_ask",
+                "stop_spread_buffer_price",
+                "stop_spread_buffer_pips",
+                "planned_stop_spread_quote_price",
+                "stop_spread_quote_price",
+            )
+        )
+    policy = ev["stop_spread_policy"]
+    tick = dec(ev["tick" if pending else "stop_tick_size"])
+    if tick <= 0 or raw <= 0 or raw % tick or not 0 < bid <= ask:
+        return False
+    buffer = dec(ev["stop_spread_buffer_price"])
+    if policy == "sell_ask_stop_with_live_spread_buffer_v1" and not pending:
+        # Historical market receipts recorded float subtraction (and possibly an
+        # extra outward tick). Validate THEIR math, never label them v2 evidence.
+        spread = float(ask) - float(bid)
+        expected = (
+            raw
+            if sign == 1
+            else tick
+            * (dec(float(raw) + spread) / tick).to_integral_value(
+                rounding=ROUND_CEILING
+            )
+        )
+        return (
+            not any(
+                k in ev
+                for k in ("raw_chart_sl", "stop_reference_bid", "stop_reference_ask")
+            )
+            and dec(ev["request"]["price"]) == (ask if sign == 1 else bid)
+            and requested == expected
+            and buffer == dec(float(requested) - float(raw))
+            and dec(ev["stop_spread_quote_price"]) == dec(spread)
+            and dec(ev["planned_stop_spread_quote_price"]) == dec(spread)
+        )
+    if policy != "sell_ask_entry_only_exact_risk_v2" or dec(ev["raw_chart_sl"]) != raw:
+        return False
+    ref_bid, ref_ask = dec(ev["stop_reference_bid"]), dec(ev["stop_reference_ask"])
+    if not 0 < ref_bid <= ref_ask:
+        return False
+
+    def translated(width):
+        return (
+            raw
+            if sign == 1
+            else tick * ((raw + width) / tick).to_integral_value(rounding=ROUND_CEILING)
+        )
+
+    return (
+        requested == translated(ref_ask - ref_bid)
+        and requested - raw == buffer
+        and (sign == 1 or ask - bid <= buffer)
+        and (
+            pending
+            or (
+                requested == translated(ask - bid)
+                and dec(ev["request"]["price"])
+                == (ask if sign == 1 else bid)
+                == (ref_ask if sign == 1 else ref_bid)
+                and dec(ev["stop_spread_quote_price"]) == ask - bid
+                and dec(ev["planned_stop_spread_quote_price"]) == ref_ask - ref_bid
+            )
+        )
+    )
+
+
 def index_cross_receipt(c, ev, vals, ref):
     """Enrich a *matched* original request, never a label/preview or a historical h-tag."""
     if ev.get("initial_stop_policy") not in (CROSS_POLICY, M1_POLICY, PAIR_STOP):
         return
-    tf, close_s, leg = ref
+    tf, close_s, leg, child = ref
     did, _sy, tag_text, side, requested_sl, _tp = vals
     minute = ev["initial_stop_policy"] == M1_POLICY
     paired = ev["initial_stop_policy"] == PAIR_STOP
-    candle_tf = PAIRS.get(tf, 0) if paired else 1 if minute else tf
+    candle_tf = child if paired else 1 if minute else tf
     sign = 1 if side == "BUY" else -1
     ms = int(ev["send_tick_time_msc"])
     wick, sl, bid, ask = (
@@ -346,7 +475,7 @@ def index_cross_receipt(c, ev, vals, ref):
     if not (
         ev.get("retcode") in (10009, 10010)
         and tag_text.startswith("p" if paired else "m" if minute else "h")
-        and tf in (PAIRS if paired else (5, 15, 30, 45))
+        and ((tf, child) in PAIR_LANES if paired else tf in (5, 15, 30, 45))
         and (
             not paired
             or (
@@ -386,7 +515,11 @@ def index_cross_receipt(c, ev, vals, ref):
         and 0 < bid <= ask
         and min(wick, sl) > 0
         and (wick - sl) * sign > 0
-        and sl == dec(requested_sl)
+        and (
+            "stop_spread_policy" not in ev
+            or (wick - sl) * sign >= dec(ev["stop_tick_size"])
+        )
+        and verified_entry_sl(ev, sign, sl, dec(requested_sl), bid, ask)
         and waiver in ("", "failed_counter_mss_return")
         and c.execute("SELECT * FROM receipts WHERE id=?", (did,)).fetchone() == vals
     ):
@@ -416,7 +549,7 @@ def index_retest(c, ev, magic):
     tf = ev["tf"]
     stamp = ev["signal"]
     child = ev["trigger_tf"]
-    if PAIRS.get(tf) != child or not isinstance(stamp, int):
+    if (tf, child) not in PAIR_LANES or not isinstance(stamp, int):
         raise ValueError("invalid retest pair")
     if ev["event"] == "retest_batch_settled":
         ids = ev["fill_deals"]
@@ -445,16 +578,16 @@ def index_retest(c, ev, magic):
             == any(x in ("filled", "flat", "partial_flatten") for x in states)
         ):
             raise ValueError("invalid settled batch")
-        key = (sy, tf, stamp, "BUY" if sign == 1 else "SELL")
+        key = (sy, tf, child, stamp, "BUY" if sign == 1 else "SELL")
         value = enc(sorted(str(v) for v in ids))
         old = c.execute(
-            "SELECT deals FROM retest_settled WHERE symbol=? AND tf=? AND signal=? AND side=?",
+            "SELECT deals FROM retest_settled WHERE symbol=? AND tf=? AND child=? AND signal=? AND side=?",
             key,
         ).fetchone()
         if old and old[0] != value:
             value = "null"  # ambiguous: no complete setup
         c.execute(
-            "INSERT OR REPLACE INTO retest_settled VALUES(?,?,?,?,?)", (*key, value)
+            "INSERT OR REPLACE INTO retest_settled VALUES(?,?,?,?,?,?)", (*key, value)
         )
         return
     q = ev["request"]
@@ -472,6 +605,7 @@ def index_retest(c, ev, magic):
     )
     o, h, l, close = (dec(bar[k]) for k in ("o", "h", "l", "c"))
     wick = l if sgn == 1 else h
+    raw_sl = dec(a["frozen_cross_sl"])
     body = sgn * (close - o) > 0
     span = abs(close - o) if body else close - l if sgn == 1 else h - close
     depth = sgn * (close - price)
@@ -493,7 +627,7 @@ def index_retest(c, ev, magic):
         and ev["pricing_policy"] == "confirmed_pair_direct_retest_v1"
         and sgn in (-1, 1)
         and tag_text.startswith("r")
-        and tag(tag_text) == (tf, stamp, leg)
+        and _lane_tag(tag_text) == (tf, stamp, leg, child)
         and q["symbol"] == sy
         and q["magic"] == magic
         and q["action"] == 5
@@ -535,11 +669,11 @@ def index_retest(c, ev, magic):
         )
         and ev["segment"]
         == ("body" if body else "lower_wick" if sgn == 1 else "upper_wick")
-        and sl == dec(a["frozen_cross_sl"])
+        and verified_entry_sl(ev, sgn, raw_sl, sl, bid, ask, pending=True)
         and wick == dec(a["cross_candle_wick"])
-        and (wick - sl) * sgn >= tick
+        and (wick - raw_sl) * sgn >= tick
         and min(sl, price, tp, fill) > 0
-        and all(v % tick == 0 for v in (sl, price, tp))
+        and all(v % tick == 0 for v in (raw_sl, sl, price, tp))
         and sgn * (tp - price) >= tick
         and 0 < vol <= qty
         and 0 < bid <= ask
@@ -570,7 +704,7 @@ def index_retest(c, ev, magic):
                 (
                     PAIR_STOP,
                     plain(wick),
-                    plain(sl),
+                    plain(raw_sl),
                     a.get("mss_skip_exception") or "",
                     iso(send),
                     plain(bid),
@@ -674,7 +808,7 @@ def import_log(c, path, magic):
                 elif typ == "demo_result":
                     q = ev["request"]
                     key = str(int(ev.get("deal") or 0))
-                    parsed = tag(q.get("comment"))
+                    parsed = _lane_tag(q.get("comment"))
                     if (
                         int(key) > 0
                         and ("retcode" not in ev or ev["retcode"] in (10009, 10010))
@@ -758,21 +892,25 @@ def import_log(c, path, magic):
                         or "manual_hold" in str(ev.get("outcome", ""))
                     )
                 ):
-                    c.execute(
-                        "INSERT OR REPLACE INTO pair_finished VALUES(?,?,?,?)"
-                        if ev.get("entry_policy") == PAIR_ENTRY
-                        else "INSERT OR REPLACE INTO finished VALUES(?,?,?,?)",
-                        (
-                            sy,
-                            int(ev["tf"]),
-                            int(
-                                ev["trigger_msc"]
-                                if ev.get("entry_timing") == "live_hull_cross"
-                                else ev["close_s"]
-                            ),
-                            str(ev["outcome"]),
-                        ),
+                    tf = int(ev["tf"])
+                    stamp = int(
+                        ev["trigger_msc"]
+                        if ev.get("entry_timing") == "live_hull_cross"
+                        else ev["close_s"]
                     )
+                    if ev.get("entry_policy") == PAIR_ENTRY:
+                        child = ev.get("trigger_tf")
+                        if (tf, child) not in PAIR_LANES:
+                            raise ValueError("Invalid finished pair")
+                        c.execute(
+                            "INSERT OR REPLACE INTO pair_finished VALUES(?,?,?,?,?)",
+                            (sy, tf, child, stamp, str(ev["outcome"])),
+                        )
+                    else:
+                        c.execute(
+                            "INSERT OR REPLACE INTO finished VALUES(?,?,?,?)",
+                            (sy, tf, stamp, str(ev["outcome"])),
+                        )
             except (
                 ValueError,
                 KeyError,
@@ -835,7 +973,9 @@ def sync(c, mt, now, *, days=30, magic=MAGIC, repo=None, reconcile=False):
             k: json.loads(v)
             for k, v in c.execute("SELECT id,evidence FROM retest_deals")
         }
-        retest_windows = set(c.execute("SELECT symbol,tf,signal FROM retest_windows"))
+        retest_windows = set(
+            c.execute("SELECT symbol,tf,child,signal FROM retest_windows")
+        )
         windows = set(c.execute("SELECT symbol,signal FROM windows"))
         covered_from = min(start, floor if floor is not None else start)
         events = defaultdict(dict)
@@ -934,22 +1074,22 @@ def sync(c, mt, now, *, days=30, magic=MAGIC, repo=None, reconcile=False):
                 verified = matching_retest(evidence, ent)
                 text = (
                     ent["comment"]
-                    if tag(ent["comment"])
+                    if _lane_tag(ent["comment"])
                     else evidence["meta"][1]
                     if verified
                     else receipt_tags.get(ent["id"])
                 )
-                ref = tag(text)
+                ref = _lane_tag(text)
                 sy = ent["symbol"]
                 if not ref:
                     continue
-                tf, stamp, _ = ref
+                tf, stamp, _, child = ref
                 resting = text.startswith("r")
                 lower, upper = signal_window(stamp)
                 if resting:
-                    upper = stamp + PAIRS[tf] * 60
+                    upper = stamp + child * 60
                 known_window = (
-                    (sy, tf, stamp) in retest_windows
+                    (sy, tf, child, stamp) in retest_windows
                     if resting
                     else (sy, stamp) in windows
                 )
@@ -969,7 +1109,9 @@ def sync(c, mt, now, *, days=30, magic=MAGIC, repo=None, reconcile=False):
                     ):
                         continue
                     d = norm(x)
-                    other = tag(d["comment"]) or tag(receipt_tags.get(d["id"]))
+                    other = _lane_tag(d["comment"]) or _lane_tag(
+                        receipt_tags.get(d["id"])
+                    )
                     if (d["magic"] == magic or d["id"] in receipt_ids) and (
                         other is None or other[1] == stamp
                     ):
@@ -977,10 +1119,10 @@ def sync(c, mt, now, *, days=30, magic=MAGIC, repo=None, reconcile=False):
                         if d["pid"] not in visited:
                             queue.append(d["pid"])
                 if resting:
-                    retest_windows.add((sy, tf, stamp))
+                    retest_windows.add((sy, tf, child, stamp))
                     c.execute(
-                        "INSERT OR IGNORE INTO retest_windows VALUES(?,?,?)",
-                        (sy, tf, stamp),
+                        "INSERT OR IGNORE INTO retest_windows VALUES(?,?,?,?)",
+                        (sy, tf, child, stamp),
                     )
                 else:
                     windows.add((sy, stamp))
@@ -1069,8 +1211,8 @@ def make_views(c):
         k: json.loads(v) for k, v in c.execute("SELECT id,evidence FROM retest_deals")
     }
     settled = {
-        (sy, tf, ts, side): json.loads(v)
-        for sy, tf, ts, side, v in c.execute("SELECT * FROM retest_settled")
+        (sy, tf, child, ts, side): json.loads(v)
+        for sy, tf, child, ts, side, v in c.execute("SELECT * FROM retest_settled")
     }
     cross = {
         did: dict(
@@ -1121,10 +1263,11 @@ def make_views(c):
         (s, t, stamp): o for s, t, stamp, o in c.execute("SELECT * FROM finished")
     }
     pair_finished = {
-        (s, t, stamp): o for s, t, stamp, o in c.execute("SELECT * FROM pair_finished")
+        (s, t, child, stamp): o
+        for s, t, child, stamp, o in c.execute("SELECT * FROM pair_finished")
     }
     windows = set(c.execute("SELECT symbol,signal FROM windows"))
-    retest_windows = set(c.execute("SELECT symbol,tf,signal FROM retest_windows"))
+    retest_windows = set(c.execute("SELECT symbol,tf,child,signal FROM retest_windows"))
     live_meta = get(c, "active_meta", {})
     raw = defaultdict(list)
     for pid, body in c.execute("SELECT pid,body FROM deals"):
@@ -1165,13 +1308,13 @@ def make_views(c):
             if matching_retest(evidence, d) and not meta:
                 meta = evidence["meta"]
                 proofs.append(evidence["fields"])
-            k = tag(d["comment"])
+            k = _lane_tag(d["comment"])
             if k:
                 refs.add(k)
                 tag_kinds.add(d["comment"][0])
                 sources.add("Entry comment")
             if meta and meta[0] == sy and meta[2] == side:
-                k = tag(meta[1])
+                k = _lane_tag(meta[1])
                 refs.add(k)
                 tag_kinds.add(meta[1][0])
                 sources.add("Bot receipt")
@@ -1187,8 +1330,8 @@ def make_views(c):
         gid = ""
         r = None
         if link:
-            tf, stamp, _leg = link
-            lane = f"{tf_name(tf)}>{tf_name(PAIRS[tf])}" if paired else tf_name(tf)
+            tf, stamp, _leg, child = link
+            lane = f"{tf_name(tf)}>{tf_name(child)}" if paired else tf_name(tf)
             if pending:
                 lane = "R:" + lane
             gid = f"{sy}|{lane}|{stamp}|{side}"
@@ -1307,13 +1450,10 @@ def make_views(c):
                         (sy, tf, stamp, side), (None, "", "")
                     )
                 if paired:
-                    r["trigger_timeframe"] = tf_name(PAIRS[tf])
+                    r["trigger_timeframe"] = tf_name(child)
                 if bar_end is not None:
                     r["signal_bar_open_utc"] = iso(
-                        (
-                            bar_end
-                            - (PAIRS[tf] if paired else 1 if is_minute else tf) * 60
-                        )
+                        (bar_end - (child if paired else 1 if is_minute else tf) * 60)
                         * 1000
                     )
                     r["signal_bar_end_utc"] = iso(bar_end * 1000)
@@ -1346,19 +1486,25 @@ def make_views(c):
             if not link:
                 unlinked += 1
         if link:
-            members[(sy, tf, stamp, side, "r" if pending else paired)].append(r)
+            members[(sy, tf, child, stamp, side, "r" if pending else paired)].append(r)
     missing = defaultdict(set)
     for did, (sy, comment, side, _, _) in receipts.items():
-        ref = tag(comment)
+        ref = _lane_tag(comment)
         if ref and did not in seen_deals:
-            missing[(sy, ref[0], ref[1], side, comment.startswith("p"))].add(did)
+            missing[(sy, ref[0], ref[3], ref[1], side, comment.startswith("p"))].add(
+                did
+            )
     wait = 0
     for key, rs in members.items():
-        sy, tf, stamp, side, paired = key
+        sy, tf, child, stamp, side, paired = key
         begin_window, end_window = signal_window(stamp)
         if paired == "r":
-            end_window = max(end_window, stamp + PAIRS[tf] * 60)
-        result = (pair_finished if paired else finished).get((sy, tf, stamp), "")
+            end_window = max(end_window, stamp + child * 60)
+        result = (
+            pair_finished.get((sy, tf, child, stamp), "")
+            if paired
+            else finished.get((sy, tf, stamp), "")
+        )
         # A receipt without a broker deal, an unresolved sibling or any open leg prevents completion.
         final_receipt = (
             result == "demo_batch_sent"
@@ -1374,7 +1520,7 @@ def make_views(c):
             or (
                 floor > begin_window
                 and (
-                    (sy, tf, stamp) not in retest_windows
+                    (sy, tf, child, stamp) not in retest_windows
                     if paired == "r"
                     else (sy, stamp) not in windows
                 )
@@ -1387,7 +1533,7 @@ def make_views(c):
             ids = sorted(
                 did for x in rs if x is not None for did in x["entry_deals"].split(";")
             )
-            final_receipt = settled.get((sy, tf, stamp, side)) == ids and all(
+            final_receipt = settled.get((sy, tf, child, stamp, side)) == ids and all(
                 x and x["setup_type"] == "direct_retest_limit" for x in rs
             )
             blocked = blocked or not final_receipt

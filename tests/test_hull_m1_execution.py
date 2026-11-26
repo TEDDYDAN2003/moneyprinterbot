@@ -167,9 +167,9 @@ def test_real_m1_trigger_inside_parent_without_parent_cross(
             and r["initial_stop_policy"] == M1_STOP
         )
         wick = candles[-1].l if side == 1 else candles[-1].h
-        assert r["cross_candle_wick"] == wick and r["request"][
-            "sl"
-        ] == cross_candle_stop(wick, side, r["cross_atr"] * 0.1, 0.025)
+        raw = cross_candle_stop(wick, side, r["cross_atr"] * 0.1, 0.025)
+        assert r["cross_candle_wick"] == wick and r["frozen_cross_sl"] == raw
+        assert r["request"]["sl"] == round(raw + (0.05 if side == -1 else 0), 3)
         assert (
             r["request"]["comment"] == f"m{max(frames)}_{S}_{r['leg']}"
             and r["request"]["deviation"] == 0
