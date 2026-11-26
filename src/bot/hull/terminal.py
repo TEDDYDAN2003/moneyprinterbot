@@ -26,6 +26,7 @@ from .config import (
     PAIRS,
     RETEST,
     RETIRED_LIMITS,
+    STOP_SPREAD_POLICY,
     TARGET_POLICY,
     TF_NAME,
 )
@@ -448,6 +449,7 @@ def run(
             "entry_timing": h.entry_timing,
             "entry_quote_policy": QUOTE_POLICY,
             "new_ticket_stop_policy": EXECUTION_INFO[h.execution_mode][1],
+            "stop_spread_policy": STOP_SPREAD_POLICY,
             "live_cross_role": "protective_exit_only",
             "opposite_exit": "own_trigger_only_plus_parent_protection"
             if paired

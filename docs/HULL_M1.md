@@ -40,7 +40,7 @@
    & $py -m bot.cli trade-all --config $cfg --m1-confirm
    ```
 
-   Check `READ ONLY`, `execution_mode: m1_parent_structure`, `trigger_timeframe: M1`, intended `timeframes`, `m1_history_ready: true` in preflight, `new_ticket_stop_policy: confirmed_m1_cross_candle_wick_v1`, account, lots, history, and warnings. Verify `checkout_head_at_start`/`source_module`. Keep the observer only if observation is intended. To send demo orders, stop **that observer** first, then use the reviewed invocation in **one** scanner only, explicitly adding `--arm-demo`. Do not use the current paired-mode wrappers to start an M1 manager. Software exits cannot operate when the bot/MT5 is offline.
+   Check `READ ONLY`, `execution_mode: m1_parent_structure`, `trigger_timeframe: M1`, intended `timeframes`, `m1_history_ready: true` in preflight, `new_ticket_stop_policy: confirmed_m1_cross_candle_wick_v1`, `stop_spread_policy: sell_ask_stop_with_live_spread_buffer_v1`, account, lots, history, and warnings. Verify `checkout_head_at_start`/`source_module`. Keep the observer only if observation is intended. To send demo orders, stop **that observer** first, then use the reviewed invocation in **one** scanner only, explicitly adding `--arm-demo`. Do not use the current paired-mode wrappers to start an M1 manager. Software exits cannot operate when the bot/MT5 is offline.
 
 ## See why a trade did or didn't happen
 

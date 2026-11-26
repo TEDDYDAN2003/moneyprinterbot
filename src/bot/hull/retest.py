@@ -10,6 +10,7 @@ from .orders import (
     Plan,
     cross_candle_stop,
     protected_prices,
+    spread_adjusted_stop,
     spread_goal,
     target,
     valid_cash,
@@ -129,4 +130,17 @@ def make_retest_plan(r, p, g, bid, ask, cash, h):
         g, r.side, p.lots, entry, goal, cash, cash_per_price=risk / abs(entry - sl)
     )
     placement_check(r.side, entry, sl, tp, g, bid, ask, p.max_spread)
-    return Plan(r.side, p.lots, entry, sl, tp, risk, reward, p.target_usd, spread)
+    raw_sl = g.price(g.index(r.raw_sl, r.side == -1))
+    _, stop_spread_buffer = spread_adjusted_stop(g, r.side, raw_sl, ask - bid)
+    return Plan(
+        r.side,
+        p.lots,
+        entry,
+        sl,
+        tp,
+        risk,
+        reward,
+        p.target_usd,
+        spread,
+        stop_spread_buffer,
+    )

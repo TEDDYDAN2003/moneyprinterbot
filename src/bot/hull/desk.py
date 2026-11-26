@@ -27,6 +27,7 @@ from .config import (
     PAIR_MODE,
     PAIRS,
     RETEST,
+    STOP_SPREAD_POLICY,
     TARGET_POLICY,
     TF_NAME,
 )
@@ -1213,6 +1214,12 @@ class Desk:
                         entry_session=self.session_gate(name).report(preview_s),
                         exit_policy=self.h.exit_policy,
                         target_policy=TARGET_POLICY,
+                        stop_spread_policy=STOP_SPREAD_POLICY,
+                        stop_spread_buffer_price=plan.stop_spread_buffer,
+                        stop_spread_buffer_pips=(
+                            plan.stop_spread_buffer / self.syms[name][1].pip_size
+                        ),
+                        stop_spread_quote_price=q.ask - q.bid,
                         goal_per_leg=plan.goal_usd,  # indicative first leg, not a promise for siblings
                         risk_batch=n * plan.risk_usd,
                         **d.clock_fields(),
@@ -1330,6 +1337,11 @@ class Desk:
                         self.kill.exists()
                         or max(abs(q3.bid - base_bid), abs(q3.ask - base_ask))
                         > tolerance
+                        or (
+                            d.side == -1
+                            and q3.ask - q3.bid
+                            > plan.stop_spread_buffer + base_grid.tick * 1e-7
+                        )
                         or (reprices >= max_reprices and final_prices != checked_prices)
                     ):
                         raise Block("final_quote_or_safety_changed")
@@ -1413,6 +1425,13 @@ class Desk:
                     send_bid=q3.bid,
                     send_ask=q3.ask,
                     target_policy=TARGET_POLICY,
+                    stop_spread_policy=STOP_SPREAD_POLICY,
+                    stop_spread_buffer_price=plan.stop_spread_buffer,
+                    stop_spread_buffer_pips=(
+                        plan.stop_spread_buffer / self.syms[name][1].pip_size
+                    ),
+                    planned_stop_spread_quote_price=q2.ask - q2.bid,
+                    stop_spread_quote_price=q3.ask - q3.bid,
                     configured_target_usd=plan.configured_target_usd,
                     entry_spread_usd=plan.entry_spread_usd,
                     initial_goal_usd=plan.goal_usd,

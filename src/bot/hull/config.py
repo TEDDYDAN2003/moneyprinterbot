@@ -34,6 +34,7 @@ FILL_BREAKEVEN = "actual_fill_first_legal_quote_v1"  # previously enrolled ticke
 PULLBACK_HALF = "actual_fill_pullback_half_initial_risk_v1"
 FIXED = "fixed_tp"
 TARGET_POLICY = "base_plus_entry_spread_v1"  # all newly opened Hull tickets, never retrofit saved goals
+STOP_SPREAD_POLICY = "sell_ask_stop_with_live_spread_buffer_v1"
 DYNAMIC_HULL_LENGTH = 16  # shared base period for the active scanner
 CLOSE_TIMING = "confirmed_cross_next_bar"
 M1_MODE = "m1_parent_structure"

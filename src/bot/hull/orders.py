@@ -82,6 +82,8 @@ class Plan:
     reward_usd: float  # modeled profit at the tick-rounded TP, not the ladder base
     configured_target_usd: float
     entry_spread_usd: float
+    # Price distance added to a short's bid-chart stop for its Ask-triggered SL.
+    stop_spread_buffer: float = 0.0
 
     @property
     def goal_usd(self):
@@ -113,6 +115,26 @@ def spread_goal(side, lots, bid, ask, base, cash):
     if not (base > 0 and math.isfinite(goal)):
         raise Block("invalid_cash_target")
     return spread, goal
+
+
+def spread_adjusted_stop(grid, side, level, spread):
+    """Translate a bid-chart short stop to its Ask trigger level, rounded outward.
+
+    BUY stop loss is triggered on Bid, the same side used by the chart OHLC, so
+    only SELL stops receive this spread buffer.
+    """
+    if (
+        side not in (-1, 1)
+        or not math.isfinite(level)
+        or level <= 0
+        or not math.isfinite(spread)
+        or spread < 0
+    ):
+        raise Block("invalid_stop_spread")
+    if side == -1 and spread > 0:
+        adjusted = grid.price(grid.index(level + spread, True))
+        return adjusted, adjusted - level
+    return level, 0.0
 
 
 def target(grid, side, lots, entry, usd, cash, *, cash_per_price=None):
@@ -203,14 +225,16 @@ def protected_prices(d, p, grid, bid, ask):
     grid.volume(p.lots)
     side = d.side
     entry, mark = (ask, bid) if side == 1 else (bid, ask)
-    # Use the actual chart-derived price; never replace with a cash stop or add a hidden spread buffer.
-    sl = grid.price(grid.index(d.raw_sl, side == -1))
+    # Validate the frozen candle stop on the broker grid before translating a
+    # bid-chart SELL stop to the broker's Ask-trigger level.
+    raw_sl = grid.price(grid.index(d.raw_sl, side == -1))
     if d.stop_tick_size is not None and (
-        grid.tick != d.stop_tick_size or sl != d.raw_sl
+        grid.tick != d.stop_tick_size or raw_sl != d.raw_sl
     ):
         raise Block(
             "cross_candle_stop_grid_changed"
         )  # never re-anchor or widen a frozen SL
+    sl, _ = spread_adjusted_stop(grid, side, raw_sl, ask - bid)
     dist = max(grid.gap, grid.tick)
     if sl <= 0 or side * (mark - sl) < dist - grid.tick * 1e-6:
         raise Block("initial_stop_breached_or_too_close")
@@ -220,6 +244,10 @@ def protected_prices(d, p, grid, bid, ask):
 def make_plan(d, p, grid, bid, ask, cash):
     entry, mark, sl, dist = protected_prices(d, p, grid, bid, ask)
     side = d.side
+    raw_sl = grid.price(grid.index(d.raw_sl, side == -1))
+    _, stop_spread_buffer = spread_adjusted_stop(
+        grid, side, raw_sl, ask - bid
+    )
     risk = -valid_cash(cash, side, p.lots, entry, sl)
     if risk <= 0:
         raise Block("nonpositive_cash_risk")
@@ -229,7 +257,18 @@ def make_plan(d, p, grid, bid, ask, cash):
     )
     if side * (tp - mark) < dist - grid.tick * 1e-6:
         raise Block("cash_target_inside_broker_distance")
-    return Plan(side, p.lots, entry, sl, tp, risk, reward, p.target_usd, spread)
+    return Plan(
+        side,
+        p.lots,
+        entry,
+        sl,
+        tp,
+        risk,
+        reward,
+        p.target_usd,
+        spread,
+        stop_spread_buffer,
+    )
 
 
 @dataclass(frozen=True, slots=True)

@@ -18,7 +18,7 @@ from .ladder import (
     propose,
     still_valid,
 )
-from .orders import Block, Grid
+from .orders import Block, Grid, valid_cash
 
 
 def opened_ms(p):
@@ -26,7 +26,12 @@ def opened_ms(p):
 
 
 def pair(record):
-    return Protection(record["rung"], record["sl"], record["tp"])
+    return Protection(
+        record["rung"],
+        record["sl"],
+        record["tp"],
+        float(record.get("stop_spread_buffer", 0.0)),
+    )
 
 
 def matches_levels(p, levels, grid):
@@ -106,6 +111,7 @@ class TicketLadders:
             "rung": 0,
             "sl": plan.sl,
             "tp": tp,
+            "stop_spread_buffer": plan.stop_spread_buffer,
             "confirmed_tick_msc": 0,
         }
         self.d.persist()
@@ -186,6 +192,9 @@ class TicketLadders:
         self.d.persist()
         self.noted.pop(key, None)
         if early:
+            modeled_stop_pnl = valid_cash(
+                self.d.cash(p.symbol), r["side"], r["lots"], r["entry"], levels.sl
+            )
             self.d.emit(
                 event,
                 ticket=int(key),
@@ -193,10 +202,14 @@ class TicketLadders:
                 side=r["side"],
                 entry=r["entry"],
                 lots=r["lots"],
+                modeled_stop_pnl_usd=modeled_stop_pnl,
                 **intent,
             )
             return True
         trigger, lock, tp = percentages(levels.rung)
+        modeled_stop_pnl = valid_cash(
+            self.d.cash(p.symbol), r["side"], r["lots"], r["entry"], levels.sl
+        )
         self.d.emit(
             "profit_ladder_step",
             ticket=int(key),
@@ -208,6 +221,7 @@ class TicketLadders:
             trigger_pct=trigger,
             lock_pct=lock,
             target_pct=tp,
+            modeled_stop_pnl_usd=modeled_stop_pnl,
             **intent,
         )
         return True
@@ -267,7 +281,7 @@ class TicketLadders:
             policy = early_policy(r)
             if policy:
                 # Preserve the exact broker TP (not a reconstruction from the target or spread).
-                old = Protection(old.rung, p.sl, p.tp)
+                old = Protection(old.rung, p.sl, p.tp, old.stop_spread_buffer)
             if self.d.state.get("manual_hold"):
                 self.note(key, r, "manual_reconciliation_required")
                 return
@@ -303,10 +317,16 @@ class TicketLadders:
                 )
             early = eligible_early(r, q.time_msc)
             args = r["side"], r["lots"], r["entry"], r["base_usd"]
-            cache_key = (name, args, old, mark, early)
+            cache_key = (name, args, old, mark, early, q.bid, q.ask)
             if cache_key not in plans:
                 plans[cache_key] = propose(
-                    grid, *args, old, mark, self.d.cash(name), early=early
+                    grid,
+                    *args,
+                    old,
+                    mark,
+                    self.d.cash(name),
+                    early=early,
+                    spread=q.ask - q.bid,
                 )
             new = plans[cache_key]
             if new is not None:
@@ -382,6 +402,7 @@ class TicketLadders:
                     mark,
                     d.cash(p.symbol),
                     early=eligible_early(r, last.time_msc),
+                    spread=last.ask - last.bid,
                 )
                 or not fresh(last, time.time(), d.lim.max_quote_age_s)
                 or d.kill.exists()
