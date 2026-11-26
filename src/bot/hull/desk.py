@@ -133,7 +133,7 @@ class Desk:
             None  # installed by the native scanner; mandatory for live orders
         )
         self.exits = self.state.setdefault("opposite_exits", {})
-        self.owners = Owners(state)
+        self.owners = Owners(state, pairs=h.pairs)
         self.mss_book = state.setdefault("last_lane_mss_exit", {})
         self.retest = RetestDesk(self) if h.entry_route == RETEST else None
         if armed and self.retest is None and state.get("retest_batches_v1"):
@@ -652,7 +652,7 @@ class Desk:
             or self.h.execution_mode != PAIR_MODE
             or not isinstance(r, Reading)
             or r.trigger_tf is not None
-            or PAIRS.get(parent) != r.tf
+            or self.h.pairs.get(parent) != r.tf
             or TF_NAME.get(parent) not in self.h.eligible_timeframes
             or r.label not in (-1, 1)
             or r.structure.closed_s
@@ -845,7 +845,7 @@ class Desk:
                 child = (self.owners.origin(p) or {}).get("trigger_tf")
                 pairstamp = (
                     self.pair_fence(p.symbol, tf, child, opp)
-                    if child and PAIRS.get(tf) == child
+                    if child and self.h.pairs.get(tf) == child
                     else -1
                 )
                 if 0 < opened_ms(p) <= pairstamp:
@@ -1177,7 +1177,7 @@ class Desk:
                         (
                             self.h.retest_quote_drift_ticks
                             if flexible_quote
-                            else 3
+                            else 1
                         )
                         + 1e-9
                     )

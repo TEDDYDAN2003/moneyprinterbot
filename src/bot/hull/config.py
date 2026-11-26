@@ -13,6 +13,10 @@ class Strict(BaseModel):
 
 Rate = Literal["slow", "medium", "fast"]
 COUNTS = {"slow": (10,), "medium": (4, 3), "fast": (7, 6)}
+
+
+def counts_for(rate: Rate) -> tuple[int, ...]:
+    return COUNTS[rate]
 # Technical MT5 capabilities, NOT an approval to scan/trade any of these frames.
 NATIVE_TF = {
     **{f"M{v}": v for v in (1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30)},
@@ -22,7 +26,7 @@ NATIVE_TF = {
 # M45 is a study interval, NEVER an MT5 native timeframe constant.
 SIGNAL_TF = {"M5": 5, "M15": 15, "M30": 30, "M45": 45}
 # Parent -> native trigger. These are exact pairs, not independent execution lanes.
-PAIRS = {5: 4, 10: 8, 15: 12}
+PAIRS = {5: 3, 10: 5, 15: 10}
 PAIR_FRAMES = {f"M{p}": p for p in PAIRS}
 RETEST = "direct_retest_limit"
 PAIR_MODE = "paired_structure"
@@ -98,6 +102,7 @@ class Profile(Strict):
     lots: float = Field(gt=0)
     target_usd: float = Field(default=10.0, gt=0)
     rate: Rate = "slow"
+    batch_count: int | None = Field(default=None, ge=1, le=20)
     session: Literal["configured", "continuous"] = "configured"
     pip_size: float = Field(gt=0)
     max_spread: float | None = Field(default=None, gt=0)  # price units, not points
@@ -139,6 +144,8 @@ class HullConfig(Strict):
     retest_atr_cap: float = Field(0.10, gt=0, le=1)
     retest_quote_drift_ticks: int = Field(1, ge=1, le=5000)  # max ticks price may move between plan and send without blocking
     retest_market_fallback: bool = False  # fall back to market order at current price if retest order is ruined before any leg fills
+    skip_first_cross_after_mss: bool = True  # skip first aligned cross after MSS unless waived by failed counter-MSS return
+    pairs: dict[int, int] = Field(default_factory=lambda: dict(PAIRS))
     exit_policy: Literal["profit_ladder_70_30_v1", "fixed_tp"] = LADDER
     pre_ladder_breakeven: bool = Field(True, strict=True)  # frozen only at new ladder enrollment
     indicator: Indicator = Indicator()

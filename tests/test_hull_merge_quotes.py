@@ -204,6 +204,9 @@ def test_multi_leg_batch_survives_fast_tick_jitter_and_sends_all_legs_in_burst(
     hull_desk,
 ):
     mt, desk, _ = hull_desk("slow")
+    desk.h = desk.h.model_copy(
+        update={"retest_market_fallback": True, "retest_quote_drift_ticks": 5}
+    )
     first = mt.q
     r = sig(1999.95, side=1)
     ticks = 0

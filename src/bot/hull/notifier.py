@@ -10,6 +10,7 @@ Dispatches non-blocking notifications:
 from __future__ import annotations
 
 import os
+import sys
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,6 +19,7 @@ from pathlib import Path
 IGNORED_OUTCOMES = {
     "retest_batch_placed",
     "orders_placed",
+    "demo_batch_sent",
     "waiting_for_fill",
     "working",
     "shadow_retest_working",
@@ -123,7 +125,11 @@ def notify_blocked_setup(
     extra: str = "",
 ) -> None:
     """Dispatches a notification on a separate thread so trading is never blocked."""
-    if reason in IGNORED_OUTCOMES:
+    if (
+        reason in IGNORED_OUTCOMES
+        or "pytest" in sys.modules
+        or os.environ.get("PYTEST_CURRENT_TEST")
+    ):
         return
 
     side_str = "BUY" if side in (1, "BUY") else "SELL" if side in (-1, "SELL") else str(side)

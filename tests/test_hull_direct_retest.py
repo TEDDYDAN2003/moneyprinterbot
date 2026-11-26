@@ -279,7 +279,11 @@ def test_ten_ack_before_any_fill_then_ten_owned_legs(tmp_path, monkeypatch, side
         len({o.price_open for o in mt.orders}) == 1
         and mt.orders[0].price_open == 2000 - side * 0.12
     )
-    assert all(o.time_expiration == T + 180 and o.sl == r.raw_sl for o in mt.orders)
+    assert all(
+        o.time_expiration == T + 180
+        and o.sl == pytest.approx(r.raw_sl + (0.06 if side == -1 else 0.0))
+        for o in mt.orders
+    )
     assert d.batch(NAME, r) == "retest_batch_already_reserved"
     assert not [e for e in logs if e["event"] == "retest_fill_receipt"]
     mt.now += 24
@@ -680,7 +684,7 @@ def test_cash_goal_uses_placement_spread_and_real_better_fill(
     mt.tick(2000 - side * 0.24, spread=0.10)
     p = mt.fill(order, improve=0.05)
     d.supervise()
-    assert p.sl == r.raw_sl and p.tp == pytest.approx(old_tp - side * 0.05)
+    assert p.sl == pytest.approx(r.raw_sl + (0.06 if side == -1 else 0.0)) and p.tp == pytest.approx(old_tp - side * 0.05)
     assert mt.order_calc_profit(
         p.type, NAME, p.volume, p.price_open, p.tp
     ) == pytest.approx(10.60)

@@ -14,6 +14,7 @@ from bot.broker import DemoSafetyError, _side_is_allowed, fresh, snapshot
 from bot.config.entry_sessions import EntrySessionVeto
 
 from .config import LADDER, PAIR_MODE, PAIRS, RETEST, STOP_SPREAD_POLICY, TF_NAME
+from .entry_clock import CLOCK_SKEW_TOLERANCE_S
 from .notifier import notify_blocked_setup
 from .orders import Block, Exposure, Grid, Plan, room
 from .retest import GOAL, POLICY, capability, level, placement_check
@@ -71,7 +72,7 @@ class RetestDesk:
                 name not in self.d.syms
                 or b.get("signature") != self.signature(name)
                 or b.get("parent") not in frames
-                or b.get("child") != PAIRS.get(b.get("parent"))
+                or b.get("child") != self.d.h.pairs.get(b.get("parent"))
                 or b.get("policy") != POLICY
             ):
                 raise DemoSafetyError(
@@ -794,7 +795,9 @@ class RetestDesk:
                     self.invalidate(b, portfolio_veto or why, flatten=True)
                 elif (
                     not valid_spec
-                    or not fresh(q, now, d.lim.max_quote_age_s)
+                    or not fresh(
+                        q, now, d.lim.max_quote_age_s, skew=CLOCK_SKEW_TOLERANCE_S
+                    )
                     or (
                         profile.max_spread is not None
                         and q.ask - q.bid > profile.max_spread + b["tick"] * 1e-7

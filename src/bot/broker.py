@@ -106,14 +106,14 @@ def account_check(mt, mode, armed, identity=None):
     return a
 
 
-def fresh(tick, now, max_age):
+def fresh(tick, now, max_age, *, skew: float = 0.0):
     if tick is None:
         return False
     ts = float(getattr(tick, "time_msc", 0)) / 1000
     return (
         all(math.isfinite(v) for v in (ts, tick.bid, tick.ask))
         and 0 < tick.bid <= tick.ask
-        and -2.0 <= now - ts <= max_age
+        and -skew <= now - ts <= max_age
     )
 
 

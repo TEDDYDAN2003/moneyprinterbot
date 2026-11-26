@@ -318,7 +318,7 @@ def run(
         raise ValueError("M1 execution requires native M5/M15/M30/M45 parent structure")
     paired = h.execution_mode == PAIR_MODE
     if paired and (
-        set(frames) - PAIRS.keys() or h.indicator.structure_timeframe is not None
+        set(frames) - h.pairs.keys() or h.indicator.structure_timeframe is not None
     ):
         raise ValueError(
             "Paired execution needs native M5/M10/M15 parent structure and structure_timeframe: null"
@@ -326,7 +326,7 @@ def run(
     limits_mode = h.entry_route == RETEST
     if limits_mode and not paired:
         raise ValueError("direct_retest_limit requires paired_structure")
-    pairs = {p: PAIRS[p] for p in frames} if paired else {}
+    pairs = {p: h.pairs[p] for p in frames} if paired else {}
     native_frames = (
         tuple(sorted(set(frames) | set(pairs.values()))) if paired else frames
     )
@@ -697,7 +697,13 @@ def run(
                     policy_key, {}
                 )
                 trigger_books = {
-                    name: PairBook(frames, lanes, records.setdefault(name, {}))
+                    name: PairBook(
+                        frames,
+                        lanes,
+                        records.setdefault(name, {}),
+                        pairs=h.pairs,
+                        skip_first=h.skip_first_cross_after_mss,
+                    )
                     for name, (_, lanes) in bundles.items()
                 }
             elif minute_mode:

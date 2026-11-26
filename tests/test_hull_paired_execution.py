@@ -232,7 +232,8 @@ def test_exact_pair_only_noncoincident_native_clocks_frozen_wick_and_quote(
         ] != wick(paths[parent][-1])
         assert (
             r["request"]["sl"]
-            == r["frozen_cross_sl"]
+            == pytest.approx(r["raw_chart_sl"] + r["stop_spread_buffer_price"])
+            and r["frozen_cross_sl"]
             == cross_candle_stop(
                 r["cross_candle_wick"], side, r["cross_atr"] * 0.1, 0.025
             )

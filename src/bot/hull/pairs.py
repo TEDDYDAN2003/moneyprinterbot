@@ -19,12 +19,12 @@ def asof(view, tf, instant):
     return view.closed_s is not None and 0 <= instant - view.closed_s < tf * 60
 
 
-def pair_reading(raw, parent, view, detected):
+def pair_reading(raw, parent, view, detected, *, pairs=PAIRS):
     """Keep the *child's* actual label, ATR, wick and frozen stop. A parent is not a trigger."""
     if (
         raw.trigger is not None
         or raw.trigger_tf is not None
-        or raw.tf != PAIRS.get(parent)
+        or raw.tf != pairs.get(parent)
         or raw.structure.closed_s != raw.close_s
         or not asof(view, parent, raw.close_s)
     ):
@@ -51,13 +51,13 @@ def select(rows):
 
 
 class PairBook:
-    def __init__(self, parents, streams, records):
-        self.pairs = {p: PAIRS[p] for p in parents}
+    def __init__(self, parents, streams, records, *, pairs=PAIRS, skip_first=True):
+        self.pairs = {p: pairs[p] for p in parents}
         self.by_child = {c: p for p, c in self.pairs.items()}
         self.streams = streams
         if set(streams) != set(self.pairs) | set(self.by_child):
             raise ValueError("Paired mode requires exactly its selected native clocks")
-        self.gates = {p: FirstCrossGate() for p in parents}
+        self.gates = {p: FirstCrossGate(skip_first=skip_first) for p in parents}
         for p, g in self.gates.items():
             g.bind(records.setdefault(f"{p}:{self.pairs[p]}", {}), None)
         self.healthy = {}
@@ -291,7 +291,7 @@ class PairBook:
                 if raw.side == raw.label == raw.structure.bias:
                     missing.add(parent)
                 continue
-            prepared.append(pair_reading(raw, parent, view, detected))
+            prepared.append(pair_reading(raw, parent, view, detected, pairs=self.pairs))
         return prepared, tuple(sorted(missing)), unavailable
 
     def _resolve(self, d, name, stamp, clock, history_ok):

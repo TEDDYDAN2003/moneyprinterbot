@@ -21,13 +21,14 @@ def fingerprint(p):
 
 
 class Owners:
-    def __init__(self, state):
+    def __init__(self, state, *, pairs=PAIRS):
         self.book = state.setdefault("hull_lane_positions_v1", {})
+        self.pairs = pairs
 
     def bind(self, p, tf, *, minute_source=None, policy_key=None, pair_child=None):
         record = fingerprint(p) | {"tf": int(tf)}
         if pair_child is not None:
-            if PAIRS.get(tf) != pair_child or minute_source is not None:
+            if self.pairs.get(tf) != pair_child or minute_source is not None:
                 return False
             record.update(trigger_tf=pair_child, pair_policy_key=policy_key)
         if minute_source is not None:

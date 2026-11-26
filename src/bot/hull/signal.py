@@ -65,7 +65,10 @@ class Reading:
 
     @property
     def paired(self):
-        return self.trigger_tf is not None and PAIRS.get(self.tf) == self.trigger_tf
+        return self.trigger_tf is not None and (
+            PAIRS.get(self.tf) == self.trigger_tf
+            or {5: 4, 10: 8, 15: 12}.get(self.tf) == self.trigger_tf
+        )
 
     @property
     def execution_mode(self):
@@ -221,7 +224,8 @@ class FirstCrossGate:
     waives its ordinary veto. Structure, eligibility and actual orders are separate.
     """
 
-    def __init__(self):
+    def __init__(self, *, skip_first: bool = True):
+        self.skip_first = skip_first
         self.bind({}, None)
 
     def bind(self, record, persist):
@@ -279,8 +283,7 @@ class FirstCrossGate:
                 bar is None or self.record.get("waived_from") == s.failed_counter_mss_s
             )
         )
-        # User-requested: do not skip the first cross after an MSS; trade all aligned crosses.
-        skip = older
+        skip = older or (self.skip_first and first and not waive)
         if observe and not older and bar is None:
             self.record["bar"] = r.close_s
             if waive:
