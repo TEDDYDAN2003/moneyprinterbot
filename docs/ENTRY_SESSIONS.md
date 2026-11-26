@@ -1,4 +1,4 @@
-# Entry hours · Dynamic Hull and Wickless M15
+# Entry hours · Dynamic Hull and Wickless M15.
 
 Both Python bots use **one mandatory file**: [`src/bot/config/entry_sessions.yaml`](../src/bot/config/entry_sessions.yaml). It filters **new entries** on instruments you already selected. It does not select symbols, change lots, create extra entries, or tell either bot to flatten at the end of a window.
 
