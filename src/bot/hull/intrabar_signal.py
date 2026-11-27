@@ -106,15 +106,29 @@ class IntrabarReading(Reading):
             else None,
         }
 
-    def guard(self):
-        return {
+    def guard(self, plan=None):
+        origin = {
             "policy": INTRA_ENTRY,
             "ms": self.signal_msc,
             "end": self.close_s,
             "side": self.side,
             "source": self.active_source,
             "status": "watch",
+            "parent_tf": self.tf,
+            "trigger_tf": self.candle_tf,
+            "cross_region_policy": CROSS_REGION_POLICY,
+            "hull_cross_price": self.cross_price,
+            "cross_region_candle_close": None,
+            "cross_region_status": "awaiting_origin_close",
         }
+        if plan is not None:
+            origin.update(
+                cross_region_raw_stop=plan.cross_region_raw_stop,
+                cross_region_action=plan.cross_region_action,
+                raw_chart_sl=plan.raw_chart_sl,
+                cross_candle_raw_sl=plan.raw_chart_sl,
+            )
+        return origin
 
 
 def candidate(raw, parent, view, lane, now):

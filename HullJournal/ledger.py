@@ -86,6 +86,7 @@ CROSS_REGION_FIELDS = (
     "cross_candle_raw_sl",
     "cross_region_raw_stop",
     "cross_region_action",
+    "cross_region_stop_status",
     "raw_chart_sl",
 )
 SEND_FIELDS = ("send_quote_utc", "send_bid", "send_ask")
@@ -498,17 +499,23 @@ def verified_cross_region(ev, sign, base_stop, bid, ask):
         rounding=ROUND_FLOOR if sign == 1 else ROUND_CEILING
     )
     expected = max(base, rounded) if sign == 1 else min(base, rounded)
-    action = (
+    selected_action = (
         "cross_region_tightened"
         if expected == rounded and rounded != base
         else "existing_base_stop_retained"
     )
     entry = dec(ask if sign == 1 else bid)
     if ev.get("entry_timing") == "intrabar_cross":
-        close_ok = ev.get("cross_region_candle_close") is None and sign * (
+        action = "awaiting_origin_close"
+        effective_expected = base
+        status = "awaiting_origin_close"
+        close_ok = ev.get("cross_region_candle_close") in (None, "") and sign * (
             dec(ev["trigger_bid"]) - cross
         ) > 0
     else:
+        action = selected_action
+        effective_expected = expected
+        status = "active" if action == "cross_region_tightened" else "retained"
         close = dec(ev["cross_region_candle_close"])
         close_ok = sign * (close - cross) > 0
     return (
@@ -516,8 +523,9 @@ def verified_cross_region(ev, sign, base_stop, bid, ask):
         and base % tick == 0
         and effective % tick == 0
         and rounded == cross_stop
-        and expected == effective
+        and effective_expected == effective
         and ev.get("cross_region_action") == action
+        and ev.get("cross_region_stop_status") == status
         and sign * (entry - cross) > 0
         and close_ok
     )
@@ -547,6 +555,48 @@ def save_cross_region(c, did, ev):
             "UPDATE cross_region_receipts SET evidence='null' WHERE id=?",
             (str(did),),
         )
+
+
+def index_cross_region_activation(c, ev):
+    """Apply later origin-close protection evidence to its reconciled entry deal."""
+    did = str(int(ev.get("entry_deal") or 0))
+    if did == "0" or ev.get("cross_region_policy") != CROSS_REGION_POLICY:
+        return
+    status = ev.get("cross_region_status")
+    if status not in ("active", "retained", "exit_pending"):
+        return
+    row = c.execute("SELECT evidence FROM swing_receipts WHERE id=?", (did,)).fetchone()
+    if row is None or row[0] == "null":
+        return
+    proof = json.loads(row[0])
+    fields = proof.get("fields")
+    if not isinstance(fields, dict):
+        return
+    if (
+        fields.get("cross_region_policy") != CROSS_REGION_POLICY
+        or dec(fields.get("hull_cross_price"))
+        != dec(ev.get("hull_cross_price"))
+    ):
+        c.execute("UPDATE swing_receipts SET evidence='null' WHERE id=?", (did,))
+        return
+    updates = {
+        "cross_region_policy": CROSS_REGION_POLICY,
+        "hull_cross_price": plain(ev["hull_cross_price"]),
+        "cross_region_candle_close": plain(ev["cross_region_candle_close"]),
+        "cross_region_raw_stop": plain(ev["cross_region_raw_stop"]),
+        "cross_region_action": (
+            "cross_region_exit_after_close"
+            if status == "exit_pending"
+            else ev["cross_region_action"]
+        ),
+        "cross_region_stop_status": status,
+        "raw_chart_sl": plain(ev["raw_chart_sl"]),
+    }
+    fields.update(updates)
+    c.execute(
+        "UPDATE swing_receipts SET evidence=? WHERE id=?",
+        (enc(proof), did),
+    )
 
 
 def index_swing_receipt(c, ev, vals, ref):
@@ -1039,6 +1089,7 @@ def import_log(c, path, magic):
                     b'"live_hull_cross"',
                     b'"label_decision"',
                     b'"exit_request"',
+                    b'"cross_region_stop_activation"',
                 )
             ):
                 continue
@@ -1051,6 +1102,8 @@ def import_log(c, path, magic):
                 sy = str(ev["symbol"])
                 if typ in ("retest_fill_receipt", "retest_batch_settled"):
                     index_retest(c, ev, magic)
+                elif typ == "cross_region_stop_activation":
+                    index_cross_region_activation(c, ev)
                 elif typ == "demo_result":
                     q = ev["request"]
                     key = str(int(ev.get("deal") or 0))

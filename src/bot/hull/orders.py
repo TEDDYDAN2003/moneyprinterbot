@@ -106,6 +106,15 @@ class Plan:
             "raw_chart_sl": self.raw_chart_sl,
             "cross_region_raw_stop": self.cross_region_raw_stop,
             "cross_region_action": self.cross_region_action,
+            "cross_region_stop_status": (
+                "awaiting_origin_close"
+                if self.cross_region_action == "awaiting_origin_close"
+                else "active"
+                if self.cross_region_action == "cross_region_tightened"
+                else "retained"
+                if self.cross_region_action == "existing_base_stop_retained"
+                else None
+            ),
             "stop_spread_buffer_price": self.stop_spread_buffer,
             "stop_reference_bid": reference_bid,
             "stop_reference_ask": reference_ask,
@@ -280,18 +289,24 @@ def protected_prices(d, p, grid, bid, ask):
         ):
             raise Block("cross_region_wrong_side_or_too_close")
         cross_region_raw_stop = grid.price(grid.index(d.cross_price, side == -1))
-        if (
-            side * (entry - cross_region_raw_stop)
-            < max(grid.gap, grid.tick) - grid.tick * 1e-6
-        ):
-            raise Block("cross_region_wrong_side_or_too_close")
-        tighter = max if side == 1 else min
-        raw_sl = tighter(wick_sl, cross_region_raw_stop)
-        cross_region_action = (
-            "cross_region_tightened"
-            if raw_sl == cross_region_raw_stop and cross_region_raw_stop != wick_sl
-            else "existing_base_stop_retained"
-        )
+        if getattr(d, "intrabar", False):
+            # Keep the confirmed swing stop on the order throughout its origin
+            # candle. The Hull intersection becomes a broker stop only after
+            # that candle closes on the valid side.
+            cross_region_action = "awaiting_origin_close"
+        else:
+            if (
+                side * (entry - cross_region_raw_stop)
+                < max(grid.gap, grid.tick) - grid.tick * 1e-6
+            ):
+                raise Block("cross_region_wrong_side_or_too_close")
+            tighter = max if side == 1 else min
+            raw_sl = tighter(wick_sl, cross_region_raw_stop)
+            cross_region_action = (
+                "cross_region_tightened"
+                if raw_sl == cross_region_raw_stop and cross_region_raw_stop != wick_sl
+                else "existing_base_stop_retained"
+            )
     if d.stop_tick_size is not None and (
         grid.tick != d.stop_tick_size or wick_sl != d.raw_sl
     ):

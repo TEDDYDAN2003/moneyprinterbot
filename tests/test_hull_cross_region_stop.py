@@ -61,7 +61,7 @@ def test_farther_cross_keeps_the_more_protective_wick_stop():
     assert plan[7] == "existing_base_stop_retained"
 
 
-def test_intrabar_entry_uses_fresh_cross_and_tightens_its_confirmed_swing_stop():
+def test_intrabar_entry_keeps_swing_stop_until_origin_candle_close():
     reading = paired_reading(side=1, close=99.9, cross=100.0, wick_sl=99.0)
     reading.intrabar = True
     reading.trigger = NS(bid=100.5)
@@ -72,8 +72,9 @@ def test_intrabar_entry_uses_fresh_cross_and_tightens_its_confirmed_swing_stop()
         101.0,
         101.02,
     )
-    assert plan[4] == plan[6] == 100.0
-    assert plan[7] == "cross_region_tightened"
+    assert plan[4] == 99.0
+    assert plan[6] == 100.0
+    assert plan[7] == "awaiting_origin_close"
 
 
 @pytest.mark.parametrize(

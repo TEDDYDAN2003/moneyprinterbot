@@ -208,19 +208,11 @@ def test_first_real_intrabar_cross_and_same_second_recross_after_flat(
                 rounding=ROUND_FLOOR if side == 1 else ROUND_CEILING
             )
         )
-        expected_raw = (
-            max(r["frozen_swing_sl"], rounded_cross)
-            if side == 1
-            else min(r["frozen_swing_sl"], rounded_cross)
-        )
+        expected_raw = r["frozen_swing_sl"]
         assert r["cross_region_raw_stop"] == rounded_cross
         assert r["raw_chart_sl"] == expected_raw
-        assert r["cross_region_action"] == (
-            "cross_region_tightened"
-            if expected_raw == rounded_cross
-            and rounded_cross != r["frozen_swing_sl"]
-            else "existing_base_stop_retained"
-        )
+        assert r["cross_region_action"] == "awaiting_origin_close"
+        assert r["cross_region_stop_status"] == "awaiting_origin_close"
         assert r["request"]["sl"] == pytest.approx(
             expected_raw + (0.05 if side == -1 else 0)
         )
@@ -254,6 +246,16 @@ def test_origin_close_only_catchup_and_successor_no_label(
     )
     (close,) = tape.events("origin_cross_check")
     assert close["phase"] == "final_close" and close["observed_msc"] == (T + 180) * 1000
+    activations = tape.events("cross_region_stop_activation")
+    if why:
+        assert not activations
+    else:
+        assert len(activations) == 4
+        assert {r["cross_region_status"] for r in activations} <= {"active", "retained"}
+        assert {
+            r["intrabar_origin"]["cross_region_status"]
+            for r in tape.state()["hull_lane_positions_v1"].values()
+        } <= {"active", "retained"}
     assert not tape.events("closed_label")
 
 

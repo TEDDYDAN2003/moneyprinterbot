@@ -841,7 +841,10 @@ class Desk:
         if (
             self.armed
             and (
-                self.ladders.book or self.exits or (self.retest and self.retest.active)
+                self.ladders.book
+                or self.exits
+                or (self.retest and self.retest.active)
+                or self.origins.has_pending_cross_stops()
             )
             and time.monotonic() - self.last_service >= FAST_POLL_S
         ):
@@ -904,6 +907,8 @@ class Desk:
                     recovered = True
         if recovered:
             self.persist()
+        self.origins.activate_pending(ps)
+        ps, _ = snapshot(self.mt)
         for p in ps:
             if not self.owned(p):
                 continue
@@ -966,6 +971,9 @@ class Desk:
         self, name, tf, plan, res, expected, *, minute_source=None, pair_child=None, origin=None
     ):
         mt = self.mt
+        if origin is not None:
+            origin = dict(origin)
+            origin["entry_deal"] = getattr(res, "deal", None)
         self.account()
         if (
             origin
@@ -1602,7 +1610,7 @@ class Desk:
                     expected,
                     minute_source=d.active_source if d.trigger_tf == 1 else None,
                     pair_child=d.trigger_tf if d.paired else None,
-                    origin=d.guard() if d.intrabar else None,
+                    origin=d.guard(plan) if d.intrabar else None,
                 )
                 # A synchronous send/ack can itself span an uncross. Sample
                 # after enrollment before another leg, including a verified

@@ -45,6 +45,51 @@ def entry():
 
 
 class IntrabarEvidenceTests(unittest.TestCase):
+    def test_origin_close_stop_update_is_joined_to_the_exact_entry_deal(self):
+        e = entry()
+        e.update(
+            cross_region_policy="hull_line_intersection_tighten_only_v1",
+            hull_cross_price=101,
+            cross_region_candle_close=None,
+            cross_candle_raw_sl=110,
+            cross_region_raw_stop=101,
+            cross_region_action="awaiting_origin_close",
+            cross_region_stop_status="awaiting_origin_close",
+            raw_chart_sl=110,
+        )
+        with tempfile.TemporaryDirectory() as root, closing(db_open(":memory:")) as db:
+            path = Path(root) / "demo.jsonl"
+            with path.open("a") as f:
+                print(json.dumps(e), file=f)
+            import_log(db, path, MAGIC)
+            (initial,) = db.execute("SELECT evidence FROM swing_receipts").fetchone()
+            self.assertEqual(
+                json.loads(initial)["fields"]["cross_region_stop_status"],
+                "awaiting_origin_close",
+            )
+            event = {
+                "event": "cross_region_stop_activation",
+                "symbol": "XAUUSDm",
+                "scanner_magic": MAGIC,
+                "entry_deal": e["deal"],
+                "cross_region_policy": "hull_line_intersection_tighten_only_v1",
+                "hull_cross_price": 101,
+                "cross_region_candle_close": 100,
+                "cross_region_raw_stop": 101,
+                "cross_region_action": "cross_region_tightened",
+                "cross_region_status": "active",
+                "raw_chart_sl": 101,
+            }
+            with path.open("a") as f:
+                print(json.dumps(event), file=f)
+            import_log(db, path, MAGIC)
+            (updated,) = db.execute("SELECT evidence FROM swing_receipts").fetchone()
+            fields = json.loads(updated)["fields"]
+            self.assertEqual(
+                (fields["cross_region_action"], fields["cross_region_stop_status"], fields["raw_chart_sl"]),
+                ("cross_region_tightened", "active", "101"),
+            )
+
     def test_no_mixed_stop_model_or_future_pivot_and_no_bad_time(self):
         e = entry()
         with tempfile.TemporaryDirectory() as root:
