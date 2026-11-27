@@ -1,4 +1,4 @@
-"""Paired market-tick clock. Closed streams supply structure, exits and finality, not entries."""
+"""Paired market-tick clock. Fresh tick edges plus a separately verified, unconsumed confirmed-close route."""
 
 from .curves import LiveTick
 from .intrabar_guard import relation
@@ -12,6 +12,7 @@ class IntrabarBook(PairBook):
         self.samples = {}  # last verified (quote, candle end, selected source, raw label)
         self.episodes = {}  # first observed tick of each uninterrupted nonzero edge
         self.repair_after = {}
+        self.origin_edges = {}  # exact raw observation, not a later projection
 
     @staticmethod
     def _bid_chart(d, name):
@@ -23,6 +24,7 @@ class IntrabarBook(PairBook):
     def _gap(self, lane):
         lane.baseline_due = True
         self.episodes.pop(lane.tf, None)
+        self.origin_edges.pop(lane.tf, None)
 
     def _sample(self, d, name, lanes, quote, clock):
         q = LiveTick.read(quote)
@@ -75,8 +77,10 @@ class IntrabarBook(PairBook):
             )
             if warm or changed or (q.ms == prev[0].ms and q != prev[0]):
                 self.episodes.pop(tf, None)
+                self.origin_edges.pop(tf, None)
             if fresh and raw.label:
                 self.episodes[tf] = q.ms
+                self.origin_edges[tf] = raw
                 if tf in self.by_child:
                     edges.append(raw)
             if raw.label and not warm and changed:
@@ -109,11 +113,27 @@ class IntrabarBook(PairBook):
             self._sample(d, name, lanes, d.mt.symbol_info_tick(name), clock)
 
     def verify(self, d, name, r, quote, clock):
-        if not r.intrabar or self.pairs.get(r.tf) != r.trigger_tf or not r.entry_side:
+        if self.pairs.get(r.tf) != r.trigger_tf or not r.entry_side:
             return False
         child = self.streams[r.candle_tf]
         parent = self.streams[r.tf]
-        live, _, matched = self._sample(d, name, (child, parent), quote, clock)
+        live, edges, matched = self._sample(d, name, (child, parent), quote, clock)
+        if not r.intrabar:
+            # A fallback must prove the actual CLOSED candle *and* an intact
+            # fresh successor quote on both streams. No legacy missing-peer waiver.
+            return (
+                r.trigger is None
+                and r.cross_bar is not None
+                and not edges
+                and child.tf in live
+                and parent.tf in live
+                and r.side * (live[child.tf].trigger.bid - r.cross_price) > 0
+                and self.gates[r.tf].apply(r, observe=False).entry_side == r.side
+                and self._parent_fence(d, name, r) < r.signal_msc
+                and self._closed_proof(
+                    d, name, r, child, parent, live, matched, clock()
+                )
+            )
         cr = live.get(child.tf)
         now = clock()
         if (
@@ -138,27 +158,86 @@ class IntrabarBook(PairBook):
             or child.tick_size != r.stop_tick_size
             or not r.signal_msc <= cr.trigger.ms < r.close_s * 1000
             or r.side * (cr.trigger.bid - r.swing.price) <= 0
-            or d.state.get("intrabar_parent_opposite_ms", {})
-            .get(name, {})
-            .get(f"{r.tf}:{-r.side}", -1)
-            >= r.signal_msc
+            or r.side * (cr.trigger.bid - r.cross_price) <= 0
+            or self._parent_fence(d, name, r) >= r.signal_msc
             or d.pair_fence(name, r.tf, child.tf, -r.side) >= r.signal_msc
         ):
             return False
         # Rebuild against the exact frozen evidence and check the persisted MSS gate.
+        original = self.origin_edges.get(child.tf)
+        if original is None or (
+            original.trigger,
+            original.forming_bar,
+            original.cross_price,
+            original.cross_fraction,
+        ) != (r.trigger, r.forming_bar, r.cross_price, r.cross_fraction):
+            return False
         rebuilt = candidate(cr, r.tf, pv, child, now)
         return (
-            rebuilt.swing == r.swing
+            rebuilt.candidate_reason == "ready"
+            and rebuilt.swing == r.swing
             and rebuilt.raw_sl == r.raw_sl
             and rebuilt.atr == r.atr
-            and rebuilt.cross_price == r.cross_price
-            and rebuilt.cross_fraction == r.cross_fraction
             and relation(cr, r.active_source, r.side) is True
             and self.gates[r.tf].apply(r, observe=False).entry_side == r.side
         )
 
+    @staticmethod
+    def _parent_fence(d, name, r):
+        return (
+            d.state.get("intrabar_parent_opposite_ms", {})
+            .get(name, {})
+            .get(f"{r.tf}:{-r.side}", -1)
+        )
+
+    @staticmethod
+    def _spent(d, name, stamp):
+        # One symbol-level co-close decision. Do not downgrade to a lower lane
+        # or turn a skipped first MSS cross into a second chance at bar close.
+        return any(
+            stamp in d.state.get(k, {}).get(name, {}).values()
+            for k in ("intrabar_origin_ends", "intrabar_handled_ends")
+        )
+
+    @staticmethod
+    def _consume_close(d, name, stamp, reason):
+        through = d.state.setdefault("paired_arbitration_through", {})
+        through[name] = max(through.get(name, -1), stamp)
+        d.emit("paired_close_consumed", symbol=name, close_s=stamp, reason=reason)
+
+    def _resolve(self, d, name, stamp, clock, history_ok):
+        if self._spent(d, name, stamp):
+            self._consume_close(d, name, stamp, "handled_on_origin_tick")
+            d.persist()
+            return True
+        return super()._resolve(d, name, stamp, clock, history_ok)
+
+    def _prior_closes(self, d, name, now):
+        """Reserve known older candidates' MSS gates BEFORE observing a newer tick.
+
+        A read-only recheck of a reserved gate is idempotent. Without this step
+        a newer tick can spend the first-cross skip on behalf of an older close.
+        Unpublished peers remain ambiguous: no guessing their side or owner.
+        """
+        possible = set()
+        through = d.state.get("paired_arbitration_through", {}).get(name, -1)
+        for end in sorted(self.pending):
+            if end <= through or self._spent(d, name, end):
+                continue
+            prepared, unpublished, _ = self._candidates(end)
+            fresh = 0 <= now - end <= d.lim.max_entry_age_s
+            rows = [self.gates[r.tf].apply(r, observe=True) for r in prepared]
+            if fresh and (unpublished or any(r.entry_side for r in rows)):
+                possible.add(end)
+        return possible
+
     def poll(self, d, name, clock, *, history_ok, bid_chart):
         if not bid_chart or not self._bid_chart(d, name):
+            self.pending.clear()
+            self.wait_notice.clear()
+            for sym, tf in list(d.waiting):
+                if sym == name:
+                    d.cancel_wait(sym, tf, "unverified_bid_chart")
             for lane in self.streams.values():
                 self._gap(lane)
             return
@@ -213,7 +292,6 @@ class IntrabarBook(PairBook):
                 closed.append(r)
         for r in closed:
             matched += self._protect(d, name, r)
-        self.pending.clear()  # close-only entries are intentionally never dispatched by this book
         tfs = set(self.by_child) | {
             p for sym, p in d.open_lanes if sym == name and p in self.pairs
         }
@@ -222,13 +300,16 @@ class IntrabarBook(PairBook):
             d, name, lanes, d.mt.symbol_info_tick(name), clock
         )
         if not edges:
+            self._advance_closed(d, name, clock, history_ok)
             return
         stamp = edges[0].trigger.ms
         decided = d.state.setdefault("intrabar_arbitration_ms", {})
         if decided.get(name, -1) >= stamp:
+            self._advance_closed(d, name, clock, history_ok)
             return
         rows = []
         now = clock()
+        competing_closes = self._prior_closes(d, name, now)
         for raw in edges:
             p = self.by_child[raw.tf]
             pv = self.streams[p].h.structure.view
@@ -259,6 +340,44 @@ class IntrabarBook(PairBook):
             owner, why = None, "intrabar_data_unverified"
         elif matched or interrupted:
             owner, why = None, "prior_batch_not_flat_at_cross"
+        # An earlier protective event can already be draining the opposite batch
+        # on this tick. Do not reserve a LIVE send, or erase a distinct closed
+        # opportunity solely because reconciliation has not finished yet.
+        draining = owner is not None and any(
+            x["symbol"] == name for x in d.exits.values()
+        )
+        if draining:
+            self._decision(d, name, owner, "opposite_exit_not_confirmed_flat")
+            owner, why = None, "prior_batch_not_flat_at_cross"
+        spent = d.state.setdefault("intrabar_handled_ends", {}).setdefault(name, {})
+        # Do not prevent a separately confirmed close solely because exposure
+        # was being flattened when a live edge appeared. Never retry a send.
+        for x in rows:
+            if x.entry_reason == "first_trend_cross_after_mss" or (
+                x.entry_side and why != "prior_batch_not_flat_at_cross"
+            ):
+                spent[f"{x.tf}:{x.candle_tf}"] = x.close_s
+        if owner or why in (
+            "conflicting_simultaneous_pairs",
+            "intrabar_data_unverified",
+        ):
+            # A fresh live opportunity supersedes a parked older close. Two
+            # separately actionable origins arriving together are ambiguous:
+            # consume both instead of letting loop order submit two batches.
+            for sym, tf in list(d.waiting):
+                if sym == name:
+                    d.cancel_wait(sym, tf, "superseded_by_live_pair_edge")
+            if competing_closes:
+                owner, why = None, "competing_tick_and_close"
+            for end in sorted(self.pending):
+                self._consume_close(
+                    d,
+                    name,
+                    end,
+                    why if end in competing_closes else "concurrent_live_edge",
+                )
+            self.pending.clear()
+            self.wait_notice.clear()
         decided[name] = stamp
         d.persist()  # includes first-cross gate and arbitration, before any order API
         d.emit(
@@ -288,3 +407,5 @@ class IntrabarBook(PairBook):
             )
             outcome = d.batch(name, owner, raw_tf=owner.candle_tf)
             self._decision(d, name, owner, outcome)
+        else:
+            self._advance_closed(d, name, clock, history_ok)

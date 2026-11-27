@@ -304,6 +304,10 @@ class TicketLadders:
                 if not self.confirm(p, key, r, grid):
                     self.note(key, r, "ladder_ack_pending_review")
                 return  # never resend an uncertain request
+            origin = (self.d.owners.origin(p) or {}).get("intrabar_origin") or {}
+            if origin.get("cross_region_status") == "unknown_ack":
+                self.note(key, r, "cross_stop_ack_pending_review")
+                return  # one outstanding SLTP writer per ticket, including across restarts
             if r.get("broker_exit_seen"):
                 return
             old = pair(r)

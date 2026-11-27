@@ -174,8 +174,11 @@ class PairBook:
             fresh_q = d.mt.symbol_info_tick(name)
             if fresh_q is not None and LiveTick.read(fresh_q) != LiveTick.read(quote):
                 live, matched = self._live(d, name, (child, parent), fresh_q, clock)
+        return self._closed_proof(d, name, r, child, parent, live, matched, clock())
+
+    def _closed_proof(self, d, name, r, child, parent, live, matched, now):
+        """Verify the immutable confirmed trigger against native bars on each leg."""
         cr = live.get(child.tf)
-        now = clock()
         item = self.latest.get(r.candle_tf)
         if not item:
             return False
@@ -420,7 +423,10 @@ class PairBook:
         for r in closed:
             self._protect(d, name, r)
         self.watch(d, name, clock, all_triggers=True)
-        # Resume an existing first-quote window only once per poll. A fresh close
+        self._advance_closed(d, name, clock, history_ok)
+
+    def _advance_closed(self, d, name, clock, history_ok):
+        # Resume an existing first-quote/flatness window only once per poll. A fresh close
         # is never a second chance for an older trigger close or a different pair.
         for key, w in list(d.waiting.items()):
             if key[0] != name:

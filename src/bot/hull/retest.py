@@ -131,6 +131,10 @@ def make_retest_plan(r, p, g, bid, ask, cash, h):
         cross_region_action,
     ) = protected_prices(r, p, g, bid, ask)
     entry, _ = level(b, r.side, r.atr, g.tick, h.retest_fraction, h.retest_atr_cap)
+    # The placement Bid is NOT the intended entry. Ask padding on a short
+    # must not legalize a limit on/through its unrounded chart intersection.
+    if r.side * (entry - r.cross_price) <= 0:
+        raise Block("cross_region_invalid_at_limit")
     risk = -valid_cash(cash, r.side, p.lots, entry, sl)
     if risk <= 0:
         raise Block("nonpositive_cash_risk")

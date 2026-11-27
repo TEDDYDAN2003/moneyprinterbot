@@ -79,6 +79,7 @@ CROSS_SHARED = (
     "mss_skip_exception",
 )
 CROSS_REGION_POLICY = "hull_line_intersection_tighten_only_v1"
+REGION_BASIS = "frozen_trigger_bid_wick_range_v2"
 CROSS_REGION_FIELDS = (
     "cross_region_policy",
     "hull_cross_price",
@@ -505,17 +506,39 @@ def verified_cross_region(ev, sign, base_stop, bid, ask):
         else "existing_base_stop_retained"
     )
     entry = dec(ask if sign == 1 else bid)
+    action, effective_expected = selected_action, expected
+    status = "active" if action == "cross_region_tightened" else "retained"
     if ev.get("entry_timing") == "intrabar_cross":
-        action = "awaiting_origin_close"
-        effective_expected = base
-        status = "awaiting_origin_close"
-        close_ok = ev.get("cross_region_candle_close") in (None, "") and sign * (
-            dec(ev["trigger_bid"]) - cross
-        ) > 0
+        trigger = dec(ev["trigger_bid"])
+        close_ok = (
+            ev.get("cross_region_candle_close") in (None, "")
+            and sign * (trigger - cross) > 0
+        )
+        if any(
+            k in ev
+            for k in (
+                "cross_region_basis",
+                "cross_region_location",
+                "cross_signal_low",
+                "cross_signal_high",
+            )
+        ):
+            low, high = dec(ev["cross_signal_low"]), dec(ev["cross_signal_high"])
+            inside = low <= cross <= high
+            if (
+                ev.get("cross_region_basis") != REGION_BASIS
+                or not 0 < low <= trigger <= high
+                or ev.get("cross_region_location")
+                != ("inside" if inside else "outside")
+                or sign * (bid - cross) <= 0
+            ):
+                return False
+        else:
+            inside = True  # historical defer-all receipt, not reconstructed OHLC
+        if inside:
+            action = status = "awaiting_origin_close"
+            effective_expected = base
     else:
-        action = selected_action
-        effective_expected = expected
-        status = "active" if action == "cross_region_tightened" else "retained"
         close = dec(ev["cross_region_candle_close"])
         close_ok = sign * (close - cross) > 0
     return (
@@ -570,7 +593,8 @@ def index_cross_region_activation(c, ev):
         return
     proof = json.loads(row[0])
     fields = proof.get("fields")
-    if not isinstance(fields, dict):
+    original = c.execute("SELECT symbol FROM receipts WHERE id=?", (did,)).fetchone()
+    if not isinstance(fields, dict) or not original or original[0] != ev.get("symbol"):
         return
     if (
         fields.get("cross_region_policy") != CROSS_REGION_POLICY
@@ -592,6 +616,11 @@ def index_cross_region_activation(c, ev):
         "cross_region_stop_status": status,
         "raw_chart_sl": plain(ev["raw_chart_sl"]),
     }
+    # Keep the immutable opening proof distinct from the later ticket state.
+    # A log replay must not treat a verified amendment as a conflicting fill.
+    proof.setdefault(
+        "opening_proof_hash", hashlib.sha256(enc(proof).encode()).hexdigest()
+    )
     fields.update(updates)
     c.execute(
         "UPDATE swing_receipts SET evidence=? WHERE id=?",
@@ -723,6 +752,13 @@ def index_swing_receipt(c, ev, vals, ref):
     )
     old = c.execute("SELECT evidence FROM swing_receipts WHERE id=?", (did,)).fetchone()
     if old and old[0] != value:
+        saved = json.loads(old[0])
+        if (
+            saved
+            and saved.get("opening_proof_hash")
+            == hashlib.sha256(value.encode()).hexdigest()
+        ):
+            return
         value = "null"  # contradictory proof never becomes authoritative on replay
     c.execute("INSERT OR REPLACE INTO swing_receipts VALUES(?,?)", (did, value))
 
@@ -953,11 +989,15 @@ def index_retest(c, ev, magic):
         == ("body" if body else "lower_wick" if sgn == 1 else "upper_wick")
         and (
             not has_cross_region
-            or verified_cross_region(region_ev, sgn, base_sl, bid, ask)
+            or (
+                base_sl == dec(a["frozen_cross_sl"])
+                and sgn * (price - dec(a["hull_cross_price"])) > 0
+                and verified_cross_region(region_ev, sgn, base_sl, bid, ask)
+            )
         )
         and verified_entry_sl(ev, sgn, raw_sl, sl, bid, ask, pending=True)
         and wick == dec(a["cross_candle_wick"])
-        and (wick - raw_sl) * sgn >= tick
+        and (wick - base_sl) * sgn >= tick
         and min(sl, price, tp, fill) > 0
         and all(v % tick == 0 for v in (raw_sl, sl, price, tp))
         and sgn * (tp - price) >= tick

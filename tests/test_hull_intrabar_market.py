@@ -57,6 +57,9 @@ class Tape:
         self.i = 0
         self.bad = lambda tf, pos: False
         self.hidden = []  # additional native prints, not sampled by the observer
+        self.origin_open = (
+            None  # allow a real opening gap without altering the prior Hull history
+        )
         self.px = lambda v: round(2006.2 + side * (v - 2006.2), 4)
         children = {self.cfg["hull"]["pairs"][p] for p in parents}
         self.paths = {
@@ -93,7 +96,11 @@ class Tape:
         )
         start = 0
         while start <= now:
-            op = rows[-1].c
+            op = (
+                self.origin_open
+                if start == 0 and self.origin_open is not None
+                else rows[-1].c
+            )
             vv = [
                 self.px(v)
                 for off, v in points
@@ -248,7 +255,11 @@ def test_origin_close_only_catchup_and_successor_no_label(
     assert close["phase"] == "final_close" and close["observed_msc"] == (T + 180) * 1000
     activations = tape.events("cross_region_stop_activation")
     if why:
-        assert not activations
+        assert len(activations) == 4
+        assert {r["cross_region_status"] for r in activations} == {"exit_pending"}
+        assert not any(
+            r["action"] == tape.mt.TRADE_ACTION_SLTP for r in tape.mt.requests
+        )
     else:
         assert len(activations) == 4
         assert {r["cross_region_status"] for r in activations} <= {"active", "retained"}
@@ -420,6 +431,11 @@ def test_read_only_default_preflight_and_shadow_have_no_broker_requests(
         summary["entry_policy"],
         summary["new_ticket_stop_policy"],
     ) == ("intrabar_cross", INTRA_ENTRY, INTRA_STOP)
+    assert (
+        summary["closed_market_fallback"]
+        == "fresh_unconsumed_confirmed_pair_after_verified_flat"
+    )
+    assert summary["intrabar_cross_range_basis"] == "frozen_trigger_bid_wick_range_v2"
     tape.run(armed=False)
     assert not tape.mt.requests and not tape.events("demo_result", shadow=True)
     assert [v["outcome"] for v in tape.events("label_decision", shadow=True)] == [
@@ -862,15 +878,20 @@ def test_exact_touch_latches_exit_even_with_no_opposing_label(tmp_path, monkeypa
     }
 
 
+@pytest.mark.parametrize("damage", ["end", "wick_range", "missing_intersection"])
 def test_invalid_saved_origin_never_interpreted_as_a_closed_cross(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, damage
 ):
     tape = Tape(tmp_path, monkeypatch, [(100, OFF), (200, ON), (300, OFF)])
     tape.run(count=2)
     state = tape.state()
-    next(iter(state["hull_lane_positions_v1"].values()))["intrabar_origin"]["end"] += (
-        600
-    )
+    origin = next(iter(state["hull_lane_positions_v1"].values()))["intrabar_origin"]
+    if damage == "end":
+        origin["end"] += 600
+    elif damage == "wick_range":
+        origin["cross_region_location"] = "outside"
+    else:
+        del origin["hull_cross_price"]
     next(tmp_path.glob(".moneyprinterbot/hull/*/state.json")).write_text(
         json.dumps(state)
     )

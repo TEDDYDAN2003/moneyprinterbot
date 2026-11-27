@@ -3,7 +3,8 @@
 from dataclasses import dataclass, fields
 from math import isfinite
 
-from .config import CROSS_REGION_POLICY, INTRA_ENTRY, INTRA_STOP
+from .bar import cross_location
+from .config import CROSS_REGION_POLICY, INTRA_ENTRY, INTRA_STOP, REGION_BASIS
 from .orders import cross_candle_stop
 from .signal import Reading
 from .structure import Pivot
@@ -13,6 +14,29 @@ from .structure import Pivot
 class IntrabarReading(Reading):
     swing: Pivot | None = None
     intrabar = True
+
+    @property
+    def region(self):
+        bar, q = self.forming_bar, self.trigger
+        if (
+            bar is None
+            or q is None
+            or self.cross_fraction is None
+            or not 0 < self.cross_fraction < 1
+            or bar.t != self.close_s - self.candle_tf * 60
+            or bar.c != q.bid
+        ):
+            return "unverified"
+        return cross_location(self.label, self.cross_price, q.bid, bar.l, bar.h)
+
+    def region_evidence(self):
+        b = self.forming_bar
+        return {
+            "cross_region_basis": REGION_BASIS,
+            "cross_region_location": self.region,
+            "cross_signal_low": b.l if b else None,
+            "cross_signal_high": b.h if b else None,
+        }
 
     @property
     def gate_stamp(self):
@@ -38,9 +62,9 @@ class IntrabarReading(Reading):
             return "pair_structure_disagrees"
         if self.a is None or self.b is None or not self.label * (self.b - self.a) > 0:
             return "intrabar_cross_unverified"
-        if self.cross_price is None:
+        if self.region == "unverified":
             return "cross_region_unavailable"
-        if self.label * (q.bid - self.cross_price) <= 0:
+        if self.region == "wrong_side":
             return "cross_region_wrong_side_or_too_close"
         pivot = self.swing
         if not (
@@ -89,6 +113,7 @@ class IntrabarReading(Reading):
             "swing_bar_s": self.anchor_s,
             "swing_known_s": self.swing.known_s if self.swing else None,
             "frozen_swing_sl": self.raw_sl,
+            **self.region_evidence(),
             "cross_region_policy": CROSS_REGION_POLICY,
             "hull_cross_price": self.cross_price,
             "cross_region_candle_close": None,
@@ -116,17 +141,25 @@ class IntrabarReading(Reading):
             "status": "watch",
             "parent_tf": self.tf,
             "trigger_tf": self.candle_tf,
+            **self.region_evidence(),
             "cross_region_policy": CROSS_REGION_POLICY,
             "hull_cross_price": self.cross_price,
             "cross_region_candle_close": None,
-            "cross_region_status": "awaiting_origin_close",
+            "cross_region_status": "awaiting_origin_close"
+            if self.region == "inside"
+            else "active",
+            "trigger_bid": self.trigger.bid,
+            "stop_tick_size": self.stop_tick_size,
         }
         if plan is not None:
             origin.update(
                 cross_region_raw_stop=plan.cross_region_raw_stop,
                 cross_region_action=plan.cross_region_action,
                 raw_chart_sl=plan.raw_chart_sl,
-                cross_candle_raw_sl=plan.raw_chart_sl,
+                cross_candle_raw_sl=None,  # a live swing is not a closed candle wick
+                cross_region_status=plan.stop_audit(self.trigger.bid, self.trigger.ask)[
+                    "cross_region_stop_status"
+                ],
             )
         return origin
 

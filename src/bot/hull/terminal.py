@@ -30,6 +30,7 @@ from .config import (
     PAIR_MODE,
     RETEST,
     RETIRED_LIMITS,
+    REGION_BASIS,
     STOP_SPREAD_POLICY,
     TARGET_POLICY,
     TF_NAME,
@@ -472,6 +473,9 @@ def run(
             **(
                 {
                     "origin_cross_exit": "own_source_through_original_close_including_equality",
+                    "closed_market_fallback": "fresh_unconsumed_confirmed_pair_after_verified_flat",
+                    "intrabar_cross_range_basis": REGION_BASIS,
+                    "closed_fallback_stop_policy": EXECUTION_INFO[PAIR_MODE][1],
                     "same_candle_reentry": "new_edge_after_verified_flat_only",
                 }
                 if live_pair

@@ -64,6 +64,7 @@ def test_farther_cross_keeps_the_more_protective_wick_stop():
 def test_intrabar_entry_keeps_swing_stop_until_origin_candle_close():
     reading = paired_reading(side=1, close=99.9, cross=100.0, wick_sl=99.0)
     reading.intrabar = True
+    reading.region = "inside"
     reading.trigger = NS(bid=100.5)
     plan = protected_prices(
         reading,

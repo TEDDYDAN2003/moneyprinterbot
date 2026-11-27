@@ -95,6 +95,10 @@ def identity_check(mt, mode, armed, identity=None):
     return a
 
 
+class AwaitOwnedFlat(Block):
+    """Only an unsent, independently confirmed close can wait for this."""
+
+
 @dataclass(slots=True)
 class FirstQuoteWindow:
     reading: Reading
@@ -298,9 +302,19 @@ class Desk:
                 deal.symbol != name
                 or deal.entry
                 not in (mt.DEAL_ENTRY_OUT, mt.DEAL_ENTRY_OUT_BY, mt.DEAL_ENTRY_INOUT)
-                or (not reading.intrabar and deal.type != closing_type)
             ):
                 continue
+            if not reading.intrabar and deal.type != closing_type:
+                if self._closed_fallback(reading):
+                    ms = getattr(deal, "time_msc", None)
+                    if type(ms) is not int or ms <= 0:
+                        raise Block("entry_deal_history_unavailable")
+                    if (
+                        ms >= reading.signal_msc
+                        and self.owners.deal_lane(deal, self.syms, self.h.magic) is None
+                    ):
+                        raise Block("post_close_exit_ownership_unverified")
+                continue  # independent exit of an opposite position, not a repeat entry
             # MT5 can assign a manual or server exit a different magic. Resolve the
             # actual opening position ID. An unknown recent exit remains a safety veto.
             owner = self.owners.book.get(str(getattr(deal, "position_id", None)))
@@ -317,6 +331,53 @@ class Desk:
                 raise Block("entry_deal_history_unavailable")
             if ms >= reading.signal_msc:
                 raise Block("prior_batch_not_flat_at_cross" if reading.intrabar else "same_side_batch_at_signal_close")
+
+    def _closed_fallback(self, r):
+        return (
+            self.h.effective_timing == INTRABAR
+            and self.h.execution_mode == PAIR_MODE
+            and not self.retest
+            and r.paired
+            and not r.intrabar
+            and r.trigger is None
+            and r.cross_bar is not None
+            and self.h.pairs.get(r.tf) == r.trigger_tf
+        )
+
+    def _own_opposite_drain(self, name, r, issues, positions):
+        """Only park against actual, independently reserved, attributable opposing exits.
+
+        A ticket can disappear between its individual read-back and the full
+        snapshot. In that case still WAIT for supervision, never assume flat.
+        This routine does not create, send, retry or clear any exit.
+        """
+        here = {str(p.ticket): p for p in positions}
+        if not issues or not here.keys() <= issues.keys():
+            return False
+        for key, x in issues.items():
+            rec = self.owners.book.get(str(x["identifier"])) or {}
+            parent = rec.get("tf")
+            if (
+                str(rec.get("ticket")) != key
+                or rec.get("symbol") != name
+                or rec.get("magic") != self.h.magic
+                or rec.get("identifier") != x["identifier"]
+                or rec.get("type") != self.typ(-r.side)
+                or parent not in self.h.pairs
+                or rec.get("trigger_tf") != self.h.pairs[parent]
+                or x.get("tf") != parent
+                or x.get("trigger_tf", rec["trigger_tf"]) != rec["trigger_tf"]
+                or x.get("type") != rec["type"]
+                or x.get("open") != rec["open"]
+                or not 0 < rec["opened_msc"] <= r.signal_msc
+                or x.get("status")
+                not in ("await_quote", "verify_partial", "verify_or_review")
+            ):
+                return False
+            p = here.get(key)
+            if p is not None and (not self.owned(p) or not self._matches_exit(p, x)):
+                return False
+        return True
 
     def prepare(
         self, name, d, window, stage, expected=None, remaining=None, *, force_market=False
@@ -340,11 +401,13 @@ class Desk:
             >= d.signal_msc
         ):
             raise Block("prior_batch_not_flat_at_cross")
-        if any(
-            x["symbol"] == name
+        issues = {
+            k: x
+            for k, x in self.exits.items()
+            if x["symbol"] == name
             and (d.trigger_tf is not None or x.get("tf") in (None, d.tf))
-            for x in self.exits.values()
-        ):
+        }
+        if issues and (stage != "first_plan" or not self._closed_fallback(d)):
             raise Block("opposite_exit_not_confirmed_flat")
         mt = self.mt
         p = self.syms[name][1]
@@ -360,9 +423,23 @@ class Desk:
             raise Block("manual_reconciliation_required")
         if self.ladders.needs_review():
             raise Block("ladder_reconciliation_required")
+        if self.origins.unreconciled():
+            raise Block("cross_stop_ack_pending_review")
         ps, os = snapshot(mt)
         e = self.exposure(ps, os)
         here = [(r, self.owners.lane(r)) for r in ps if r.symbol == name]
+        if issues:
+            if self._own_opposite_drain(name, d, issues, [p for p, _ in here]):
+                if (
+                    now > d.signal_s + self.lim.max_entry_age_s
+                    or time.monotonic() > window.end_mono
+                ):
+                    raise Block("entry_window_expired")
+                if now >= d.close_s + d.candle_tf * 60:
+                    raise Block("successor_candle_expired")
+                self._entry_quote(name, window, "opposite_flat_wait")
+                raise AwaitOwnedFlat("waiting_verified_opposite_flat")
+            raise Block("opposite_exit_not_confirmed_flat")
         if any(tf is None for _, tf in here):
             raise Block("unattributed_hull_position_review")
         if d.trigger_tf == 1 and any(
@@ -538,7 +615,11 @@ class Desk:
             rec = self.owners.book.get(str(x.get("identifier")))
             moment = max(int(time.time() * 1000), x.get("last_tick", -1))
             book[name] = max(book.get(name, -1), moment)
-            if rec and rec.get("intrabar_origin"):
+            if (
+                rec
+                and self.h.pairs.get(rec["tf"]) == rec.get("trigger_tf")
+                and rec.get("trigger_tf")
+            ):
                 rec["flat_verified_msc"] = moment
 
     def _service_exit(self, p, x):
@@ -953,7 +1034,9 @@ class Desk:
             # cannot turn an overlapping cross into an after-flat recross.
             for key, rec in self.owners.book.items():
                 if (
-                    rec.get("intrabar_origin")
+                    rec.get("trigger_tf")
+                    and self.h.pairs.get(rec["tf"]) == rec["trigger_tf"]
+                    and (rec.get("intrabar_origin") or rec.get("missing_since") is None)
                     and key not in active_ids
                     and not rec.get("flat_verified_msc")
                 ):
@@ -1223,7 +1306,9 @@ class Desk:
             return "execution_mode_mismatch"
         if not d.entry_side:
             return d.entry_reason
-        if d.intrabar != (self.h.effective_timing == INTRABAR):
+        if d.intrabar != (
+            self.h.effective_timing == INTRABAR
+        ) and not self._closed_fallback(d):
             return "entry_timing_mismatch"
         if d.intrabar:
             if (
@@ -1457,8 +1542,22 @@ class Desk:
                         and quote_spread(q2.bid, q2.ask) < quote_spread(q.bid, q.ask)
                         and again.risk_usd <= plan.risk_usd
                     )
+                    # One same-spread continuation tick is not a different Hull
+                    # episode. Discard the unsent request; reprice and broker-check
+                    # again (including full remaining exposure/margin) on its
+                    # original deadline. Never relax a stop or retry a sent leg.
+                    live_tick = (
+                        d.intrabar
+                        and q2.time_msc > q.time_msc
+                        and d.side * (q2.bid - q.bid) > 0
+                        and quote_spread(q2.bid, q2.ask) == quote_spread(q.bid, q.ask)
+                        and again.sl == plan.sl
+                        and again.raw_chart_sl == plan.raw_chart_sl
+                    )
                     unchanged_stop = again.sl == plan.sl and (
-                        flexible_quote or (
+                        flexible_quote
+                        or live_tick
+                        or (
                             again.risk_usd == plan.risk_usd
                             and again.entry_spread_usd != plan.entry_spread_usd
                         )
@@ -1466,7 +1565,7 @@ class Desk:
                     if (
                         reprices < max_reprices
                         and checked_prices != (q.bid, q.ask)
-                        and (flexible_quote or again.entry == plan.entry)
+                        and (flexible_quote or live_tick or again.entry == plan.entry)
                         and (unchanged_stop or tighter_sell)
                     ):
                         reprices += 1
@@ -1636,7 +1735,14 @@ class Desk:
         except TimingBlock as exc:
             check = exc.check
             wait = (
-                not d.intrabar and exc.stage == "first_plan" and n is None and not sent and check.waitable
+                not d.intrabar
+                and (
+                    exc.stage == "first_plan"
+                    or (exc.stage == "opposite_flat_wait" and self._closed_fallback(d))
+                )
+                and n is None
+                and not sent
+                and check.waitable
             )
             if not wait or window.last_wait_reason != check.reason:
                 self.emit(
@@ -1668,6 +1774,23 @@ class Desk:
                 legs_already_sent=sent,
                 **exc.fields,
             )
+        except AwaitOwnedFlat as exc:
+            # A reservation and its original wall + monotonic deadline already exist.
+            # Do not construct a new window or resume after process restart.
+            why = str(exc)
+            if n is None and not sent and self._closed_fallback(d):
+                if window.last_wait_reason != why:
+                    self.emit(
+                        "pair_wait_opposite_flat",
+                        symbol=name,
+                        tf=d.tf,
+                        trigger_tf=d.trigger_tf,
+                        close_s=d.close_s,
+                        deadline_s=d.signal_s + self.lim.max_entry_age_s,
+                    )
+                window.last_wait_reason = why
+                self.waiting[(name, d.tf)] = window
+                return WAITING
         except Block as exc:
             why = str(exc)
             # No order exists. Only a positive, insufficient placement gap may wait;

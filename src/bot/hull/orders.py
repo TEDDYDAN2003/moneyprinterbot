@@ -280,19 +280,26 @@ def protected_prices(d, p, grid, bid, ask):
     cross_region_raw_stop = None
     cross_region_action = None
     if d.paired:
-        if d.cross_price is None or not math.isfinite(d.cross_price):
-            raise Block("cross_region_unavailable")
-        if not getattr(d, "intrabar", False) and side * (d.close - d.cross_price) <= 0:
-            raise Block("cross_region_close_invalidated")
-        if getattr(d, "intrabar", False) and (
-            d.trigger is None or side * (d.trigger.bid - d.cross_price) <= 0
+        live = getattr(d, "intrabar", False)
+        if (
+            type(d.cross_price) not in (int, float)
+            or not math.isfinite(d.cross_price)
+            or d.cross_price <= 0
         ):
+            raise Block("cross_region_unavailable")
+        if not live and side * (d.close - d.cross_price) <= 0:
+            raise Block("cross_region_close_invalidated")
+        if live and (d.trigger is None or side * (d.trigger.bid - d.cross_price) <= 0):
             raise Block("cross_region_wrong_side_or_too_close")
         cross_region_raw_stop = grid.price(grid.index(d.cross_price, side == -1))
-        if getattr(d, "intrabar", False):
-            # Keep the confirmed swing stop on the order throughout its origin
-            # candle. The Hull intersection becomes a broker stop only after
-            # that candle closes on the valid side.
+        if cross_region_raw_stop <= 0:
+            raise Block("cross_region_unavailable")
+        if side * (bid - d.cross_price) <= 0:
+            raise Block("cross_region_wrong_side_or_too_close")
+        if live and getattr(d, "region", None) not in ("inside", "outside"):
+            raise Block("cross_region_unavailable")
+        if live and d.region == "inside":
+            # Only a level inside the frozen forming candle waits for its close.
             cross_region_action = "awaiting_origin_close"
         else:
             if (

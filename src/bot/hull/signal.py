@@ -65,7 +65,10 @@ class Reading:
 
     cross_bar: Bar | None = None  # immutable trigger OHLC; never a forming candle
     cross_price: float | None = None  # selected Hull A/B line intersection
-    cross_fraction: float | None = None  # interpolation from preceding close to current sample
+    cross_fraction: float | None = None  # fraction along the two crossing segments
+
+    # The exact partial Bid candle at the observation, NEVER a finalized wick.
+    forming_bar: Bar | None = None
 
     intrabar = (
         False  # only a fully attested IntrabarReading can take the tick-entry route
@@ -488,5 +491,6 @@ class Hull:
             cross_bar=c if anchor is not None else None,
             cross_price=cross_price,
             cross_fraction=cross_fraction,
+            forming_bar=c if tick is not None else None,
         )
         return r if self.price_only else self.gate.apply(r, observe=observe_first)

@@ -90,6 +90,65 @@ class IntrabarEvidenceTests(unittest.TestCase):
                 ("cross_region_tightened", "active", "101"),
             )
 
+            # Re-indexing an identical opening receipt cannot erase a verified amendment.
+            with path.open("a") as f:
+                print(json.dumps(e), file=f)
+            import_log(db, path, MAGIC)
+            self.assertEqual(
+                db.execute("SELECT evidence FROM swing_receipts").fetchone(), (updated,)
+            )
+
+    def test_frozen_wick_range_validates_inside_or_immediate_outside_without_guessing(
+        self,
+    ):
+        for sign in (-1, 1):
+            e = entry()
+            cross = 100 - sign * 5
+            e.update(
+                entry_side=sign,
+                parent_structure_bias=sign,
+                trigger_structure_bias=sign,
+                swing_kind="HL" if sign == 1 else "LH",
+                swing_price=100 - sign * 9,
+                frozen_swing_sl=100 - sign * 10,
+                price=102 if sign == 1 else 100,
+                stop_spread_buffer_price=0 if sign == 1 else 2,
+                cross_region_policy="hull_line_intersection_tighten_only_v1",
+                hull_cross_price=cross,
+                cross_region_candle_close=None,
+                cross_region_basis="frozen_trigger_bid_wick_range_v2",
+                cross_signal_low=98,
+                cross_signal_high=102,
+                cross_region_location="outside",
+                cross_region_raw_stop=cross,
+                raw_chart_sl=cross,
+                cross_region_stop_status="active",
+                cross_region_action="cross_region_tightened",
+            )
+            e["request"].update(
+                type=0 if sign == 1 else 1,
+                price=e["price"],
+                sl=cross + e["stop_spread_buffer_price"],
+                tp=120 if sign == 1 else 80,
+            )
+            for bad in (
+                {},
+                {"cross_region_location": "inside"},
+                {"cross_signal_low": 101},
+                {"cross_region_basis": "guessed"},
+                {"cross_region_stop_status": "awaiting_origin_close"},
+            ):
+                with (
+                    self.subTest(sign=sign, bad=bad),
+                    tempfile.TemporaryDirectory() as root,
+                    closing(db_open(":memory:")) as db,
+                ):
+                    ingest(db, Path(root) / "demo.jsonl", e | bad)
+                    self.assertEqual(
+                        len(db.execute("SELECT * FROM swing_receipts").fetchall()),
+                        int(not bad),
+                    )
+
     def test_no_mixed_stop_model_or_future_pivot_and_no_bad_time(self):
         e = entry()
         with tempfile.TemporaryDirectory() as root:

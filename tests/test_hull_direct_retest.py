@@ -238,6 +238,9 @@ def make(tmp, mp, side=1, armed=True, hook=None):
         detected_s=mt.now,
         trigger_structure=Structure(closed_s=T, bias=side),
         cross_bar=b,
+        # This family exercises the retained wick (a farther valid intersection).
+        cross_price=wick - side * 0.30,
+        cross_fraction=0.5,
     )
     return mt, d, raw, logs, desk
 

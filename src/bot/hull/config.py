@@ -33,6 +33,7 @@ PAIR_MODE = "paired_structure"
 PAIR_STOP = "confirmed_pair_trigger_candle_wick_v1"
 LEGACY_PAIR_STOP = PAIR_STOP
 CROSS_REGION_POLICY = "hull_line_intersection_tighten_only_v1"
+REGION_BASIS = "frozen_trigger_bid_wick_range_v2"
 PAIR_POLICY = "closed_pair_structure_cross_v1"
 TF_NAME = {v: k for k, v in (NATIVE_TF | SIGNAL_TF | {"M8": 8}).items()}
 LADDER = "profit_ladder_70_30_v1"
