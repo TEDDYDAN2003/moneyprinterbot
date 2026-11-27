@@ -70,6 +70,7 @@ class PairBook:
         self.pending = set()
         self.wait_notice = {}
         self.live_edges = {}
+        self.last_raw = {}  # coherent native forming candles for a paired market verification
 
     def _refresh(self, d, name, tf, lane, clock):
         now = clock()
@@ -118,18 +119,63 @@ class PairBook:
             )  # parent protection is separate from the scoped child exit
         return n
 
-    def _live(self, d, name, lanes, quote, clock):
+    def _prefix_reads(self, reads, q, nxt):
+        """Prove the OLDER tick before following a newer one. No mixed-bar proof.
+
+        Same native candle, unchanged OHLC prefix extended by this observed Bid.
+        For an already verified duplicate only, MT5 can already expose the next
+        Bid's extreme: reuse the cached old projection, not the newer wick. Any
+        unexplained wick, missing peer, ambiguous stamp or roll is a real gap.
+        """
+        if nxt is None or nxt.ms <= q.ms:
+            return None
+        proven = []
+        for lane, raw in reads:
+            prev = self.last_raw.get(lane.tf)
+            if not prev or not raw or raw.trigger != q or not prev.forming_bar:
+                return None
+            old = prev.forming_bar
+            if q.ms < prev.trigger.ms or (
+                q.ms == prev.trigger.ms and q != prev.trigger
+            ):
+                return None
+            prefix = replace(old, h=max(old.h, q.bid), l=min(old.l, q.bid), c=q.bid)
+            if raw.forming_bar != prefix:
+                if (
+                    q != prev.trigger
+                    or raw.active_source != prev.active_source
+                    or raw.structure != prev.structure
+                    or raw.forming_bar
+                    != replace(
+                        prefix, h=max(prefix.h, nxt.bid), l=min(prefix.l, nxt.bid)
+                    )
+                ):
+                    return None
+                raw = prev
+            proven.append((lane, raw))
+        return proven
+
+    def _live(self, d, name, lanes, quote, clock, *, stable=False):
         """Bracket all projections with the same executable tick. Observe transitions,
         not just the first time a side appeared in a candle. Neither a bad sibling
         nor a disappearing live cross may rewrite the closed market history.
         """
         q = LiveTick.read(quote)
         if not q or not -CLOCK_SKEW_TOLERANCE_S <= clock() - q.ms / 1000 <= d.lim.max_quote_age_s:
-            return {}, 0
+            return {}, 0, None
         reads = [(lane, lane.project(d.mt, name, q)) for lane in lanes]
+        advanced = None
+        if stable:
+            latest = d.mt.symbol_info_tick(name)
+            nxt = LiveTick.read(latest)
+            if q != nxt:
+                reads = self._prefix_reads(reads, q, nxt)
+                if reads is None:
+                    return {}, 0, None
+                advanced = latest
         now = clock()
         if not -CLOCK_SKEW_TOLERANCE_S <= now - q.ms / 1000 <= d.lim.max_quote_age_s:
-            return {}, 0
+            return {}, 0, None
         verified = {}
         actions = []
         for lane, r in reads:
@@ -149,7 +195,9 @@ class PairBook:
             self.live_edges[r.tf] = edge
             lane.last_sample, lane.last_tick_ms, lane.baseline_due = now, q.ms, False
             verified[r.tf] = r
-        return verified, sum(self._protect(d, name, r) for r in actions)
+            if stable:
+                self.last_raw[r.tf] = r
+        return verified, sum(self._protect(d, name, r) for r in actions), advanced
 
     def watch(self, d, name, clock, *, all_triggers=False):
         active = {p for sym, p in d.open_lanes if sym == name and p in self.pairs}
@@ -168,12 +216,33 @@ class PairBook:
         ):
             return False
         child, parent = self.streams[r.trigger_tf], self.streams[r.tf]
-        live, matched = self._live(d, name, (child, parent), quote, clock)
+        if d.retest is None:
+            # A paired market reprice cannot use the older missing-peer waiver.
+            while True:
+                live, matched, advanced = self._live(
+                    d, name, (child, parent), quote, clock, stable=True
+                )
+                if (
+                    parent.tf not in live
+                    or child.tf not in live
+                    or r.cross_price is None
+                    or r.side * (live[child.tf].trigger.bid - r.cross_price) <= 0
+                    or not self._closed_proof(
+                        d, name, r, child, parent, live, matched, clock()
+                    )
+                ):
+                    return False
+                if advanced is None:
+                    return quote
+                if clock() > r.signal_s + d.lim.max_entry_age_s:
+                    return False
+                quote = advanced
+        live, matched, _ = self._live(d, name, (child, parent), quote, clock)
         if not live:
             # A newer tick may have arrived mid-projection; retry once with latest tick.
             fresh_q = d.mt.symbol_info_tick(name)
             if fresh_q is not None and LiveTick.read(fresh_q) != LiveTick.read(quote):
-                live, matched = self._live(d, name, (child, parent), fresh_q, clock)
+                live, matched, _ = self._live(d, name, (child, parent), fresh_q, clock)
         return self._closed_proof(d, name, r, child, parent, live, matched, clock())
 
     def _closed_proof(self, d, name, r, child, parent, live, matched, now):

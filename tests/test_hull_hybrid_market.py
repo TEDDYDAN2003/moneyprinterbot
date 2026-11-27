@@ -504,7 +504,6 @@ def test_exact_origin_close_touch_reserves_exit_even_when_lines_hold(
         "new_source",
         "forged_origin",
         "missing_cross",
-        "more_than_one_tick",
     ],
 )
 def test_reverification_is_not_permission_to_trade_another_episode(
@@ -514,8 +513,6 @@ def test_reverification_is_not_permission_to_trade_another_episode(
     from bot.hull.intrabar_book import IntrabarBook
 
     tape = Tape(tmp_path, monkeypatch, [(100, OFF), (200, ON), (240, ON + 0.025)])
-    if case == "more_than_one_tick":
-        tape.timeline[2] = (240, ON + 0.05)
     if case == "opposite_child":
         tape.timeline[2] = (240, OFF)
     if case == "wrong_frozen_side":

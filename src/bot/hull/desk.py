@@ -108,6 +108,40 @@ class FirstQuoteWindow:
     last_wait_reason: str | None = None
 
 
+class BatchLevel:
+    """For a verified paired market reservation only; never a send retry budget.
+
+    The entry price and a SELL's Ask translation may move. The selected level,
+    contract, size, cash base and original signal/deadline may not. Every changed
+    price needs a strictly later broker millisecond, so even a stalled clock
+    cannot spin indefinitely inside a finite entry window.
+    """
+
+    def __init__(self):
+        self.binding = self.last = None
+
+    def observe(self, q, grid, plan):
+        binding = (
+            grid,
+            plan.side,
+            plan.lots,
+            plan.configured_target_usd,
+            plan.raw_chart_sl,
+            plan.cross_region_raw_stop,
+            plan.cross_region_action,
+            plan.stop_spread_policy,
+        )
+        if self.binding is not None and binding != self.binding:
+            raise Block("batch_level_or_contract_changed")
+        self.binding = binding
+        tick = (q.time_msc, q.bid, q.ask)
+        if self.last and (
+            tick[0] < self.last[0] or (tick[0] == self.last[0] and tick != self.last)
+        ):
+            raise Block("ambiguous_or_reversed_batch_tick")
+        self.last = tick
+
+
 class Desk:
     def __init__(
         self, mt, cfg, h, symbols, identity, state, path, emit, armed, *, sessions=None
@@ -229,6 +263,11 @@ class Desk:
             gate.require(stage, decision=check.checked, quote=check.tick_msc / 1000)
             if not verified:
                 raise Block("live_cross_or_context_unverified" if d.intrabar else "next_bar_quote_or_context_unverified")
+            # A newer tick may have arrived inside a two-chart verification.
+            # Legacy boolean verifiers certify q; the paired book returns the
+            # exact stable tick it certified. Never price a mixed snapshot.
+            if verified is not True:
+                q = verified
             check = self._quote_clock(gate, window, q, stage)
         gate.require(stage, decision=check.checked, quote=check.tick_msc / 1000)
         if stage == "first_plan":
@@ -1402,10 +1441,11 @@ class Desk:
         expected = set()
         n = None
         sent = 0
-        recheck = None  # bounded *unsent* reprice per leg, never a send retry
+        recheck = None  # only an unsent request; never retry order_send
         reprices = 0
         flexible_quote = force_market or (self.h.retest_market_fallback and not d.intrabar)
         max_reprices = 10 if flexible_quote else 1
+        level = BatchLevel() if d.paired and self.retest is None else None
         try:
             while True:
                 left, plan, q, i = self.prepare(
@@ -1421,7 +1461,9 @@ class Desk:
                     None if n is None else n - sent,
                     force_market=force_market,
                 )
-                if recheck is None:
+                if level is not None:
+                    level.observe(q, Grid.from_info(i), plan)
+                elif recheck is None:
                     base_bid, base_ask = q.bid, q.ask
                     base_grid = Grid.from_info(i)
                     tolerance = base_grid.tick * (
@@ -1497,6 +1539,7 @@ class Desk:
                 chk = self.mt.order_check(req)
                 a = self.account()
                 retcode = getattr(chk, "retcode", None)
+                quote_refusal = level is not None and retcode in (10004, 10020)  # REQUOTE / PRICE_CHANGED, order_check ONLY
                 if retcode != 0:
                     self.emit(
                         "broker_precheck_rejected",
@@ -1506,8 +1549,9 @@ class Desk:
                         leg=sent + 1,
                         retcode=retcode,
                     )
-                    raise Block("broker_precheck_rejected")
-                if why := self._margin_check(
+                    if not quote_refusal:
+                        raise Block("broker_precheck_rejected")
+                elif why := self._margin_check(
                     name, d, a, "order_check", 1, getattr(chk, "margin_free", None)
                 ):
                     raise Block(why)
@@ -1521,57 +1565,62 @@ class Desk:
                     n - sent,
                     force_market=force_market,
                 )
-                # Remote one-tick tolerance, anchored to the ORIGINAL quote for this
-                # leg. Both sides must fit, AND the broker-checked plan must still match.
+                # All routes send exactly the checked plan. The paired market route
+                # binds the batch to its level rather than to a one-tick radius.
                 checked_prices = (q2.bid, q2.ask)
-                if (
-                    max(abs(q2.bid - base_bid), abs(q2.ask - base_ask)) > tolerance
-                    or Grid.from_info(i2) != base_grid
-                ):
-                    raise Block("quote_or_plan_changed")
-                if max_reprices == 1 and recheck is not None and checked_prices != recheck:
-                    raise Block("final_quote_or_safety_changed")
-                if again != plan:
-                    # A tighter SELL translation on the same raw wick can lower
-                    # risk. Rebuild only an unsent leg inside its original budget;
-                    # never patch a checked request or alter an installed stop.
-                    tighter_sell = (
-                        plan.side == again.side == -1
-                        and again.raw_chart_sl == plan.raw_chart_sl
-                        and again.sl < plan.sl
-                        and quote_spread(q2.bid, q2.ask) < quote_spread(q.bid, q.ask)
-                        and again.risk_usd <= plan.risk_usd
-                    )
-                    # One same-spread continuation tick is not a different Hull
-                    # episode. Discard the unsent request; reprice and broker-check
-                    # again (including full remaining exposure/margin) on its
-                    # original deadline. Never relax a stop or retry a sent leg.
-                    live_tick = (
-                        d.intrabar
-                        and q2.time_msc > q.time_msc
-                        and d.side * (q2.bid - q.bid) > 0
-                        and quote_spread(q2.bid, q2.ask) == quote_spread(q.bid, q.ask)
-                        and again.sl == plan.sl
-                        and again.raw_chart_sl == plan.raw_chart_sl
-                    )
-                    unchanged_stop = again.sl == plan.sl and (
-                        flexible_quote
-                        or live_tick
-                        or (
-                            again.risk_usd == plan.risk_usd
-                            and again.entry_spread_usd != plan.entry_spread_usd
-                        )
-                    )
-                    if (
-                        reprices < max_reprices
-                        and checked_prices != (q.bid, q.ask)
-                        and (flexible_quote or live_tick or again.entry == plan.entry)
-                        and (unchanged_stop or tighter_sell)
-                    ):
-                        reprices += 1
+                if level is not None:
+                    level.observe(q2, Grid.from_info(i2), again)
+                    if checked_prices != (q.bid, q.ask):
+                        # Only this unsent leg is discarded. Re-run prepare, risk,
+                        # margin and order_check for n - sent, never replenish n.
                         recheck = checked_prices
+                        reprices += 1
                         continue
-                    raise Block("quote_or_plan_changed")
+                    if quote_refusal:
+                        raise Block("broker_precheck_rejected")
+                    if again != plan:
+                        raise Block("quote_or_plan_changed")  # not a tick move
+                else:
+                    if (
+                        max(abs(q2.bid - base_bid), abs(q2.ask - base_ask)) > tolerance
+                        or Grid.from_info(i2) != base_grid
+                    ):
+                        raise Block("quote_or_plan_changed")
+                    if (
+                        max_reprices == 1
+                        and recheck is not None
+                        and checked_prices != recheck
+                    ):
+                        raise Block("final_quote_or_safety_changed")
+                    if again != plan:
+                        # A tighter SELL translation on the same raw wick can lower
+                        # risk. Rebuild only an unsent leg inside its original budget;
+                        # never patch a checked request or alter an installed stop.
+                        tighter_sell = (
+                            plan.side == again.side == -1
+                            and again.raw_chart_sl == plan.raw_chart_sl
+                            and again.sl < plan.sl
+                            and quote_spread(q2.bid, q2.ask)
+                            < quote_spread(q.bid, q.ask)
+                            and again.risk_usd <= plan.risk_usd
+                        )
+                        unchanged_stop = again.sl == plan.sl and (
+                            flexible_quote
+                            or (
+                                again.risk_usd == plan.risk_usd
+                                and again.entry_spread_usd != plan.entry_spread_usd
+                            )
+                        )
+                        if (
+                            reprices < max_reprices
+                            and checked_prices != (q.bid, q.ask)
+                            and (flexible_quote or again.entry == plan.entry)
+                            and (unchanged_stop or tighter_sell)
+                        ):
+                            reprices += 1
+                            recheck = checked_prices
+                            continue
+                        raise Block("quote_or_plan_changed")
                 self.state["manual_hold"] = {
                     "symbol": name,
                     "tf": d.tf,
@@ -1598,10 +1647,16 @@ class Desk:
                 try:
                     q3, _ = self._entry_quote(name, window, "final_send")
                     final_prices = (q3.bid, q3.ask)
-                    if (
-                        self.kill.exists()
-                        or max(abs(q3.bid - base_bid), abs(q3.ask - base_ask))
-                        > tolerance
+                    if self.kill.exists():
+                        raise Block("final_quote_or_safety_changed")
+                    if level is not None:
+                        grid = Grid.from_info(self.mt.symbol_info(name))
+                        level.observe(q3, grid, plan)
+                        cap = self.syms[name][1].max_spread
+                        if cap is not None and q3.ask - q3.bid > cap + grid.tick * 1e-7:
+                            raise Block("spread_cap")
+                    elif (
+                        max(abs(q3.bid - base_bid), abs(q3.ask - base_ask)) > tolerance
                         or not plan.covers_spread(q3.bid, q3.ask)
                         or (reprices >= max_reprices and final_prices != checked_prices)
                     ):
@@ -1680,6 +1735,7 @@ class Desk:
                         if d.paired
                         else {}
                     ),
+                    unsent_reprices=reprices,
                     send_check_utc=utc(checked),
                     entry_session=self.session_gate(name).report(checked),
                     send_tick_time_msc=int(q3.time_msc),

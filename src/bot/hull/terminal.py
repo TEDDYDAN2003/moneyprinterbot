@@ -28,9 +28,9 @@ from .config import (
     M1_MODE,
     NATIVE_TF,
     PAIR_MODE,
+    REGION_BASIS,
     RETEST,
     RETIRED_LIMITS,
-    REGION_BASIS,
     STOP_SPREAD_POLICY,
     TARGET_POLICY,
     TF_NAME,
@@ -462,6 +462,13 @@ def run(
             else BATCH_ENTRY_POLICY,
             "entry_timing": h.effective_timing,
             "entry_quote_policy": INTRA_QUOTE if live_pair else QUOTE_POLICY,
+            **(
+                {
+                    "unsent_leg_policy": "recheck_original_pair_level_until_original_deadline"
+                }
+                if paired and not limits_mode
+                else {}
+            ),
             "new_ticket_stop_policy": INTRA_STOP
             if live_pair
             else EXECUTION_INFO[h.execution_mode][1],
@@ -868,7 +875,7 @@ def run(
                             invalidated = True
                 if r.trigger_tf is not None:
                     ok = trigger_books[name].verify(d, name, r, quote, time.time)
-                    return ok and not invalidated
+                    return False if invalidated else ok
                 if invalidated:
                     return False
 

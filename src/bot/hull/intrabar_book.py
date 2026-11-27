@@ -23,25 +23,30 @@ class IntrabarBook(PairBook):
 
     def _gap(self, lane):
         lane.baseline_due = True
+        self.last_raw.pop(lane.tf, None)
         self.episodes.pop(lane.tf, None)
         self.origin_edges.pop(lane.tf, None)
 
-    def _sample(self, d, name, lanes, quote, clock):
+    def _sample(self, d, name, lanes, quote, clock, *, bridge=False):
         q = LiveTick.read(quote)
+        reads = None
+        advanced = None
         if (
             q
             and self._bid_chart(d, name)
             and 0 <= clock() - q.ms / 1000 <= d.lim.max_quote_age_s
         ):
             reads = [(lane, lane.project(d.mt, name, q)) for lane in lanes]
-            stable = LiveTick.read(d.mt.symbol_info_tick(name)) == q
-            now = clock()
-        else:
-            stable = False
-        if not stable or not 0 <= now - q.ms / 1000 <= d.lim.max_quote_age_s:
+            latest = d.mt.symbol_info_tick(name)
+            nxt = LiveTick.read(latest)
+            if nxt != q:
+                reads = self._prefix_reads(reads, q, nxt) if bridge else None
+                advanced = latest
+        now = clock()
+        if reads is None or not 0 <= now - q.ms / 1000 <= d.lim.max_quote_age_s:
             for lane in lanes:
                 self._gap(lane)
-            return {}, [], 0
+            return {}, [], 0, None
         verified, edges, protective = {}, [], []
         matched = 0
         for lane, raw in reads:
@@ -93,12 +98,12 @@ class IntrabarBook(PairBook):
                 matched += d.origins.baseline_opposite(name, self.by_child.get(tf), raw)
             self.samples[tf] = (q, *key)
             lane.last_sample, lane.last_tick_ms, lane.baseline_due = now, q.ms, False
-            verified[tf] = raw
+            verified[tf] = self.last_raw[tf] = raw
         for tf, r in verified.items():
             if tf in self.by_child:
                 matched += d.origins.observe(name, self.by_child[tf], r)
         matched += sum(self._protect(d, name, r) for r in protective)
-        return verified, edges, matched
+        return verified, edges, matched, advanced
 
     def watch(self, d, name, clock, *, all_triggers=False):
         # Protection while another symbol is being serviced. Never enter recursively.
@@ -117,7 +122,21 @@ class IntrabarBook(PairBook):
             return False
         child = self.streams[r.candle_tf]
         parent = self.streams[r.tf]
-        live, edges, matched = self._sample(d, name, (child, parent), quote, clock)
+        while True:
+            live, edges, matched, advanced = self._sample(
+                d, name, (child, parent), quote, clock, bridge=True
+            )
+            if not self._holds(
+                d, name, r, child, parent, live, edges, matched, clock()
+            ):
+                return False
+            if advanced is None:
+                return quote  # exact stable quote verified; price THIS one
+            if clock() > r.signal_s + d.lim.max_entry_age_s:
+                return False
+            quote = advanced  # strictly increasing broker ms; never refresh the signal clock
+
+    def _holds(self, d, name, r, child, parent, live, edges, matched, now):
         if not r.intrabar:
             # A fallback must prove the actual CLOSED candle *and* an intact
             # fresh successor quote on both streams. No legacy missing-peer waiver.
@@ -131,11 +150,10 @@ class IntrabarBook(PairBook):
                 and self.gates[r.tf].apply(r, observe=False).entry_side == r.side
                 and self._parent_fence(d, name, r) < r.signal_msc
                 and self._closed_proof(
-                    d, name, r, child, parent, live, matched, clock()
+                    d, name, r, child, parent, live, matched, now
                 )
             )
         cr = live.get(child.tf)
-        now = clock()
         if (
             cr is None
             or parent.tf not in live
@@ -296,7 +314,7 @@ class IntrabarBook(PairBook):
             p for sym, p in d.open_lanes if sym == name and p in self.pairs
         }
         lanes = [self.streams[f] for f in sorted(tfs) if self.healthy.get(f)]
-        live, edges, interrupted = self._sample(
+        live, edges, interrupted, _ = self._sample(
             d, name, lanes, d.mt.symbol_info_tick(name), clock
         )
         if not edges:
