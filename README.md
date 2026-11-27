@@ -2,17 +2,19 @@
 
 This is the **Dynamic Hull scanner, its trade journal, and its read-only chart tools**. The checked-in [config](config.yaml) observes; it does not send orders. Broker access requires your Windows MT5 desktop on a dedicated **USD hedging demo** account. No live-money mode, cloud database, webhook or trained model is needed.
 
-[Previously packaged desk (verify its policy before use)](downloads/Dynamic-Hull-Desk.zip) · [Operating guide](docs/HULL_DEMO.md) · [Journal setup](HullJournal/START-HERE.md) · [Profile picker](docs/Hull-demo-start.html)
+[Download the current desk](downloads/Dynamic-Hull-Desk.zip) · [Operating guide](docs/HULL_DEMO.md) · [Journal setup](HullJournal/START-HERE.md) · [Profile picker](docs/Hull-demo-start.html)
 
 ## How a trade works now
 
-See the [intrabar market guide](docs/HULL_INTRABAR.md) for the current source policy. Validate the actual effective timing and pairs in preflight. Private YAML and older packaged downloads may still select the closed route.
+See the [intrabar market guide](docs/HULL_INTRABAR.md) for the current source policy. Validate the actual effective timing and pairs in preflight. The table is the shipped default; no private mapping override is needed. Private YAML and older installations may still select closed timing.
 
 | Parent (owns the batch) | Entry chart (owns the crossover and initial stop) |
 |---|---|
-| M5 | M3 |
-| M10 | M5 |
-| M15 | M10 |
+| M5 | M4 |
+| M10 | M8 (two consecutive broker M4 bars) |
+| M15 | M12 |
+
+**Verify an exact release in an existing checkout:** [Windows read-only preflight](docs/HULL_RELEASE_CHECK.md).
 
 A fresh forming BUY cross needs bullish closed structure on the trigger and its own parent; SELL is the mirror. Freeze the intersection of the selected Hull lines, not the fill. If it is outside the trigger candle’s Bid high–low range, apply it immediately when tighter than the confirmed child HL/LH stop. If inside, keep the swing SL and TP. At that candle’s actual close, tighten on the favorable side (BUY above, SELL below); request exit on a touch, wrong-side close or original-source uncross. Never loosen a stop.
 

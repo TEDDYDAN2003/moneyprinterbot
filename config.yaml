@@ -20,7 +20,8 @@ sessions:                           # additional entry-only blackouts for config
 # ACTIVE demo entry path. Indicator source = the user's Hull BUY/SELL labels.
 hull:
   execution_mode: paired_structure  # both the parent and its own trigger must agree
-  eligible_timeframes: [M5, M10, M15]  # native parent -> trigger: 5->3, 10->5, 15->10
+  eligible_timeframes: [M5, M10, M15]  # owners, not entry charts
+  pairs: {5: 4, 10: 8, 15: 12}  # parent -> trigger: M4/M8/M12 supply the crosses
   entry_timing: by_route  # paired market: intrabar_cross; direct retest and legacy modes: confirmed_cross_next_bar
   entry_route: market_next_quote  # alternative: direct_retest_limit; preflight & observe the chosen route
   retest_fraction: 0.20  # fraction of the body or near wick, measured from the trigger close

@@ -25,8 +25,10 @@ NATIVE_TF = {
 }
 # M45 is a study interval, NEVER an MT5 native timeframe constant.
 SIGNAL_TF = {"M5": 5, "M15": 15, "M30": 30, "M45": 45}
-# Parent -> native trigger. These are exact pairs, not independent execution lanes.
-PAIRS = {5: 3, 10: 5, 15: 10}
+# Shipped owner -> trigger. M8 is built from two M4 bars on the broker D1 clock.
+PAIRS = {5: 4, 10: 8, 15: 12}
+# Recognition/explicit compatibility only: never mix the old triggers into the defaults.
+SUPPORTED_PAIRS = frozenset({*PAIRS.items(), (5, 3), (10, 5), (15, 10)})
 PAIR_FRAMES = {f"M{p}": p for p in PAIRS}
 RETEST = "direct_retest_limit"
 PAIR_MODE = "paired_structure"
@@ -229,22 +231,17 @@ class HullConfig(Strict):
         st = NATIVE_TF.get(self.indicator.structure_timeframe)
         if self.eligible_timeframes:
             self.lanes()  # reject an incompatible allowlist even before terminal initialization
-        if self.effective_timing == INTRABAR:
-            if (
-                self.execution_mode != PAIR_MODE
-                or self.entry_route != "market_next_quote"
-            ):
-                raise ValueError(
-                    "intrabar_cross requires paired_structure and market_next_quote; retest limits require confirmed timing"
-                )
-            supported = {5: {3, 4}, 10: {5, 8}, 15: {10, 12}}
-            if any(
-                p not in supported or c not in supported[p]
-                for p, c in self.pairs.items()
-            ) or any(
-                PAIR_FRAMES[f] not in self.pairs for f in self.eligible_timeframes
-            ):
-                raise ValueError("Unsupported or missing intrabar parent/trigger mapping")
+        if self.effective_timing == INTRABAR and (
+            self.execution_mode != PAIR_MODE or self.entry_route != "market_next_quote"
+        ):
+            raise ValueError(
+                "intrabar_cross requires paired_structure and market_next_quote; retest limits require confirmed timing"
+            )
+        if self.execution_mode == PAIR_MODE and (
+            not self.pairs.items() <= SUPPORTED_PAIRS
+            or any(PAIR_FRAMES[f] not in self.pairs for f in self.eligible_timeframes)
+        ):
+            raise ValueError("Unsupported or missing paired parent/trigger mapping")
         if self.entry_route == RETEST and self.execution_mode != PAIR_MODE:
             raise ValueError("direct_retest_limit requires paired_structure")
         if self.execution_mode == PAIR_MODE and st:

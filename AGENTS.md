@@ -2,7 +2,7 @@
 
 **Entry route:** market orders remain the default. For paired candle-relative BUY/SELL limits, use the [direct retest guide](docs/HULL_RETEST.md). Changes and tests do not authorize arming.
 
-**Active Python desk:** [intrabar market entries, confirmed-close fallback, tighten-only cross stops and private-YAML timing](docs/HULL_INTRABAR.md). M5 → M3, M10 → M5, M15 → M10. No M1 trigger; M30/M45 are historical/study frames, not active parents. [Previous M1 release](docs/HULL_M1.md).
+**Active Python desk:** [intrabar market entries, confirmed-close fallback, tighten-only cross stops and private-YAML timing](docs/HULL_INTRABAR.md). M5 → M4, M10 → M8, M15 → M12. No M1 trigger; M30/M45 are historical/study frames, not active parents. [Previous M1 release](docs/HULL_M1.md).
 
 **Wickless is a separate bot:** for `WICKLESS OBSERVE`, use the pasted Wickless JSON and the [Wickless operator guide](docs/WICKLESS.md), not Hull profiles, tickets or commands. Ordinary setup, implementation and test requests never send orders.
 
@@ -132,10 +132,10 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" 
 
 ## When does the signal appear?
 
-On an eligible lane, a fresh raw cross can appear on a forming candle. Structure changes only on a confirmed structure close. That forming cross is **exit-only**. The child Hull cross must still be present at its close, and its own structure and its parent’s must both agree. Only then may the next candle’s first fresh quote open a protected batch, with SL beyond that finished wick; a raw opposite cross exits the owned opposing side regardless of entry eligibility. A confirmed MSS alone closes its own symbol/timeframe batch, never another timeframe and never an automatic entry. [Exact rules](docs/HULL_PAIRS.md).
+By default the fresh Hull cross can enter on a **forming M4, M8 or M12 candle** when the last closed structures of the trigger and its own parent agree. The original candle’s later close can tighten protection or request an exit; the opening order already carries SL/TP. Separately confirmed fresh closes are a fallback, not a second batch. Explicit closed timing and direct retest wait for confirmation. A confirmed parent MSS remains an exit for its own lane. [Timing and stops](docs/HULL_INTRABAR.md).
 
 ## Desktop agent rules
 
 A question about this guide is not authorization to trade. A normal start request means **observer only**. Follow the [standing startup rules](README.md#standing-instructions-for-the-desktop-agent). An agent must receive separate, explicit **`ARM DEMO`** for the verified profiles before using step A4. No live-money mode.
 
-A pull does not update a running process. Match its `started.summary.checkout_head_at_start` to `git rev-parse HEAD`; verify the source, `closed_pair_structure_cross_v1`, intended Hull settings (Dynamic, `indicator.hull_len: 16`), quote policy and per-ticket ladder preview. Never change lots, limits or stops to force a trade, or delete safety state. Logs: `reports/hull_runtime/<account-hash>/shadow.jsonl` (observer) and `demo.jsonl` (armed). [Exposure, funding and retired limits](docs/HULL_DEMO.md).
+A pull does not update a running process. Match its `started.summary.checkout_head_at_start` to `git rev-parse HEAD`; verify the source, the effective policy (`intrabar_pair_structure_cross_v1` for the default market route), intended Hull settings (Dynamic, `indicator.hull_len: 16`), quote policy and per-ticket ladder preview. Never change lots, limits or stops to force a trade, or delete safety state. Logs: `reports/hull_runtime/<account-hash>/shadow.jsonl` (observer) and `demo.jsonl` (armed). [Exposure, funding and retired limits](docs/HULL_DEMO.md).

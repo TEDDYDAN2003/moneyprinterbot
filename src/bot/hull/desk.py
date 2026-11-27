@@ -1343,6 +1343,8 @@ class Desk:
             return "timeframe_not_eligible"
         if self.h.execution_mode != d.execution_mode:
             return "execution_mode_mismatch"
+        if d.paired and self.h.pairs.get(d.tf) != d.trigger_tf:
+            return "pair_mapping_mismatch"  # a recognizable older tag is not an enabled trigger
         if not d.entry_side:
             return d.entry_reason
         if d.intrabar != (
@@ -1352,7 +1354,6 @@ class Desk:
         if d.intrabar:
             if (
                 self.verify_signal is None
-                or self.h.pairs.get(d.tf) != d.candle_tf
                 or d.detected_s is None
                 or self.retest
                 or d.cross_bar is not None

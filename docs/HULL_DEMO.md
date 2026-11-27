@@ -2,9 +2,9 @@
 
 **Entry route:** market orders remain the default. For paired candle-relative BUY/SELL limits, use the [direct retest guide](HULL_RETEST.md). Changes and tests do not authorize arming.
 
-**Active Python desk:** [intrabar market entries, trigger swing stops and private-YAML timing](HULL_INTRABAR.md). M5 → M3, M10 → M5, M15 → M10. No M1 trigger; M30/M45 are historical/study frames, not active parents. [Previous M1 release](HULL_M1.md).
+**Active Python desk:** [intrabar market entries, trigger swing stops and private-YAML timing](HULL_INTRABAR.md). M5 → M4, M10 → M8, M15 → M12. No M1 trigger; M30/M45 are historical/study frames, not active parents. [Previous M1 release](HULL_M1.md).
 
-`trade`, `demo` and `trade-all` run the Python companion for Windows MT5 Desktop, not an Expert Advisor. No webhook or database is required. The template selects M5/M10/M15 as parents; M3/M5/M10 supply their respective triggers. The descriptions of historical parent-close trades are not an extra source of entries. Install only when flat, with no unresolved exposure or running manager to interrupt.
+`trade`, `demo` and `trade-all` run the Python companion for Windows MT5 Desktop, not an Expert Advisor. No webhook or database is required. The template selects M5/M10/M15 as parents; M4/M8/M12 supply their respective triggers. The descriptions of historical parent-close trades are not an extra source of entries. Install only when flat, with no unresolved exposure or running manager to interrupt.
 
 ## What triggers an entry?
 

@@ -42,16 +42,18 @@ def prefix(tf, side=1, scale=1):
 
 
 class Tape:
-    def __init__(self, root, mp, timeline, *, side=1, parents=(5,), child=3):
+    def __init__(
+        self, root, mp, timeline, *, side=1, parents=(5,), child=3, broker=None
+    ):
         self.root, self.mp, self.side = root, mp, side
         self.cfg = load_yaml(ROOT / "config.yaml")
         self.cfg["run"]["mode"] = "demo"
-        self.cfg["hull"].update(
-            eligible_timeframes=[f"M{p}" for p in parents],
-            pairs={5: child, 10: 5, 15: 10},
-        )
-        self.mt = MT()
-        self.mt.TIMEFRAME_M4 = 4
+        self.cfg["hull"]["eligible_timeframes"] = [f"M{p}" for p in parents]
+        # Older, precisely timed replay tapes explicitly exercise their original map.
+        # child=None exercises the shipped map with no mapping override.
+        if child is not None:
+            self.cfg["hull"]["pairs"] = {5: child, 10: 5, 15: 10}
+        self.mt = MT() if broker is None else broker
         self.mt.i.trade_tick_size = 0.025
         self.timeline = list(timeline)
         self.i = 0
@@ -66,6 +68,29 @@ class Tape:
             f: prefix(f, side, 1 if f in children else 1.5)
             for f in children | set(parents)
         }
+        if 8 in children:
+            # Expose only real MT5 timeframes, never a pre-computed M8 API.
+            # One M4 series supplies both the M4 lane and the M8 builder.
+            self.paths[4] = [
+                half
+                for b in self.paths.pop(8)
+                for half in (
+                    Bar(b.t, b.o, b.o, b.o, b.o),
+                    replace(b, t=b.t + 240),
+                )
+            ]
+
+            def days(name, tf, lo, hi):
+                assert tf == self.mt.TIMEFRAME_D1
+                # 23:00 UTC synthetic broker rollover; intentionally NOT UTC midnight.
+                anchor = T - 16 * 3600
+                return [
+                    {"time": s}
+                    for s in range(anchor - 3 * 86400, anchor + 86400, 86400)
+                    if lo.timestamp() <= s <= hi.timestamp()
+                ]
+
+            self.mt.copy_rates_range = days
         self.mt.copy_rates_from_pos = self.rates
         self.mt.symbol_info_tick = self.tick
         self.mt.initialize = lambda: True
@@ -115,7 +140,7 @@ class Tape:
             )
             if now < start + tf * 60000:
                 if not pos:
-                    rows = [bar]
+                    rows.append(bar)
                 break
             rows.append(bar)
             start += tf * 60000

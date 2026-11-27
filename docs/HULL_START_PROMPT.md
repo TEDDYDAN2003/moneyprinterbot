@@ -2,7 +2,7 @@
 
 **Entry route:** market orders remain the default. For paired candle-relative BUY/SELL limits, use the [direct retest guide](HULL_RETEST.md). Changes and tests do not authorize arming.
 
-**Approved parent → entry pairs: M5 → M3, M10 → M5, M15 → M10.** Verify `paired_structure` and the parent list in the private config; [paired migration](HULL_PAIRS.md). A confirmed MSS exits only its own lane. These settings alone do not start or arm anything.
+**Approved parent → entry pairs: M5 → M4, M10 → M8, M15 → M12.** Verify `paired_structure` and the parent list in the private config; [paired migration](HULL_PAIRS.md). A confirmed MSS exits only its own lane. These settings alone do not start or arm anything.
 
 With the updated repository open in your agent's workspace, **send just this** for your three slow profiles:
 

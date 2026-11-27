@@ -430,7 +430,7 @@ def test_pending_send_quote_and_actual_journal_match(
                     float(t["initial_sl"]) == initial
                     and float(t["frozen_cross_sl"]) == r.raw_sl
                 )
-                assert len(data["setups"]) == 1 and t["trigger_timeframe"] == "M3"
+                assert len(data["setups"]) == 1 and t["trigger_timeframe"] == "M4"
             else:
                 assert not t["frozen_cross_sl"] and not data["setups"]
 

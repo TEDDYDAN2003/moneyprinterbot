@@ -211,8 +211,8 @@ def make(tmp, mp, side=1, armed=True, hook=None):
         return d
 
     d = desk({})
-    child = 3
-    b = Bar(T - 180, 2000 - side * 1.2, 2002, 1998, 2000)
+    child = h.pairs[5]
+    b = Bar(T - child * 60, 2000 - side * 1.2, 2002, 1998, 2000)
     wick = b.l if side == 1 else b.h
     raw = Reading(
         T,
@@ -283,7 +283,7 @@ def test_ten_ack_before_any_fill_then_ten_owned_legs(tmp_path, monkeypatch, side
         and mt.orders[0].price_open == 2000 - side * 0.12
     )
     assert all(
-        o.time_expiration == T + 180
+        o.time_expiration == T + 240
         and o.sl == pytest.approx(r.raw_sl + (0.06 if side == -1 else 0.0))
         for o in mt.orders
     )
@@ -295,7 +295,7 @@ def test_ten_ack_before_any_fill_then_ten_owned_legs(tmp_path, monkeypatch, side
     d.supervise()
     assert not d.retest.active and len(d.ladders.book) == len(mt.positions) == 10
     assert all(
-        d.owners.lane(p) == 5 and d.owners.origin(p)["trigger_tf"] == 3
+        d.owners.lane(p) == 5 and d.owners.origin(p)["trigger_tf"] == 4
         for p in mt.positions
     )
     assert all(
@@ -309,7 +309,7 @@ def test_ten_ack_before_any_fill_then_ten_owned_legs(tmp_path, monkeypatch, side
 def test_expiry_without_chase_or_new_ticket(tmp_path, monkeypatch):
     mt, d, r, *_ = make(tmp_path, monkeypatch)
     d.batch(NAME, r)
-    mt.now = T + 180
+    mt.now = T + 240
     mt.tick()
     d.supervise()
     d.supervise()
@@ -377,7 +377,7 @@ def test_deadline_shared_and_no_timeout_replay(tmp_path, monkeypatch):
     assert n == 8
     d.supervise()
     assert len(mt.orders) == n
-    mt.now = T + 181
+    mt.now = T + 241
     mt.tick()
     d.supervise()
     d.supervise()
@@ -402,9 +402,9 @@ def test_read_only_ask_touch_not_bid_and_never_journal_fill(tmp_path, monkeypatc
 def test_own_child_cancellation_and_fill_cancel_race(tmp_path, monkeypatch):
     mt, d, r, logs, _ = make(tmp_path, monkeypatch)
     d.batch(NAME, r)
-    d.retest.interrupt(NAME, 10, T * 1000 + 200, -1, 5)
+    d.retest.interrupt(NAME, 10, T * 1000 + 200, -1, 8)
     assert not d.retest.active[NAME].get("cancel")
-    d.retest.interrupt(NAME, 5, T * 1000 + 200, -1, 3)
+    d.retest.interrupt(NAME, 5, T * 1000 + 200, -1, 4)
     mt.now += 1
     mt.tick(1999.8)
     mt.fill(mt.orders[0])
@@ -608,7 +608,7 @@ def test_real_book_receipt_to_standalone_journal(tmp_path, monkeypatch, case):
             assert (
                 t["entry_timing"] == "confirmed_pair_retest_limit"
                 and t["setup_type"] == RETEST
-                and t["trigger_timeframe"] == "M3"
+                and t["trigger_timeframe"] == "M4"
                 and t["frozen_cross_sl"]
             )
 

@@ -1,6 +1,6 @@
 # Dynamic Hull · paired market entries on ticks and fresh closes
 
-The shipped `config.yaml` is **paper**. Its `entry_timing: by_route` selects **`intrabar_cross`** for paired market orders. The default parent → trigger pairs are **M5 → M3, M10 → M5, M15 → M10**. An example using M5 → M4 does not change that mapping. The chart indicators, Wickless, lot sizes, rate, sessions and risk limits are unchanged.
+The shipped `config.yaml` is **paper**. Its `entry_timing: by_route` selects **`intrabar_cross`** for paired market orders. The default parent → trigger pairs are **M5 → M4, M10 → M8, M15 → M12**. M4 and M12 are native MT5 periods. M8 is assembled from two consecutive M4 bars anchored to the broker’s D1 open; a missing bar or day anchor is not replaced with M5. Both code and template use this mapping without an override. The chart indicators, Wickless, lot sizes, rate, sessions and risk limits are unchanged.
 
 ## A trade, in order
 

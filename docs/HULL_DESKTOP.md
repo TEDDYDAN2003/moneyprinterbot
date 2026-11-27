@@ -2,7 +2,7 @@
 
 **Entry route:** market orders remain the default. For paired candle-relative BUY/SELL limits, use the [direct retest guide](HULL_RETEST.md). Changes and tests do not authorize arming.
 
-**Active Python desk:** [intrabar market entries, trigger swing stops and private-YAML timing](HULL_INTRABAR.md). M5 → M3, M10 → M5, M15 → M10. No M1 trigger; M30/M45 are historical/study frames, not active parents. [Previous M1 release](HULL_M1.md).
+**Active Python desk:** [intrabar market entries, trigger swing stops and private-YAML timing](HULL_INTRABAR.md). M5 → M4, M10 → M8, M15 → M12. No M1 trigger; M30/M45 are historical/study frames, not active parents. [Previous M1 release](HULL_M1.md).
 
 **On every start, restart, profile change or arming request, first open/read `docs/Hull-demo-start.html` in this checkout and follow the [root README](../README.md).** If you cannot render the page, read its source; if it or the Hull CLI is missing, stop and get the updated checkout. Use the operator’s pasted selection, **not** whichever boxes are checked by default on a freshly opened page. The page formats text only; it cannot connect to MT5 or start a process.
 

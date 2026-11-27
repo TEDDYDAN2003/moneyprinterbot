@@ -33,6 +33,7 @@ from bot.hull.structure import Structure
 from bot.hull.terminal import run
 
 NAME = "XAUUSDm"
+FOUR_CLOCK_PAIRS = {5: 3, 10: 5, 15: 10}  # dual-role legacy research tapes
 SCALE = {
     3: 0.5,
     5: 1,
@@ -58,7 +59,7 @@ def tape(
     route=None,
     on_phase=None,
 ):
-    symbols = sorted(set(parents) | {PAIRS[p] for p in parents})
+    symbols = sorted(set(parents) | {FOUR_CLOCK_PAIRS[p] for p in parents})
     signs = signs or {}
     times = [stamp - 0.25, stamp + 0.125, stamp + 0.375, stamp + 0.625]
     if case == "late":
@@ -154,7 +155,7 @@ def tape(
     mp.setitem(sys.modules, "MetaTrader5", mt)
     scanner_clock(mp, now, pause)
     cfg = load_yaml(ROOT / "config.yaml")
-    cfg["hull"]["entry_timing"] = "confirmed_cross_next_bar"  # exercise the retained closed route
+    cfg["hull"].update(pairs=FOUR_CLOCK_PAIRS, entry_timing="confirmed_cross_next_bar")
     cfg["run"]["mode"] = "demo"
     if route:
         cfg["hull"]["entry_route"] = route
@@ -189,7 +190,7 @@ def test_exact_pair_only_noncoincident_native_clocks_frozen_wick_and_quote(
     tmp_path, monkeypatch, parent, minute, side
 ):
     stamp = T + minute * 60
-    child = PAIRS[parent]
+    child = FOUR_CLOCK_PAIRS[parent]
     mt, rows, paths, calls = tape(
         tmp_path,
         monkeypatch,
@@ -384,7 +385,9 @@ def test_neutral_or_unavailable_pair_is_ineligible_not_a_global_vote(
     mt, rows, _, _ = tape(tmp_path, monkeypatch, missing=missing, neutral=neutral)
     (d,) = events(rows, "pair_arbitration")
     assert d["owner_tf"] == owner and len(mt.positions) == 4
-    assert all(r["trigger_tf"] == PAIRS[owner] for r in events(rows, "demo_result"))
+    assert all(
+        r["trigger_tf"] == FOUR_CLOCK_PAIRS[owner] for r in events(rows, "demo_result")
+    )
 
 
 def test_observer_and_preflight_name_both_roles_no_orders(tmp_path, monkeypatch):
@@ -411,15 +414,15 @@ def test_observer_and_preflight_name_both_roles_no_orders(tmp_path, monkeypatch)
 
 
 def test_parent_and_child_closes_strict_gate_and_failed_return():
-    h = Hull(3, P, 0.01, tick_size=0.025)
-    raw = [h.update(b) for b in bars(1, 3)][-1]
+    h = Hull(4, P, 0.01, tick_size=0.025)
+    raw = [h.update(b) for b in bars(1, 4)][-1]
     sign = raw.label
     assert sign == 1
     for parent_end in (T + 1, T - 300):
         with pytest.raises(ValueError):
             pair_reading(raw, 5, Structure(parent_end, 1), T + 0.1)
     for invalid in (
-        replace(raw, structure=Structure(T - 180, sign)),
+        replace(raw, structure=Structure(T - 240, sign)),
         replace(raw, trigger=LiveTick(T * 1000, 2000, 2000.1)),
     ):
         with pytest.raises(ValueError):
@@ -453,9 +456,9 @@ def test_parent_and_child_closes_strict_gate_and_failed_return():
         # An ordinary qualifying cross ON the shift is already the skip. Here
         # check a separate epoch in which the first qualifying cross comes later.
         gate = FirstCrossGate()
-        first = gate.apply(read(T + 180, T, failed), observe=True)
+        first = gate.apply(read(T + 240, T, failed), observe=True)
         assert bool(first.entry_side) == failed and first.waived_first_cross == failed
-        second = gate.apply(read(T + 360, T, failed), observe=True)
+        second = gate.apply(read(T + 480, T, failed), observe=True)
         assert second.entry_side == sign and not second.waived_first_cross
         assert select([wrong, second]) == (second, "selected")
 
@@ -526,7 +529,7 @@ def test_one_coherent_bid_market_and_production_structure_depth(tmp_path, monkey
         monkeypatch, lambda: clock[0], lambda _: clock.__setitem__(0, stamp + 0.125)
     )
     cfg = load_yaml(ROOT / "config.yaml")
-    cfg["hull"]["entry_timing"] = "confirmed_cross_next_bar"  # exercise the retained closed route
+    cfg["hull"].update(pairs=FOUR_CLOCK_PAIRS, entry_timing="confirmed_cross_next_bar")
     cfg["run"]["mode"] = "demo"
     h = HullConfig.model_validate(cfg["hull"])
     assert h.indicator.swing_len == 3
@@ -587,21 +590,21 @@ def test_unavailable_inventory_exit_recovers_only_same_fingerprint_pair_side_and
             )
         return p
 
-    pos(1, 15, 10)
-    pos(2, 5, 3)
-    pos(3, 10, 5)
+    pos(1, 15, 12)
+    pos(2, 5, 4)
+    pos(3, 10, 8)
     pos(4, 15, 1)
     pos(5, 15, None)
     pos(6, None, None)
-    pos(7, 15, 10, -1)
-    pos(8, 15, 10, ms=stamp + 1)
-    pos(9, 15, 10, sym="OTHER")
-    pos(10, 15, 10, magic=8)
-    changed = pos(11, 15, 10)
+    pos(7, 15, 12, -1)
+    pos(8, 15, 12, ms=stamp + 1)
+    pos(9, 15, 12, sym="OTHER")
+    pos(10, 15, 12, magic=8)
+    changed = pos(11, 15, 12)
     changed.price_open = 2000.001
     mt.q.time_msc = stamp + 10
-    h = Hull(10, P, 0.01, tick_size=0.025)
-    for b in bars(1, 10):
+    h = Hull(12, P, 0.01, tick_size=0.025)
+    for b in bars(1, 12):
         h.update(b)
     r = h.preview(Bar(T, 2000, 2000, 1997, 1997), LiveTick(stamp, 1997, 1997.05))
     assert r.label == -1
@@ -628,7 +631,7 @@ def test_restart_requires_compatible_manager_and_never_replays(
     mt, _, _, _ = tape(tmp_path, monkeypatch)
     assert len(mt.requests) == 4
     cfg = load_yaml(ROOT / "config.yaml")
-    cfg["hull"]["entry_timing"] = "confirmed_cross_next_bar"  # exercise the retained closed route
+    cfg["hull"].update(pairs=FOUR_CLOCK_PAIRS, entry_timing="confirmed_cross_next_bar")
     cfg["run"]["mode"] = "demo"
     cfg["hull"]["indicator"]["swing_len"] = 1
     if change in ("legacy", "m1"):
@@ -885,7 +888,7 @@ def test_occupied_symbol_never_stacks_other_owner_and_does_not_fall_back(hull_de
         time_msc=(T - 2) * 1000,
     )
     mt.positions.append(p)
-    assert d.owners.bind(p, 15, pair_child=10)
+    assert d.owners.bind(p, 15, pair_child=12)
 
     def reading(tf):
         h = Hull(PAIRS[tf], P, 0.01, tick_size=0.001)

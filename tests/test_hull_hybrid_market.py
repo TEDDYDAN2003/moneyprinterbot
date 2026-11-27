@@ -241,7 +241,9 @@ def seed_opposite(tape):
             tp=tape.px(1990.0),
             time_msc=(T - 60) * 1000,
         )
-        assert Owners(state).bind(p, 5, pair_child=3, policy_key=policy)
+        assert Owners(state, pairs=tape.cfg["hull"]["pairs"]).bind(
+            p, 5, pair_child=3, policy_key=policy
+        )
         tape.mt.positions.append(p)
     path.write_text(json.dumps(state))
 

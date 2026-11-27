@@ -12,11 +12,11 @@ from dataclasses import dataclass, field, replace
 from bot.hull.bar import Bar
 
 from .config import (
+    CROSS_REGION_POLICY,
     EXECUTION_INFO,
     M1_MODE,
     PAIR_MODE,
-    PAIRS,
-    CROSS_REGION_POLICY,
+    SUPPORTED_PAIRS,
     TF_NAME,
     Indicator,
 )
@@ -80,10 +80,7 @@ class Reading:
 
     @property
     def paired(self):
-        return self.trigger_tf is not None and (
-            PAIRS.get(self.tf) == self.trigger_tf
-            or {5: 4, 10: 8, 15: 12}.get(self.tf) == self.trigger_tf
-        )
+        return (self.tf, self.trigger_tf) in SUPPORTED_PAIRS
 
     @property
     def execution_mode(self):

@@ -10,16 +10,16 @@ from test_hull_intrabar_market import OFF, ON, T, Tape
 def test_repeated_valid_ticks_finish_only_the_approved_unsent_legs(
     tmp_path, monkeypatch, side, filled, closed
 ):
-    offset = 180000 if closed else 0
+    offset = 240000 if closed else 0
     timeline = [(100, OFF), (offset + 200, ON)] + [
         (offset + 220 + n * 20, ON + shift)
         for n, shift in enumerate((0.100, -0.075, 0.050, -0.025))
     ]
-    tape = Tape(tmp_path, monkeypatch, timeline, side=side)
+    tape = Tape(tmp_path, monkeypatch, timeline, side=side, child=None)
     if closed == "explicit":
         tape.cfg["hull"]["entry_timing"] = "confirmed_cross_next_bar"
     if closed:
-        tape.hidden = [(179999, ON)]
+        tape.hidden = [(239999, ON)]
     tape.cfg["hull"]["symbols"]["XAUUSD"]["target_usd"] = 17.25
     check, send = tape.mt.order_check, tape.mt.order_send
     checked = []
@@ -47,7 +47,7 @@ def test_repeated_valid_ticks_finish_only_the_approved_unsent_legs(
         == len({r["raw_chart_sl"] for r in receipts})
         == 1
     )
-    assert receipts[0]["signal"] == (T + 180 if closed else T + 0.2)
+    assert receipts[0]["signal"] == (T + 240 if closed else T + 0.2)
     assert receipts[filled]["send_tick_time_msc"] == T * 1000 + timeline[-1][0]
     assert all(
         r["configured_target_usd"] == 17.25
@@ -72,14 +72,18 @@ def test_tick_advancing_between_two_chart_reads_needs_an_unbroken_witness(
     stamp = 200 if case == "same_ms" else 9200 if case == "expired" else 240
     price = 2007.18 if case == "touch" else ON + 0.125
     tape = Tape(
-        tmp_path, monkeypatch, [(100, OFF), (200, ON), (stamp, price)], side=side
+        tmp_path,
+        monkeypatch,
+        [(100, OFF), (200, ON), (stamp, price)],
+        side=side,
+        child=None,
     )
     old = Stream.project
 
     def project(self, mt, name, tick):
         raw = old(self, mt, name, tick)
         if len(mt.positions) == 2 and tick.ms == T * 1000 + 200:
-            if self.tf == 3 and tape.i == 1:
+            if self.tf == 4 and tape.i == 1:
                 tape.i = 2  # inside verify after fill, NOT between two complete plans
             if self.tf == 5:
                 if case == "missing_peer":
@@ -136,7 +140,7 @@ def test_once_a_gate_fails_no_unsent_sibling_or_later_topup(
             (8250, ON + 0.3),
             (8300, ON + 0.3),
         ]
-    tape = Tape(tmp_path, monkeypatch, times, side=side)
+    tape = Tape(tmp_path, monkeypatch, times, side=side, child=None)
     if case == "risk":
         # 4-leg initial risk fits. A much more expensive residual cannot be sent.
         tape.cfg["hull"]["limits"]["max_open_risk_usd"] = 428
@@ -210,6 +214,7 @@ def test_final_quote_advances_and_wider_valid_spread_prices_only_the_unsent_tick
         monkeypatch,
         [(100, OFF), (200, ON), (240, ON + 0.125), (280, ON - 0.1)],
         side=side,
+        child=None,
     )
     plain_tick = tape.mt.symbol_info_tick
 
@@ -252,15 +257,16 @@ def test_tick_advances_inside_final_verifier_never_submit_its_input_quote(
     from bot.hull.desk import Desk
     from bot.hull.feed import Stream
 
-    offset = 0 if clock == "tick" else 180000
+    offset = 0 if clock == "tick" else 240000
     tape = Tape(
         tmp_path,
         monkeypatch,
         [(100, OFF), (offset + 200, ON), (offset + 300, ON + 0.125)],
         side=side,
+        child=None,
     )
     if offset:
-        tape.hidden = [(179999, ON)]
+        tape.hidden = [(239999, ON)]
     if clock == "explicit_close":
         tape.cfg["hull"]["entry_timing"] = "confirmed_cross_next_bar"
     stage = None
@@ -278,7 +284,7 @@ def test_tick_advances_inside_final_verifier_never_submit_its_input_quote(
         raw = old_project(self, mt, name, q)
         if (
             stage == "final_send"
-            and self.tf == 3
+            and self.tf == 4
             and len(mt.positions) == 1
             and tape.i == 1
         ):

@@ -12,7 +12,7 @@
 <noscript><p>To use the three slow profiles without JavaScript, send <strong>HULL START trio-slow</strong> to the desktop agent with the updated repository. For other profiles, use <code>HULL START SYMBOL:LOT:TP_USD:RATE</code>.</p></noscript>
 <section class="panel" aria-labelledby="pick-title">
 <h2 id="pick-title">1 · Choose profiles</h2>
-<p><span class="chip">M5 → M3 · M10 → M5 · M15 → M10</span> One batch per checked symbol, owned by the highest qualifying parent at that close. Only checked profiles will be copied. New entries always require an approved <a href="ENTRY_SESSIONS.md">symbol session</a>; exits stay active.</p>
+<p><span class="chip">M5 → M4 · M10 → M8 · M15 → M12</span> One batch per checked symbol, owned by the highest qualifying parent at that close. Only checked profiles will be copied. New entries always require an approved <a href="ENTRY_SESSIONS.md">symbol session</a>; exits stay active.</p>
 <p><strong>FC Dynamic Hull · 16</strong>: confirm the trigger cross and both charts’ structure at the trigger close; enter only on a fresh quote in the next trigger candle. A confirmed MSS closes only its symbol/timeframe; a fast opposite trigger cross protects only its own parent/child tickets. No premium/discount test. New-ticket SL sits below the BUY cross candle’s low or above the SELL cross candle’s high. Existing tickets and the per-ticket 70/30 ladder stay unchanged. <a href="HULL_PAIRS.md">Rules and local configuration</a>.</p>
 <button class="secondary preset" type="button" id="trio">trio-slow · gold 0.09, EUR/GBP 0.01 lot per ticket</button>
 <button class="secondary preset" type="button" id="trio-config">Configured trio · gold 0.10, EUR/GBP 1.00 lot per ticket</button>

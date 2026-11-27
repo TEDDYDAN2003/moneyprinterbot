@@ -1,6 +1,6 @@
 # FC Dynamic Hull 16 • MT5 lane indicator
 
-**Active Python desk:** [paired entries, child exits and private-YAML migration](../docs/HULL_PAIRS.md). M5 → M3, M10 → M5, M15 → M10. No M1 trigger; M30/M45 are historical/study frames, not active parents. [Previous M1 release](../docs/HULL_M1.md).
+**Active Python desk:** [paired entries, child exits and private-YAML migration](../docs/HULL_PAIRS.md). M5 → M4, M10 → M8, M15 → M12. No M1 trigger; M30/M45 are historical/study frames, not active parents. [Previous M1 release](../docs/HULL_M1.md).
 
 **Chart display only — not an EA or a second order manager.** The Python Hull companion is the only component that can send demo orders. The `.mq5` does not use trading, account, file or network APIs, and does not need Algo Trading enabled.
 

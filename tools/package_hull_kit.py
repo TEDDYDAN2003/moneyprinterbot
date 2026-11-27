@@ -43,6 +43,16 @@ REQUIRED = SINGLES | {
     "src/bot/cli.py",
     "src/bot/hull/terminal.py",
     "src/bot/hull/minute.py",
+    "src/bot/hull/intrabar_book.py",
+    "src/bot/hull/intrabar_guard.py",
+    "src/bot/hull/intrabar_signal.py",
+    "src/bot/hull/target_settings.py",
+    "tests/test_hull_shipped_pairs.py",
+    "tests/test_hull_valid_ticks.py",
+    "HullJournal/target_panel.py",
+    "docs/HULL_INTRABAR.md",
+    "docs/HULL_RELEASE_CHECK.md",
+    "tools/preflight_release.py",
     "src/bot/hull/pairs.py",
     "src/bot/hull/retest.py",
     "src/bot/hull/retest_desk.py",
@@ -99,7 +109,7 @@ def build(out):
     ):
         files[n] = files[n].replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
     files["START-HERE.md"] = (
-        b"""# Dynamic Hull desktop kit\n\nNew install: extract into a NEW folder and open README.md. The checked-in template is paper-only; nothing starts automatically. Use the included HullJournal for actual closed demo fills, the MQ5 indicator for chart context, and the profile picker for observation. The charts are not an order manager. For optional paired BUY/SELL pullback limits, read docs/HULL_RETEST.md. The market entry route stays the default.\n\nExisting install: preserve config.demo.local.yaml, reports/hull_runtime, home-directory account state, magic, and the journal output folder containing journal.sqlite3. Do not overlay this kit on your running checkout. Use a verified Git fast-forward while flat, or migrate offline in a copy with backups and the same working directory before restarting. For a separate reporter, --repo points to where the scanner writes its reports and --out to the ORIGINAL journal folder. No private records or credentials are included.\n\nSHA256SUMS.txt covers every other file in this kit. The ZIP contains sources, not Git history; the Git checkout has the downloads link and the packaging tools.\n"""
+        b"""# Dynamic Hull desktop kit\n\nNew install: extract into a NEW folder and open README.md. The checked-in template is paper-only; nothing starts automatically. Use the included HullJournal for actual closed demo fills, the MQ5 indicator for chart context, and the profile picker for observation. The charts are not an order manager. For optional paired BUY/SELL pullback limits, read docs/HULL_RETEST.md. The market entry route stays the default.\n\nExisting install: preserve config.demo.local.yaml and its adjacent private .targets.json if used, reports/hull_runtime, home-directory account state, magic, and the journal output folder containing journal.sqlite3. Do not overlay this kit on your running checkout. Use a verified Git fast-forward while flat, or migrate offline in a copy with backups and the same working directory before restarting. For a separate reporter, --repo points to where the scanner writes its reports and --out to the ORIGINAL journal folder. No private records or credentials are included.\n\nSHA256SUMS.txt covers every other file in this kit. The ZIP contains sources, not Git history; the Git checkout has the downloads link and the packaging tools.\n"""
     )
     files["SHA256SUMS.txt"] = "".join(
         f"{hashlib.sha256(data).hexdigest()}  {name}\n"

@@ -1,6 +1,6 @@
 # Dynamic Hull: signal, entry and exit
 
-**Active Python desk:** [paired entries, child exits and private-YAML migration](HULL_PAIRS.md). M5 → M3, M10 → M5, M15 → M10. No M1 trigger; M30/M45 are historical/study frames, not active parents. [Previous M1 release](HULL_M1.md).
+**Active Python desk:** [paired entries, child exits and private-YAML migration](HULL_PAIRS.md). M5 → M4, M10 → M8, M15 → M12. No M1 trigger; M30/M45 are historical/study frames, not active parents. [Previous M1 release](HULL_M1.md).
 
 The scanner and [FC DynHull Pine v6](../indicators/FC-Hull-Dynamic-Source.pine) share the raw Hull cross and confirmed structure calculation. The post-MSS entry rule differs: the latest Pine indicator allows the first aligned cross, while `trade`, `demo` and `trade-all` retain the bot veto described below. Older Either/16 charts and the v4 benchmark were retired to Git history; their recorded trade reasons remain readable in the journal.
 
