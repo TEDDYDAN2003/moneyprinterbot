@@ -45,7 +45,9 @@ s = (
             "/* ANALYTICS_MODULE */",
             (assets / "analytics.js").read_text(encoding="utf8")
             + "\n"
-            + (assets / "market_windows.js").read_text(encoding="utf8"),
+            + (assets / "market_windows.js").read_text(encoding="utf8")
+            + "\n"
+            + (assets / "targets.js").read_text(encoding="utf8"),
         ),
     )
     .replace("__SAMPLE__", js(pack))

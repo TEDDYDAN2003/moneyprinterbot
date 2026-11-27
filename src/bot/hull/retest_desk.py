@@ -13,7 +13,7 @@ from dataclasses import asdict
 from bot.broker import DemoSafetyError, _side_is_allowed, fresh, snapshot
 from bot.config.entry_sessions import EntrySessionVeto
 
-from .config import LADDER, PAIR_MODE, PAIRS, RETEST, STOP_SPREAD_POLICY, TF_NAME
+from .config import LADDER, PAIR_MODE, RETEST, STOP_SPREAD_POLICY, TF_NAME
 from .entry_clock import CLOCK_SKEW_TOLERANCE_S
 from .notifier import notify_blocked_setup
 from .orders import Block, Exposure, Grid, Plan, room
@@ -1086,10 +1086,15 @@ class RetestDesk:
                 entry_route=RETEST,
                 pricing_policy=POLICY,
                 target_policy=GOAL,
+                configured_target_usd=plan.configured_target_usd,
+                entry_spread_usd=plan.entry_spread_usd,  # frozen at placement, not revalued at fill
+                initial_goal_usd=plan.goal_usd,
+                planned_tp_profit_usd=plan.reward_usd,
                 # Recovery of a legacy placement must not manufacture v2 evidence.
                 **(
                     plan.stop_audit(b["bid"], b["ask"])
-                    if plan.stop_spread_policy == STOP_SPREAD_POLICY else {}
+                    if plan.stop_spread_policy == STOP_SPREAD_POLICY
+                    else {}
                 ),
                 leg=l["leg"],
                 order=tid,

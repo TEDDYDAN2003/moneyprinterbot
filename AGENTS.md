@@ -34,6 +34,8 @@ For **MT5 only**, open **PowerShell in the bot folder** on your Windows MT5 PC (
 
 **1. Check MT5.** Sign in to your **USD hedging DEMO** account. Check the Trade tab for positions and pending orders and [check for another scanner](#check-for-another-scanner). If an armed or unknown scanner is running, or exposure is unresolved, **stop here**. Do not interrupt ticket management or launch a duplicate.
 
+**Saved Journal targets?** The [opt-in Symbol targets panel](HullJournal/START-HERE.md#keep-per-symbol-targets-and-preview-the-spread) and both Windows launchers now honor `hull.enabled` and saved per-symbol bases. The explicit `--profile` examples below override those bases; omit them to use your private settings. Review `specs` in read-only preflight. No step in the Journal arms a scanner.
+
 **2. Choose your symbols.** In this PowerShell window, paste the block below, keeping **only the profiles you intend to run**. These are the eight previously configured profiles. Each line is `SYMBOL:lots per ticket:base USD per ticket:rate`.
 
 ```powershell

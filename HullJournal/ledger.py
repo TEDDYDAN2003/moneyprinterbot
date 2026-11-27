@@ -91,7 +91,14 @@ CROSS_REGION_FIELDS = (
     "raw_chart_sl",
 )
 SEND_FIELDS = ("send_quote_utc", "send_bid", "send_ask")
-LOG_FORMAT = 10  # incremental index: replay available demo.jsonl once, do not reset broker history
+TARGET_AMOUNTS = (
+    "configured_target_usd",
+    "entry_spread_usd",
+    "initial_goal_usd",
+    "planned_tp_profit_usd",
+)
+TARGET_FIELDS = ("target_policy", *TARGET_AMOUNTS)
+LOG_FORMAT = 11  # incremental index: replay available demo.jsonl once, do not reset broker history
 CASH = ("gross_profit", "commission", "swap", "fee")
 FIELDS = [
     "schema_version",
@@ -145,8 +152,10 @@ FIELDS = [
     *SWING_SHARED,
     "trigger_to_submit_ms",
     *RETEST_FIELDS,
+    *TARGET_FIELDS, "batch_initial_goal_usd",
 ]
 NUMERIC = {
+    *TARGET_AMOUNTS, "batch_initial_goal_usd",
     "schema_version",
     "leg",
     "ticket_count",
@@ -279,6 +288,7 @@ def db_open(path):
           waiver TEXT NOT NULL, send_ms INTEGER NOT NULL, bid TEXT NOT NULL, ask TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS cross_region_receipts(id TEXT PRIMARY KEY,evidence TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS retest_deals(id TEXT PRIMARY KEY,evidence TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS target_receipts(id TEXT PRIMARY KEY,evidence TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS swing_receipts(id TEXT PRIMARY KEY,evidence TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS pair_context(id TEXT PRIMARY KEY,parent_close INTEGER NOT NULL,bias INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS labels(symbol TEXT,tf INTEGER,signal INTEGER,side TEXT,model TEXT,
@@ -1071,6 +1081,7 @@ def index_retest(c, ev, magic):
     if old and old[0] != value:
         value = "null"
     c.execute("INSERT OR REPLACE INTO retest_deals VALUES(?,?)", (key, value))
+    index_target(c, ev, pending=True)
 
 
 def matching_retest(evidence, deal):
@@ -1088,6 +1099,66 @@ def matching_retest(evidence, deal):
         ]
         and evidence["meta"][0] == deal["symbol"]
         and evidence["meta"][2] == ("BUY", "SELL")[deal["typ"]]
+    )
+
+
+def index_target(c, ev, *, pending=False):
+    """Optional economics of a full-sized opening, never a config/preview lookup."""
+    if not any(k in ev for k in TARGET_AMOUNTS):
+        return  # legacy receipt; no evidence either way
+    did, q = str(ev["deal"]), ev["request"]
+    value = "null"
+    try:
+        base, spread, goal, reward = (dec(ev[k]) for k in TARGET_AMOUNTS)
+        eps = D(
+            "1e-8"
+        )  # producer uses floats, including a 1e-9 TP tick-search tolerance
+        quantity = dec(q["volume"])
+        filled = dec(ev["fill_lots"] if pending else ev.get("fill_volume", quantity))
+        order = ev.get("order" if pending else "opening_order")
+        ms = ev["fill_ms" if pending else "send_tick_time_msc"]
+        if not (
+            ev["target_policy"]
+            == (
+                "base_plus_placement_spread_v1"
+                if pending
+                else "base_plus_entry_spread_v1"
+            )
+            and (pending or ev.get("retcode") == 10009)
+            and base > 0
+            and spread >= 0
+            and goal > 0
+            and abs(goal - (base + spread)) <= eps
+            and reward + eps >= goal
+            and quantity == filled > 0
+            and dec(ev["price"]) > 0
+            and type(ms) is int
+            and ms > 0
+            and (order is None or (type(order) is int and order > 0))
+        ):
+            raise ValueError("Inconsistent target evidence")
+        value = enc(
+            {
+                "fields": {
+                    "target_policy": ev["target_policy"],
+                    **{k: plain(ev[k]) for k in TARGET_AMOUNTS},
+                },
+                "tag": q["comment"],
+                "magic": q["magic"],
+                "price": plain(ev["price"]),
+                "volume": plain(quantity),
+                "order": str(order) if order is not None else "",
+                "ms": ms,
+                "sl": plain(q["sl"]),
+                "tp": plain(q["tp"]),
+            }
+        )
+    except (KeyError, TypeError, ValueError, ArithmeticError):
+        pass  # invalidate contradictory target facts; never discard broker P/L
+    c.execute(
+        """INSERT INTO target_receipts VALUES(?,?) ON CONFLICT(id) DO UPDATE
+        SET evidence='null' WHERE target_receipts.evidence != excluded.evidence""",
+        (did, value),
     )
 
 
@@ -1172,6 +1243,7 @@ def import_log(c, path, magic):
                             index_swing_receipt(c, ev, vals, parsed)
                         else:
                             index_cross_receipt(c, ev, vals, parsed)
+                        index_target(c, ev)
                 elif (
                     typ == "exit_request"
                     and ev.get("retcode") in (10009, 10010)
@@ -1581,6 +1653,12 @@ def make_views(c):
         )
         if did in receipts
     }
+    targets = {
+        did: json.loads(blob)
+        for did, blob in c.execute(
+            "SELECT id,evidence FROM target_receipts WHERE evidence != 'null'"
+        )
+    }
     region_rows = dict(c.execute("SELECT id,evidence FROM cross_region_receipts"))
     cross_regions = {
         did: json.loads(blob)
@@ -1654,6 +1732,7 @@ def make_views(c):
         tag_kinds = set()
         sources = set()
         brackets, proofs = [], []
+        target_fields = {}
         for d in ins:
             meta = receipts.get(d["id"])
             evidence = retest.get(d["id"])
@@ -1684,6 +1763,23 @@ def make_views(c):
                     proofs.append(swing["fields"])
                 if k and d["id"] in cross:
                     proofs.append(cross[d["id"]])
+                # No guessed targets for partial/split entries or a receipt not
+                # joined to this broker fill. Retest joins additionally bind pid/time.
+                cash_proof = targets.get(d["id"])
+                if (
+                    len(ins) == 1
+                    and cash_proof
+                    and who["currency"] == "USD"
+                    and (not meta[1].startswith(("p", "q", "r")) or len(proofs) == 1)
+                    and cash_proof["tag"] == meta[1]
+                    and (cash_proof["sl"], cash_proof["tp"]) == (meta[3], meta[4])
+                    and d["magic"] == cash_proof["magic"] == who["magic"]
+                    and (not cash_proof["order"] or d["order"] == cash_proof["order"])
+                    and d["ms"] >= cash_proof["ms"]
+                    and (d["price"], d["volume"])
+                    == (cash_proof["price"], cash_proof["volume"])
+                ):
+                    target_fields = cash_proof['fields']
         for proof in proofs:
             for key in CROSS_REGION_FIELDS:
                 proof.setdefault(key, "")
@@ -1784,6 +1880,7 @@ def make_views(c):
                 attribution=" + ".join(sorted(sources)) if link else "Unattributed",
             )
             if link:
+                r.update(target_fields)
                 is_live = stamp >= LIVE_KEY_MIN
                 r["entry_timing"] = (
                     "intrabar_pair_cross" if tick_pair else "live_hull_cross"
@@ -1979,6 +2076,11 @@ def make_views(c):
         frozen = {tuple(x[k] for k in shared) for x in rs}
         if len(frozen) == 1:
             r.update(zip(shared, frozen.pop(), strict=True))
+        if all(x["initial_goal_usd"] for x in rs):
+            for field in TARGET_FIELDS:
+                if all(x[field] == first[field] for x in rs):
+                    r[field] = first[field]  # common per-ticket amount, not a batch sum
+            r['batch_initial_goal_usd'] = plain(sum(D(x['initial_goal_usd']) for x in rs))
         noted = {x["bot_exit_request"] for x in rs}
         r["bot_exit_request"] = (
             next(iter(noted)) if len(noted) == 1 else "Varies by ticket"

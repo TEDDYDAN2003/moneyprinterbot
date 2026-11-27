@@ -35,6 +35,16 @@ py -3 .\journal.py --open-browser
 
 `--repo` is optional: it only reads the account-specific `reports/hull_runtime/<account-key>/demo.jsonl`. Without it, intact Hull entry comments supply the timeframe/leg. Extra log details, such as an initial requested SL/TP and the market-structure setup, may be blank. No account credentials go in the code or the CSV. With multiple terminals, pass `--terminal-path 'C:\…\terminal64.exe'` for the actual installation. Use `--magic` if you changed the default Hull entry magic **26111825**; do not reuse a magic shared with other strategies.
 
+## Keep per-symbol targets and preview the spread
+
+On the Windows bot PC, stop **only** any other reporter using the same output folder. From the full checkout open **`HullJournal\Start-Journal-Targets.cmd`**, or add `--target-config .\config.demo.local.yaml` to your normal reporter command from the bot root. Keep the same `--repo`, `--out`, terminal and magic. The ordinary launcher and standalone HTML still cannot save settings or run a preflight.
+
+1. Expand **Symbol targets**. It lists exactly `hull.enabled`, with its lots, rate and private YAML base. Leave an override blank to inherit; enter a positive USD **base per ticket** and click **Save targets**. This writes only the target overrides to an ignored sibling file (e.g. `config.demo.local.targets.json`). It does **not** edit the YAML, enable a symbol, touch the journal checkpoint or change an open ticket. Keep both private files when moving installations. Unknown formats, conflicting edits and invalid amounts are refused, not reset to $10.
+2. Click **Run read-only preflight**. The button runs only `hull-preflight` on this saved configuration and checks the returned account and magic against the live collector. For each symbol it shows the broker quote time and **BUY and SELL separately**: immediate spread cost in USD at those lots → indicative gross goal. For example, a $17.25 base plus $1.50 spread gives $18.75. No usable quote or conversion means a reason, not a guessed goal. This never starts a scanner or sends an order. Do not forward the local port.
+3. The two PowerShell launchers now use **the private enabled list and its effective settings**, not the old fixed ten-symbol `$10` list. Review the list before any manual start. Nothing hot-reloads a running process. Explicit CLI `--profile` or `--target-usd` still overrides the base for that run; use identical arguments for preflight and any later run. An older/private dashboard with its own storage is not silently imported or overwritten: check its displayed values against this table.
+
+**Historical evidence is separate.** A matched full opening can contribute `target_policy`, `configured_target_usd`, `entry_spread_usd`, `initial_goal_usd` and `planned_tp_profit_usd` to ticket detail and CSV. Retest receipts use the **placement** spread. A completed setup shows common per-ticket amounts only when they agree, plus `batch_initial_goal_usd` only when every component is evidenced. These are goals, not realized P/L. A preset change, preflight, signal, missing or conflicting receipt cannot supply a historical target. Keep the SQLite checkpoint: the upgrade re-indexes only available audit evidence.
+
 ## Intrabar paired market fills
 
 `q<parent>x<child>_<trigger-ms>_<leg>` is an intrabar paired market fill group, not a closed cross or a retest. `entry_timing: intrabar_pair_cross` distinguishes it from older `i…` trades. Verified rows show the originating tick, source, confirmed trigger swing and confirmation time, frozen raw swing SL and actual broker request. A recross millisecond is a distinct setup, even in the same candle. The journal does not manufacture a signal close or a wick. Keep the existing checkpoint.
@@ -99,7 +109,7 @@ py -3 .\journal.py --once --backfill-days 90 --reconcile
 py -3 .\journal.py --help
 ```
 
-Use the same `--repo`, `--out`, `--magic` and terminal selection as your normal run. The local service binds only to loopback and exposes just the dashboard and its snapshot (no account login, directory listing or writable API). The private files are not encrypted: protect the Windows folder. For a consistent backup, stop the reporter and copy the whole `data` folder. Do not publish private CSVs or the cache by accident.
+Use the same `--repo`, `--out`, `--magic` and terminal selection as your normal run. The ordinary local service binds only to loopback and exposes just the dashboard and its snapshot. Only the explicitly selected target editor adds target settings and read-only preflight; neither mode offers a trading API, account login or directory listing. The private files are not encrypted: protect the Windows folder. For a consistent backup, stop the reporter and copy the whole `data` folder. Do not publish private CSVs or the cache by accident.
 
 ## Verification, no MT5 needed
 

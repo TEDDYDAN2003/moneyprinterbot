@@ -20,6 +20,7 @@ data/
 models/
 research/directional_scalping/results/
 config*.local.yaml
+*.local.targets.json*
 wickless.local*.json
 *.sqlite3*
 KILL

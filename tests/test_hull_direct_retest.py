@@ -546,7 +546,10 @@ def test_real_book_receipt_to_standalone_journal(tmp_path, monkeypatch, case):
     from fixtures import FakeMT, deal
     from ledger import MAGIC, db_open, identity, make_views, sync
 
-    mt, d, r, logs, _ = make(tmp_path, monkeypatch)
+    def custom_base(cfg):
+        cfg["hull"]["symbols"]["XAUUSD"]["target_usd"] = 13.25
+
+    mt, d, r, logs, _ = make(tmp_path, monkeypatch, hook=custom_base)
     d.batch(NAME, r)
     mt.now += 40
     mt.tick()
@@ -599,6 +602,9 @@ def test_real_book_receipt_to_standalone_journal(tmp_path, monkeypatch, case):
         assert len(out["setups"]) == int(case in ("ok", "stripped_comment"))
         if case in ("ok", "stripped_comment", "missing_settlement"):
             t = out["tickets"][0]
+            assert t["target_policy"] == "base_plus_placement_spread_v1"
+            assert t["configured_target_usd"] == "13.25"
+            assert float(t['initial_goal_usd']) == pytest.approx(13.25 + e['entry_spread_usd'])
             assert (
                 t["entry_timing"] == "confirmed_pair_retest_limit"
                 and t["setup_type"] == RETEST

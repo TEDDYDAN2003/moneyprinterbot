@@ -18,25 +18,36 @@ if exist "%OUT%\journal.sqlite3" (
 )
 if not exist "%OUT%\tickets.csv" if not exist "%OUT%\setups.csv" set "OUT=%PREVIOUS%"
 :selected
+set "TARGETOPT="
+if /I not "%~3"=="--targets" goto reporter
+if not defined BOT goto notargets
+if not exist "%BOT%\config.demo.local.yaml" goto notargets
+set TARGETOPT=--target-config "%BOT%\config.demo.local.yaml"
+:reporter
 if not defined BOT goto standalone
 if exist "%BOT%\.venv\Scripts\python.exe" goto botpython
 where py >nul 2>&1
 if errorlevel 1 goto botfallback
-py -3 "%~dp0journal.py" --repo "%BOT%" --out "%OUT%" --open-browser
+py -3 "%~dp0journal.py" --repo "%BOT%" --out "%OUT%" --open-browser %TARGETOPT%
 goto finish
 :botfallback
-python "%~dp0journal.py" --repo "%BOT%" --out "%OUT%" --open-browser
+python "%~dp0journal.py" --repo "%BOT%" --out "%OUT%" --open-browser %TARGETOPT%
 goto finish
 :botpython
-"%BOT%\.venv\Scripts\python.exe" "%~dp0journal.py" --repo "%BOT%" --out "%OUT%" --open-browser
+"%BOT%\.venv\Scripts\python.exe" "%~dp0journal.py" --repo "%BOT%" --out "%OUT%" --open-browser %TARGETOPT%
 goto finish
 :standalone
 where py >nul 2>&1
 if errorlevel 1 goto fallback
-py -3 "%~dp0journal.py" --out "%OUT%" --open-browser
+py -3 "%~dp0journal.py" --out "%OUT%" --open-browser %TARGETOPT%
 goto finish
 :fallback
-python "%~dp0journal.py" --out "%OUT%" --open-browser
+python "%~dp0journal.py" --out "%OUT%" --open-browser %TARGETOPT%
+goto finish
+:notargets
+echo Target settings require the full bot folder and its existing config.demo.local.yaml. No files were changed.
+pause
+exit /b 2
 :finish
 if errorlevel 1 (
   echo.

@@ -91,6 +91,7 @@ def build(out):
     # Git normalises tracked text; Windows launchers and CSVs ship with CRLF.
     for n in (
         "HullJournal/Start-Journal.cmd",
+        "HullJournal/Start-Journal-Targets.cmd",
         "run_preflight.ps1",
         "run_arm_demo.ps1",
         "HullJournal/examples/tickets.csv",

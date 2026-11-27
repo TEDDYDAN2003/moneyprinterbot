@@ -8,6 +8,7 @@ from bot.config.entry_sessions import load_entry_sessions
 from bot.config.loader import load_yaml
 from bot.config.schema import validate_config
 from bot.hull.cli import handle, register
+from bot.hull.target_settings import effective_config
 
 
 def main(argv=None) -> int:
@@ -26,7 +27,7 @@ def main(argv=None) -> int:
     export.add_argument("--end", required=True, help="exclusive UTC")
     export.add_argument("--out", required=True)
     a = parser.parse_args(argv)
-    raw = load_yaml(a.config)
+    raw = effective_config(a.config, load_yaml(a.config))
     model = validate_config(raw)
     if a.command == "validate-config":
         sessions = load_entry_sessions()

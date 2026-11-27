@@ -6,7 +6,9 @@ import argparse
 import hashlib
 import json
 import os
+import secrets
 import sqlite3
+import subprocess
 import sys
 import threading
 import time
@@ -151,11 +153,12 @@ class Reporter:
         return status
 
 
-def make_server(ui, port):
+def make_server(ui, port, *, targets=None, magic=MAGIC):
+    token = secrets.token_urlsafe(32) if targets is not None else ''
     template = (
         (HERE / "Hull-Journal.html")
         .read_text("utf8")
-        .replace('data-feed="file"', 'data-feed="collector"', 1)
+        .replace('data-feed="file"', f'data-feed="collector" data-target-key="{token}"', 1)
         .encode()
     )
 
@@ -163,12 +166,80 @@ def make_server(ui, port):
         def log_message(self, *args):
             pass
 
-        def do_GET(self):
+        def local_host(self):
             host = self.headers.get("Host", "").casefold()
-            if host not in {
-                f"127.0.0.1:{self.server.server_port}",
-                f"localhost:{self.server.server_port}",
-            }:
+            return (
+                host
+                if host
+                in {
+                    f"127.0.0.1:{self.server.server_port}",
+                    f"localhost:{self.server.server_port}",
+                }
+                else None
+            )
+
+        def do_POST(self):
+            if targets is None:
+                return self.send_error(501)  # ordinary reporter has no controls
+            host = self.local_host()
+            if (
+                not host
+                or self.headers.get("Origin") != "http://" + host
+                or not secrets.compare_digest(
+                    self.headers.get("X-Hull-Target-Key", "").encode(), token.encode()
+                )
+            ):
+                return self.send_error(403)
+            if self.path not in ("/api/targets/save", "/api/targets/preflight"):
+                return self.send_error(404)
+            if (
+                self.headers.get_content_type() != "application/json"
+                or self.headers.get("Transfer-Encoding")
+            ):
+                return self.send_error(415)
+            from bot.hull.target_settings import TargetSettingsError, unique
+
+            try:
+                n = int(self.headers.get("Content-Length", "0"))
+                if not 0 < n <= 16384:
+                    return self.send_error(413)
+                self.connection.settimeout(10)
+                body = json.loads(self.rfile.read(n), object_pairs_hook=unique)
+                with ui.lock:
+                    key = (
+                        ui.status.get("account_key")
+                        if ui.status["state"] == "live"
+                        and 0
+                        <= (
+                            datetime.now(UTC)
+                            - datetime.fromisoformat(ui.status["last_sync"])
+                        ).total_seconds()
+                        <= 30
+                        else None
+                    )
+                result = targets.action(self.path.rsplit("/", 1)[1], body, key, magic)
+                return self.reply(
+                    json.dumps(result, allow_nan=False).encode(), "application/json"
+                )
+            except TargetSettingsError as exc:
+                return self.reply(
+                    json.dumps({"error": str(exc)}).encode(), "application/json", 409
+                )
+            except (
+                ValueError,
+                KeyError,
+                TypeError,
+                OSError,
+                subprocess.SubprocessError,
+            ):
+                return self.reply(
+                    b'{"error":"Settings or preflight unavailable. Check the private config locally."}',
+                    "application/json",
+                    400,
+                )
+
+        def do_GET(self):
+            if not self.local_host():
                 return self.send_error(403)
             u = urlsplit(self.path)
             if u.path in ("/", "/Hull-Journal.html"):
@@ -177,14 +248,28 @@ def make_server(ui, port):
             elif u.path == "/api/snapshot":
                 body = ui.snapshot(parse_qs(u.query).get("since", [""])[0])
                 ct = "application/json; charset=utf-8"
+            elif u.path == "/api/targets" and targets is not None:
+                try:
+                    body = json.dumps(targets.profiles(), allow_nan=False).encode()
+                except (ValueError, KeyError, OSError, TypeError):
+                    return self.reply(
+                        b'{"error":"Could not read private target settings. No files changed."}',
+                        "application/json",
+                        409,
+                    )
+                ct = "application/json; charset=utf-8"
             elif u.path == "/favicon.ico":
                 self.send_response(204)
                 self.end_headers()
                 return
             else:
                 return self.send_error(404)
-            self.send_response(200)
+            return self.reply(body, ct)
+
+        def reply(self, body, ct, code=200):
+            self.send_response(code)
             self.send_header("Content-Type", ct)
+            self.send_header("X-Frame-Options", "DENY")
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
@@ -230,6 +315,7 @@ def main(argv=None):
     p.add_argument(
         "--magic", type=int, default=MAGIC, help="Hull entry magic; default 26111825."
     )
+    p.add_argument("--target-config", type=Path, help="Opt in to local per-symbol target settings and read-only preflight. Full bot install and an existing private *.local.yaml required.")
     p.add_argument("--port", type=int, default=8765, help="Local-only dashboard port.")
     p.add_argument(
         "--open-browser",
@@ -254,6 +340,19 @@ def main(argv=None):
         and 0 < args.magic < 2**31
     ):
         p.error("Invalid days (1–3650), interval (0.5–300s), port or magic.")
+    targets = None
+    if args.target_config:
+        if args.once:
+            p.error("--target-config needs the local dashboard, not --once")
+        try:
+            from target_panel import TargetPanel
+
+            targets = TargetPanel(args.target_config)
+            targets.profiles()  # reject unreadable/unknown settings, never replace them
+        except (ImportError, OSError, ValueError, KeyError, TypeError):
+            p.error(
+                "Target editor needs the full bot environment and valid private settings. No files changed."
+            )
     try:
         import MetaTrader5 as mt
     except ImportError:
@@ -282,7 +381,7 @@ def main(argv=None):
             previous = None
             try:
                 if not args.once:
-                    srv = make_server(ui, args.port)
+                    srv = make_server(ui, args.port, targets=targets, magic=args.magic)
                     threading.Thread(
                         target=srv.serve_forever, name="journal-dashboard", daemon=True
                     ).start()

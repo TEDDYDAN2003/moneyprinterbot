@@ -16,3 +16,5 @@
 @media(max-width:740px){.marketHead,.marketToolbar,.marketMethod{padding-left:12px;padding-right:12px}.marketHead,.focusHead,.marketToolbar,.focusFoot{gap:8px}.marketStamp{padding-left:8px}.openGrid{padding:0 12px 10px;gap:5px}.bellCard{padding:8px 6px}.bellCity{font-size:17px}.bellTop small,.bellInstrument,.bellTime{font-size:9px}.bellMetric b{font-size:13px}.marketTable .peakWord{font-size:7px}.focusMarket{margin:13px 10px}.matrixLead{margin-left:12px;margin-right:12px}.methodGrid{grid-template-columns:1fr}.marketCaption{padding:8px 12px}.marketToolbar .scope button{font-size:11px}}@media(max-width:410px){.bellTop small{letter-spacing:0}.bellTop>span{display:none}.bellMetric span{font-size:9px}}
 
 .marketChoices{display:flex;align-items:center;gap:8px 16px;flex-wrap:wrap}
+
+.targetSettings{padding:1rem 1.25rem;margin:1rem 0}.targetSettings summary{cursor:pointer}.targetSettings p{max-width:90ch}.targetSettings input{width:8em;padding:.4em}.targetSettings .actions{margin-top:.8em}.targetSettings [hidden]{display:none!important}
