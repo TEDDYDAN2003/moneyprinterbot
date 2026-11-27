@@ -120,7 +120,16 @@ def make_retest_plan(r, p, g, bid, ask, cash, h):
     pad = h.indicator.atr_buffer * r.atr + h.indicator.extra_pips * p.pip_size
     if r.raw_sl != cross_candle_stop(r.anchor, r.side, pad, g.tick):
         raise Block("retest_stop_unverified")
-    _, _, sl, _, raw_sl, stop_spread_buffer = protected_prices(r, p, g, bid, ask)
+    (
+        _,
+        _,
+        sl,
+        _,
+        raw_sl,
+        stop_spread_buffer,
+        cross_region_raw_stop,
+        cross_region_action,
+    ) = protected_prices(r, p, g, bid, ask)
     entry, _ = level(b, r.side, r.atr, g.tick, h.retest_fraction, h.retest_atr_cap)
     risk = -valid_cash(cash, r.side, p.lots, entry, sl)
     if risk <= 0:
@@ -143,4 +152,6 @@ def make_retest_plan(r, p, g, bid, ask, cash, h):
         stop_spread_buffer=stop_spread_buffer,
         raw_chart_sl=raw_sl,
         stop_spread_policy=STOP_SPREAD_POLICY,
+        cross_region_raw_stop=cross_region_raw_stop,
+        cross_region_action=cross_region_action,
     )

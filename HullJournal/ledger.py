@@ -78,8 +78,18 @@ CROSS_SHARED = (
     "frozen_cross_sl",
     "mss_skip_exception",
 )
+CROSS_REGION_POLICY = "hull_line_intersection_tighten_only_v1"
+CROSS_REGION_FIELDS = (
+    "cross_region_policy",
+    "hull_cross_price",
+    "cross_region_candle_close",
+    "cross_candle_raw_sl",
+    "cross_region_raw_stop",
+    "cross_region_action",
+    "raw_chart_sl",
+)
 SEND_FIELDS = ("send_quote_utc", "send_bid", "send_ask")
-LOG_FORMAT = 9  # incremental index: replay available demo.jsonl once, do not reset broker history
+LOG_FORMAT = 10  # incremental index: replay available demo.jsonl once, do not reset broker history
 CASH = ("gross_profit", "commission", "swap", "fee")
 FIELDS = [
     "schema_version",
@@ -126,6 +136,7 @@ FIELDS = [
     "trigger_bid",
     "trigger_ask",
     *CROSS_SHARED,
+    *CROSS_REGION_FIELDS,
     *SEND_FIELDS,
     "trigger_timeframe",
     *PAIR_SHARED,
@@ -150,6 +161,11 @@ NUMERIC = {
     "initial_tp",
     "cross_candle_wick",
     "frozen_cross_sl",
+    "hull_cross_price",
+    "cross_region_candle_close",
+    "cross_candle_raw_sl",
+    "cross_region_raw_stop",
+    "raw_chart_sl",
     "send_bid",
     "send_ask",
     "retest_limit",
@@ -259,6 +275,7 @@ def db_open(path):
       CREATE TABLE IF NOT EXISTS receipts(id TEXT PRIMARY KEY,symbol TEXT, tag TEXT,side TEXT,sl TEXT,tp TEXT);
       CREATE TABLE IF NOT EXISTS cross_receipts(id TEXT PRIMARY KEY, wick TEXT NOT NULL, sl TEXT NOT NULL,
           waiver TEXT NOT NULL, send_ms INTEGER NOT NULL, bid TEXT NOT NULL, ask TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS cross_region_receipts(id TEXT PRIMARY KEY,evidence TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS retest_deals(id TEXT PRIMARY KEY,evidence TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS swing_receipts(id TEXT PRIMARY KEY,evidence TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS pair_context(id TEXT PRIMARY KEY,parent_close INTEGER NOT NULL,bias INTEGER NOT NULL);
@@ -466,6 +483,72 @@ def verified_entry_sl(ev, sign, raw, requested, bid, ask, *, pending=False):
     )
 
 
+def verified_cross_region(ev, sign, base_stop, bid, ask):
+    """Verify the recorded Hull intersection and its tighten-only stop choice."""
+    if ev.get("cross_region_policy") != CROSS_REGION_POLICY:
+        return False
+    tick = dec(ev["stop_tick_size"])
+    cross = dec(ev["hull_cross_price"])
+    base = dec(base_stop)
+    effective = dec(ev["raw_chart_sl"])
+    cross_stop = dec(ev["cross_region_raw_stop"])
+    if tick <= 0 or min(cross, base, effective, cross_stop) <= 0:
+        return False
+    rounded = tick * (cross / tick).to_integral_value(
+        rounding=ROUND_FLOOR if sign == 1 else ROUND_CEILING
+    )
+    expected = max(base, rounded) if sign == 1 else min(base, rounded)
+    action = (
+        "cross_region_tightened"
+        if expected == rounded and rounded != base
+        else "existing_base_stop_retained"
+    )
+    entry = dec(ask if sign == 1 else bid)
+    if ev.get("entry_timing") == "intrabar_cross":
+        close_ok = ev.get("cross_region_candle_close") is None and sign * (
+            dec(ev["trigger_bid"]) - cross
+        ) > 0
+    else:
+        close = dec(ev["cross_region_candle_close"])
+        close_ok = sign * (close - cross) > 0
+    return (
+        0 < bid <= ask
+        and base % tick == 0
+        and effective % tick == 0
+        and rounded == cross_stop
+        and expected == effective
+        and ev.get("cross_region_action") == action
+        and sign * (entry - cross) > 0
+        and close_ok
+    )
+
+
+def save_cross_region(c, did, ev):
+    if ev.get("cross_region_policy") != CROSS_REGION_POLICY:
+        return
+    region = {
+        k: (
+            plain(ev[k])
+            if k in NUMERIC and ev.get(k) not in (None, "")
+            else ev.get(k) or ""
+        )
+        for k in CROSS_REGION_FIELDS
+    }
+    value = enc(region)
+    old = c.execute(
+        "SELECT evidence FROM cross_region_receipts WHERE id=?", (str(did),)
+    ).fetchone()
+    if old is None:
+        c.execute(
+            "INSERT INTO cross_region_receipts VALUES(?,?)", (str(did), value)
+        )
+    elif old[0] != value and old[0] != "null":
+        c.execute(
+            "UPDATE cross_region_receipts SET evidence='null' WHERE id=?",
+            (str(did),),
+        )
+
+
 def index_swing_receipt(c, ev, vals, ref):
     """A deal+leg match, not a nearby signal. Never fill wick or close-only fields."""
     did, _, text, side, requested, _ = vals
@@ -490,6 +573,11 @@ def index_swing_receipt(c, ev, vals, ref):
     ms, elapsed = ev["send_tick_time_msc"], dec(ev["trigger_to_submit_ms"])
     entry, age = dec(ev["max_entry_age_s"]), dec(ev["max_quote_age_s"])
     waiver = ev.get("mss_skip_exception") or ""
+    raw_stop = (
+        dec(ev["raw_chart_sl"])
+        if ev.get("cross_region_policy") == CROSS_REGION_POLICY
+        else raw
+    )
     if not (
         text.startswith("q")
         and ev["entry_policy"] == TICK_PAIR_ENTRY
@@ -535,7 +623,11 @@ def index_swing_receipt(c, ev, vals, ref):
         and 0 < dec(ev["fill_volume"]) <= dec(ev["request"]["volume"])
         and dec(ev["price"]) > 0
         and ev["stop_spread_policy"] == "sell_ask_entry_only_exact_risk_v2"
-        and verified_entry_sl(ev, sign, raw, dec(requested), bid, ask)
+        and (
+            ev.get("cross_region_policy") != CROSS_REGION_POLICY
+            or verified_cross_region(ev, sign, raw, bid, ask)
+        )
+        and verified_entry_sl(ev, sign, raw_stop, dec(requested), bid, ask)
         and waiver in ("", "failed_counter_mss_return")
         and c.execute("SELECT * FROM receipts WHERE id=?", (did,)).fetchone() == vals
     ):
@@ -559,6 +651,16 @@ def index_swing_receipt(c, ev, vals, ref):
         "send_bid": plain(bid),
         "send_ask": plain(ask),
     }
+    evidence.update(
+        {
+            k: (
+                plain(ev[k])
+                if k in NUMERIC and ev.get(k) not in (None, "")
+                else ev.get(k) or ""
+            )
+            for k in CROSS_REGION_FIELDS
+        }
+    )
     evidence["trigger_to_submit_ms"] = plain(elapsed)
     value = enc(
         {
@@ -586,10 +688,13 @@ def index_cross_receipt(c, ev, vals, ref):
     candle_tf = child if paired else 1 if minute else tf
     sign = 1 if side == "BUY" else -1
     ms = int(ev["send_tick_time_msc"])
-    wick, sl, bid, ask = (
+    wick, frozen_sl, bid, ask = (
         dec(ev[k])
         for k in ("cross_candle_wick", "frozen_cross_sl", "send_bid", "send_ask")
     )
+    has_cross_region = ev.get("cross_region_policy") == CROSS_REGION_POLICY
+    base_sl = dec(ev["cross_candle_raw_sl"]) if has_cross_region else frozen_sl
+    raw_sl = dec(ev["raw_chart_sl"]) if has_cross_region else base_sl
     waiver = ev.get("mss_skip_exception") or ""
     if not (
         ev.get("retcode") in (10009, 10010)
@@ -599,8 +704,12 @@ def index_cross_receipt(c, ev, vals, ref):
             not paired
             or (
                 pair_clock_valid(ev, close_s, ms)
-                and 0 < dec(ev["stop_tick_size"]) <= (wick - sl) * sign
-                and sl % dec(ev["stop_tick_size"]) == 0
+                and 0 < dec(ev["stop_tick_size"]) <= (wick - frozen_sl) * sign
+                and frozen_sl % dec(ev["stop_tick_size"]) == 0
+                and (
+                    not has_cross_region
+                    or verified_cross_region(ev, sign, base_sl, bid, ask)
+                )
                 and ev.get("entry_policy") == PAIR_ENTRY
                 and ev.get("trigger_tf") == candle_tf
                 and ev.get("parent_tf") == tf
@@ -632,18 +741,18 @@ def index_cross_receipt(c, ev, vals, ref):
         and ev.get("cross_candle_open_s") == close_s - candle_tf * 60
         and close_s * 1000 <= ms < (close_s + candle_tf * 60) * 1000
         and 0 < bid <= ask
-        and min(wick, sl) > 0
-        and (wick - sl) * sign > 0
+        and min(wick, frozen_sl, base_sl, raw_sl) > 0
+        and (wick - frozen_sl) * sign > 0
         and (
             "stop_spread_policy" not in ev
-            or (wick - sl) * sign >= dec(ev["stop_tick_size"])
+            or (wick - frozen_sl) * sign >= dec(ev["stop_tick_size"])
         )
-        and verified_entry_sl(ev, sign, sl, dec(requested_sl), bid, ask)
+        and verified_entry_sl(ev, sign, raw_sl, dec(requested_sl), bid, ask)
         and waiver in ("", "failed_counter_mss_return")
         and c.execute("SELECT * FROM receipts WHERE id=?", (did,)).fetchone() == vals
     ):
         raise ValueError("Inconsistent confirmed-cross receipt metadata")
-    evidence = (did, plain(wick), plain(sl), waiver, ms, plain(bid), plain(ask))
+    evidence = (did, plain(wick), plain(frozen_sl), waiver, ms, plain(bid), plain(ask))
     previous = c.execute("SELECT * FROM cross_receipts WHERE id=?", (did,)).fetchone()
     if paired:
         ctx = (did, ev["parent_structure_close_s"], sign)
@@ -660,6 +769,7 @@ def index_cross_receipt(c, ev, vals, ref):
         # A zero clock is a durable ambiguity marker, not an executable quote.
         c.execute("UPDATE cross_receipts SET send_ms=0 WHERE id=?", (did,))
         raise ValueError("Conflicting cross-candle receipts for the same deal")
+    save_cross_region(c, did, ev)
 
 
 def index_retest(c, ev, magic):
@@ -724,7 +834,10 @@ def index_retest(c, ev, magic):
     )
     o, h, l, close = (dec(bar[k]) for k in ("o", "h", "l", "c"))
     wick = l if sgn == 1 else h
-    raw_sl = dec(a["frozen_cross_sl"])
+    has_cross_region = a.get("cross_region_policy") == CROSS_REGION_POLICY
+    base_sl = dec(a["cross_candle_raw_sl"]) if has_cross_region else dec(a["frozen_cross_sl"])
+    raw_sl = dec(ev["raw_chart_sl"]) if has_cross_region else base_sl
+    region_ev = ev | a | {"stop_tick_size": ev["tick"]}
     body = sgn * (close - o) > 0
     span = abs(close - o) if body else close - l if sgn == 1 else h - close
     depth = sgn * (close - price)
@@ -788,6 +901,10 @@ def index_retest(c, ev, magic):
         )
         and ev["segment"]
         == ("body" if body else "lower_wick" if sgn == 1 else "upper_wick")
+        and (
+            not has_cross_region
+            or verified_cross_region(region_ev, sgn, base_sl, bid, ask)
+        )
         and verified_entry_sl(ev, sgn, raw_sl, sl, bid, ask, pending=True)
         and wick == dec(a["cross_candle_wick"])
         and (wick - raw_sl) * sgn >= tick
@@ -847,6 +964,16 @@ def index_retest(c, ev, magic):
             ),
             strict=True,
         )
+    )
+    proof["fields"].update(
+        {
+            k: (
+                plain(region_ev[k])
+                if k in NUMERIC and region_ev.get(k) not in (None, "")
+                else region_ev.get(k) or ""
+            )
+            for k in CROSS_REGION_FIELDS
+        }
     )
     value = enc(proof)
     key = str(did)
@@ -1361,6 +1488,15 @@ def make_views(c):
         )
         if did in receipts
     }
+    region_rows = dict(c.execute("SELECT id,evidence FROM cross_region_receipts"))
+    cross_regions = {
+        did: json.loads(blob)
+        for did, blob in region_rows.items()
+        if blob != "null"
+    }
+    for did, proof in cross.items():
+        if did in cross_regions:
+            proof.update(cross_regions[did])
     swings = {did: json.loads(blob) for did, blob in c.execute("SELECT id,evidence FROM swing_receipts WHERE evidence != 'null'")}
     contexts = {
         did: (iso(end * 1000), "bullish" if sign == 1 else "bearish")
@@ -1455,6 +1591,9 @@ def make_views(c):
                     proofs.append(swing["fields"])
                 if k and d["id"] in cross:
                     proofs.append(cross[d["id"]])
+        for proof in proofs:
+            for key in CROSS_REGION_FIELDS:
+                proof.setdefault(key, "")
         start = a["ms"]
         link = next(iter(refs)) if len(refs) == 1 and len(tag_kinds) == 1 else None
         is_minute = tag_kinds == {"m"}
@@ -1571,6 +1710,7 @@ def make_views(c):
                     if len(proofs) == len(ins):
                         for k in (
                             *CROSS_SHARED,
+                            *CROSS_REGION_FIELDS,
                             *SEND_FIELDS,
                             *PAIR_SHARED,
                             *(RETEST_FIELDS if pending else ()),
@@ -1738,6 +1878,7 @@ def make_views(c):
         # stop evidence only if ALL of its settled tickets agree on the same stop.
         shared = (
             *CROSS_SHARED,
+            *CROSS_REGION_FIELDS,
             *PAIR_SHARED,
             *(SWING_SHARED if paired == "q" else ()),
             *(RETEST_FIELDS[:-1] if paired == "r" else ()),

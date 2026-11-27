@@ -87,6 +87,8 @@ class Plan:
 
     raw_chart_sl: float | None = None
     stop_spread_policy: str = PRE_SPREAD
+    cross_region_raw_stop: float | None = None
+    cross_region_action: str | None = None
 
     @classmethod
     def from_saved(cls, data):
@@ -102,6 +104,8 @@ class Plan:
         return {
             "stop_spread_policy": self.stop_spread_policy,
             "raw_chart_sl": self.raw_chart_sl,
+            "cross_region_raw_stop": self.cross_region_raw_stop,
+            "cross_region_action": self.cross_region_action,
             "stop_spread_buffer_price": self.stop_spread_buffer,
             "stop_reference_bid": reference_bid,
             "stop_reference_ask": reference_ask,
@@ -260,11 +264,36 @@ def protected_prices(d, p, grid, bid, ask):
     grid.volume(p.lots)
     side = d.side
     entry, mark = (ask, bid) if side == 1 else (bid, ask)
-    # Validate the frozen candle stop on the broker grid before translating a
-    # bid-chart SELL stop to the broker's Ask-trigger level.
-    raw_sl = grid.price(grid.index(d.raw_sl, side == -1))
+    # Preserve the selected trigger's original stop as the baseline. Paired
+    # entries may tighten it to the confirmed Hull-line intersection only.
+    wick_sl = grid.price(grid.index(d.raw_sl, side == -1))
+    raw_sl = wick_sl
+    cross_region_raw_stop = None
+    cross_region_action = None
+    if d.paired:
+        if d.cross_price is None or not math.isfinite(d.cross_price):
+            raise Block("cross_region_unavailable")
+        if not getattr(d, "intrabar", False) and side * (d.close - d.cross_price) <= 0:
+            raise Block("cross_region_close_invalidated")
+        if getattr(d, "intrabar", False) and (
+            d.trigger is None or side * (d.trigger.bid - d.cross_price) <= 0
+        ):
+            raise Block("cross_region_wrong_side_or_too_close")
+        cross_region_raw_stop = grid.price(grid.index(d.cross_price, side == -1))
+        if (
+            side * (entry - cross_region_raw_stop)
+            < max(grid.gap, grid.tick) - grid.tick * 1e-6
+        ):
+            raise Block("cross_region_wrong_side_or_too_close")
+        tighter = max if side == 1 else min
+        raw_sl = tighter(wick_sl, cross_region_raw_stop)
+        cross_region_action = (
+            "cross_region_tightened"
+            if raw_sl == cross_region_raw_stop and cross_region_raw_stop != wick_sl
+            else "existing_base_stop_retained"
+        )
     if d.stop_tick_size is not None and (
-        grid.tick != d.stop_tick_size or raw_sl != d.raw_sl
+        grid.tick != d.stop_tick_size or wick_sl != d.raw_sl
     ):
         raise Block(
             "cross_candle_stop_grid_changed"
@@ -273,13 +302,29 @@ def protected_prices(d, p, grid, bid, ask):
     dist = max(grid.gap, grid.tick)
     if sl <= 0 or side * (mark - sl) < dist - grid.tick * 1e-6:
         raise Block("initial_stop_breached_or_too_close")
-    return entry, mark, sl, dist, raw_sl, buffer
+    return (
+        entry,
+        mark,
+        sl,
+        dist,
+        raw_sl,
+        buffer,
+        cross_region_raw_stop,
+        cross_region_action,
+    )
 
 
 def make_plan(d, p, grid, bid, ask, cash):
-    entry, mark, sl, dist, raw_sl, stop_spread_buffer = protected_prices(
-        d, p, grid, bid, ask
-    )
+    (
+        entry,
+        mark,
+        sl,
+        dist,
+        raw_sl,
+        stop_spread_buffer,
+        cross_region_raw_stop,
+        cross_region_action,
+    ) = protected_prices(d, p, grid, bid, ask)
     side = d.side
     risk = -valid_cash(cash, side, p.lots, entry, sl)
     if risk <= 0:
@@ -303,6 +348,8 @@ def make_plan(d, p, grid, bid, ask, cash):
         stop_spread_buffer=stop_spread_buffer,
         raw_chart_sl=raw_sl,
         stop_spread_policy=STOP_SPREAD_POLICY,
+        cross_region_raw_stop=cross_region_raw_stop,
+        cross_region_action=cross_region_action,
     )
 
 

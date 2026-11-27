@@ -151,6 +151,8 @@ class IntrabarBook(PairBook):
             rebuilt.swing == r.swing
             and rebuilt.raw_sl == r.raw_sl
             and rebuilt.atr == r.atr
+            and rebuilt.cross_price == r.cross_price
+            and rebuilt.cross_fraction == r.cross_fraction
             and relation(cr, r.active_source, r.side) is True
             and self.gates[r.tf].apply(r, observe=False).entry_side == r.side
         )

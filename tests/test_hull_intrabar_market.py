@@ -3,6 +3,7 @@
 import json
 import sys
 from dataclasses import replace
+from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from random import Random
 from types import SimpleNamespace as NS
 
@@ -200,8 +201,28 @@ def test_first_real_intrabar_cross_and_same_second_recross_after_flat(
         assert r["frozen_swing_sl"] == cross_candle_stop(
             r["swing_price"], side, 0.1 * r["cross_atr"], 0.025
         )
+        tick = Decimal("0.025")
+        rounded_cross = float(
+            tick
+            * (Decimal(str(r["hull_cross_price"])) / tick).to_integral_value(
+                rounding=ROUND_FLOOR if side == 1 else ROUND_CEILING
+            )
+        )
+        expected_raw = (
+            max(r["frozen_swing_sl"], rounded_cross)
+            if side == 1
+            else min(r["frozen_swing_sl"], rounded_cross)
+        )
+        assert r["cross_region_raw_stop"] == rounded_cross
+        assert r["raw_chart_sl"] == expected_raw
+        assert r["cross_region_action"] == (
+            "cross_region_tightened"
+            if expected_raw == rounded_cross
+            and rounded_cross != r["frozen_swing_sl"]
+            else "existing_base_stop_retained"
+        )
         assert r["request"]["sl"] == pytest.approx(
-            r["frozen_swing_sl"] + (0.05 if side == -1 else 0)
+            expected_raw + (0.05 if side == -1 else 0)
         )
     state = tape.state()
     records = list(state["hull_lane_positions_v1"].values())
@@ -755,7 +776,7 @@ def test_two_recrosses_one_second_remain_separate_in_real_journal_import(
                 and not r["frozen_cross_sl"]
             )
         assert all(
-            float(r["initial_sl"]) - float(r["frozen_swing_sl"]) == pytest.approx(0.05)
+            float(r["initial_sl"]) - float(r["raw_chart_sl"]) == pytest.approx(0.05)
             for r in data["tickets"]
         )
         assert all(r["trigger_to_submit_ms"] == "0" for r in data["tickets"])

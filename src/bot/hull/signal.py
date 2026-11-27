@@ -6,6 +6,7 @@ is never appended to closed indicator/structure/stop history.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field, replace
 
 from bot.hull.bar import Bar
@@ -15,6 +16,7 @@ from .config import (
     M1_MODE,
     PAIR_MODE,
     PAIRS,
+    CROSS_REGION_POLICY,
     TF_NAME,
     Indicator,
 )
@@ -62,6 +64,8 @@ class Reading:
     )
 
     cross_bar: Bar | None = None  # immutable trigger OHLC; never a forming candle
+    cross_price: float | None = None  # selected Hull A/B line intersection
+    cross_fraction: float | None = None  # interpolation from preceding close to current sample
 
     intrabar = (
         False  # only a fully attested IntrabarReading can take the tick-entry route
@@ -151,6 +155,11 @@ class Reading:
             return "opposite_signal_exit_only"
         if self.trigger is not None:
             return "await_cross_candle_close"
+        if self.paired and self.cross_bar is not None:
+            if self.cross_price is None:
+                return "cross_region_unavailable"
+            if self.label * (self.close - self.cross_price) <= 0:
+                return "cross_region_close_invalidated"
         if self.side != self.label or self.raw_sl is None:
             return self.reason if self.reason != "ready" else "no_valid_initial_stop"
         return "ready"
@@ -213,6 +222,10 @@ class Reading:
             if self.stop_tick_size is not None
             else None,
             "frozen_cross_sl": self.raw_sl if self.stop_tick_size is not None else None,
+            "cross_region_policy": CROSS_REGION_POLICY if self.paired else None,
+            "hull_cross_price": self.cross_price if self.paired else None,
+            "cross_region_candle_close": self.close if self.paired and not self.trigger else None,
+            "cross_candle_raw_sl": self.raw_sl if self.paired and not self.trigger else None,
             "structure_phase": self.structure.phase,
             "entry_setup": setup if self.entry_side else None,
             "entry_side": self.entry_side,
@@ -373,6 +386,8 @@ class Hull:
         fast, mid, slow, smooth = self.b_weights
         x, y, z = fast.next(c.c, commit), mid.next(c.c, commit), slow.next(c.c, commit)
         b = smooth.next(3 * x - y - z if None not in (x, y, z) else None, commit)
+        prior_b = self.last_b
+        prior_a = {src: curve.last for src, curve in self.baselines.items()}
         curves = {
             src: curve.update(values[src], b, self.last_b, commit)
             for src, curve in self.baselines.items()
@@ -390,6 +405,27 @@ class Hull:
         # The crossover returned by each Baseline uses THAT curve's own prior A.
         # Never OR the outputs and never compare High now to Low on the prior bar.
         a, label = curves.get(active, (None, 0))
+        cross_price = cross_fraction = None
+        previous_a = prior_a.get(active)
+        if label and None not in (previous_a, prior_b, a, b):
+            before = prior_b - previous_a
+            after = b - a
+            denominator = after - before
+            if (
+                math.isfinite(before)
+                and math.isfinite(after)
+                and denominator != 0
+                and before * after < 0
+            ):
+                fraction = -before / denominator
+                if math.isfinite(fraction) and 0 < fraction < 1:
+                    cross_fraction = fraction
+                    cross_price = (
+                        previous_a + fraction * (a - previous_a)
+                        + prior_b + fraction * (b - prior_b)
+                    ) / 2
+                    if not math.isfinite(cross_price) or cross_price <= 0:
+                        cross_price = cross_fraction = None
         if commit:
             tr = (
                 c.h - c.l
@@ -450,5 +486,7 @@ class Hull:
             tick,
             stop_tick_size=self.tick_size if anchor is not None else None,
             cross_bar=c if anchor is not None else None,
+            cross_price=cross_price,
+            cross_fraction=cross_fraction,
         )
         return r if self.price_only else self.gate.apply(r, observe=observe_first)

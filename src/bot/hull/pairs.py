@@ -44,6 +44,11 @@ def pair_reading(raw, parent, view, detected, *, pairs=PAIRS):
 def select(rows):
     valid = [r for r in rows if r.entry_side]
     if not valid:
+        reasons = {r.entry_reason for r in rows}
+        if "cross_region_close_invalidated" in reasons:
+            return None, "cross_region_close_invalidated"
+        if "cross_region_unavailable" in reasons:
+            return None, "cross_region_unavailable"
         return None, "no_aligned_eligible_pair"
     if len({r.entry_side for r in valid}) > 1:
         return None, "conflicting_simultaneous_pairs"
@@ -175,12 +180,22 @@ class PairBook:
         if not item:
             return False
         raw, _ = item
-        if (raw.close_s, raw.label, raw.active_source, raw.raw_sl, raw.atr) != (
+        if (
+            raw.close_s,
+            raw.label,
+            raw.active_source,
+            raw.raw_sl,
+            raw.atr,
+            raw.cross_price,
+            raw.cross_fraction,
+        ) != (
             r.close_s,
             r.side,
             r.active_source,
             r.raw_sl,
             r.atr,
+            r.cross_price,
+            r.cross_fraction,
         ):
             return False
         c = child.h.prev
@@ -340,6 +355,9 @@ class PairBook:
                     "close_to_detect_ms": round((r.detected_s - stamp) * 1000, 3),
                     "parent_close_s": r.structure.closed_s,
                     "trigger_close_s": r.close_s,
+                    "cross_price": r.cross_price,
+                    "cross_fraction": r.cross_fraction,
+                    "signal_candle_close": r.close,
                     "reason": r.entry_reason,
                 }
                 for r in rows

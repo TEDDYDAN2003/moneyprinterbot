@@ -3,7 +3,7 @@
 from dataclasses import dataclass, fields
 from math import isfinite
 
-from .config import INTRA_ENTRY, INTRA_STOP
+from .config import CROSS_REGION_POLICY, INTRA_ENTRY, INTRA_STOP
 from .orders import cross_candle_stop
 from .signal import Reading
 from .structure import Pivot
@@ -38,6 +38,10 @@ class IntrabarReading(Reading):
             return "pair_structure_disagrees"
         if self.a is None or self.b is None or not self.label * (self.b - self.a) > 0:
             return "intrabar_cross_unverified"
+        if self.cross_price is None:
+            return "cross_region_unavailable"
+        if self.label * (q.bid - self.cross_price) <= 0:
+            return "cross_region_wrong_side_or_too_close"
         pivot = self.swing
         if not (
             pivot
@@ -85,6 +89,10 @@ class IntrabarReading(Reading):
             "swing_bar_s": self.anchor_s,
             "swing_known_s": self.swing.known_s if self.swing else None,
             "frozen_swing_sl": self.raw_sl,
+            "cross_region_policy": CROSS_REGION_POLICY,
+            "hull_cross_price": self.cross_price,
+            "cross_region_candle_close": None,
+            "cross_candle_raw_sl": None,
             "trigger_bid": self.trigger.bid,
             "trigger_ask": self.trigger.ask,
             "origin_bar_end_s": self.close_s,

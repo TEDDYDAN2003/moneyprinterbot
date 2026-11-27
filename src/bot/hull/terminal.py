@@ -18,6 +18,7 @@ from . import retest
 from .config import (
     BATCH_ENTRY_POLICY,
     COUNTS,
+    CROSS_REGION_POLICY,
     EXECUTION_INFO,
     INTRA_ENTRY,
     INTRA_QUOTE,
@@ -463,6 +464,7 @@ def run(
             "new_ticket_stop_policy": INTRA_STOP
             if live_pair
             else EXECUTION_INFO[h.execution_mode][1],
+            "cross_region_stop_policy": CROSS_REGION_POLICY if paired else None,
             "stop_spread_policy": STOP_SPREAD_POLICY,
             "live_cross_role": "paired_market_entry_and_protection"
             if live_pair
