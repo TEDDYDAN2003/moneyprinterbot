@@ -26,7 +26,7 @@ def test_template_is_for_the_actual_demo_desk():
         ("XAUUSD",),
     )
     assert (
-        conf.hull.entry_timing == "confirmed_cross_next_bar"
+        conf.hull.effective_timing == "intrabar_cross"
         and conf.hull.indicator.stop == "cross_candle"
     )
     assert validate_config({"hull": raw["hull"]}).run.mode == "paper"
@@ -121,7 +121,7 @@ def test_retained_desktop_commands_route_only_to_dynamic_scanner(cmd, monkeypatc
     assert (
         cfg["run"]["mode"] == "paper"
         and h.indicator.stop == "cross_candle"
-        and h.entry_timing == "confirmed_cross_next_bar"
+        and h.effective_timing == "intrabar_cross"
     )
     assert (lanes, tuple(selection), selection["XAUUSD"].lots) == (
         (10,),

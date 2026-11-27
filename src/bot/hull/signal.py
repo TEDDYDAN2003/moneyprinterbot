@@ -63,6 +63,14 @@ class Reading:
 
     cross_bar: Bar | None = None  # immutable trigger OHLC; never a forming candle
 
+    intrabar = (
+        False  # only a fully attested IntrabarReading can take the tick-entry route
+    )
+
+    @property
+    def gate_stamp(self):
+        return self.close_s
+
     @property
     def paired(self):
         return self.trigger_tf is not None and (
@@ -236,7 +244,7 @@ class FirstCrossGate:
         return tuple(self.record.get(k) for k in ("epoch", "bar", "waived_from"))
 
     def apply(self, r, *, observe):
-        if r.trigger is not None:
+        if r.trigger is not None and not r.intrabar:
             return r  # raw exits only; never arm, waive or spend a confirmed-entry reservation
         s = r.structure
         epoch, known = s.epoch, self.record.get("epoch")
@@ -272,7 +280,7 @@ class FirstCrossGate:
         # into a trade on another tick, on its close or during a history reload.
         # The journal marker permits re-verification of the same waived signal,
         # never a waiver without matching confirmed structural evidence.
-        first = bar is None or r.close_s == bar
+        first = bar is None or r.gate_stamp == bar
         waive = (
             not older
             and first
@@ -285,7 +293,7 @@ class FirstCrossGate:
         )
         skip = older or (self.skip_first and first and not waive)
         if observe and not older and bar is None:
-            self.record["bar"] = r.close_s
+            self.record["bar"] = r.gate_stamp
             if waive:
                 self.record["waived_from"] = s.failed_counter_mss_s
         return replace(r, skip_after_mss=skip, waived_first_cross=waive)

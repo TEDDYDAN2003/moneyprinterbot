@@ -12,6 +12,7 @@ SESSIONS = (
     ("New York", "America/New_York", 8, 17),
 )
 REASON_LABELS = {
+    "intrabar_pair_swing": "Dynamic Hull · live trigger cross with structural stop",
     "direct_retest_limit": "Dynamic Hull · direct pullback limit",
     "paired_structure_cross": "Dynamic Hull · aligned parent and trigger cross",
     "m1_parent_structure_cross": "Dynamic Hull · M1 close / parent structure",
@@ -28,6 +29,7 @@ REASON_LABELS = {
     "sell_above_bull_bos": "SELL · above bullish BOS",
 }
 REASON_NOTES = {
+    "intrabar_pair_swing": "The forming trigger Hull crossed with both closed structures aligned. The stop used a previously confirmed swing on the trigger chart; the entry tick is not a candle close.",
     "direct_retest_limit": "A broker opening deal matched the closed pair and its previously placed candle-relative limit. A pending acknowledgement is not a fill.",
     "paired_structure_cross": "The trigger Hull crossed on its own completed candle, in the direction of both its own and its parent’s confirmed structure. Other charts do not vote.",
     "m1_parent_structure_cross": "A completed M1 Hull cross agreed with the owning parent’s closed structure. No parent Hull cross or continuation BOS was required.",

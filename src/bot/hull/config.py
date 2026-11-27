@@ -43,6 +43,10 @@ LIVE_SPREAD_V1 = "sell_ask_stop_with_live_spread_buffer_v1"  # saved 2c460e2 tic
 STOP_SPREAD_POLICY = "sell_ask_entry_only_exact_risk_v2"
 DYNAMIC_HULL_LENGTH = 16  # shared base period for the active scanner
 CLOSE_TIMING = "confirmed_cross_next_bar"
+INTRABAR = "intrabar_cross"
+INTRA_ENTRY = "intrabar_pair_structure_cross_v1"
+INTRA_STOP = "confirmed_trigger_range_hl_lh_v1"
+INTRA_QUOTE = "first_verified_cross_tick_v1"
 M1_MODE = "m1_parent_structure"
 M1_STOP = "confirmed_m1_cross_candle_wick_v1"
 M1_POLICY = "m1_close_parent_structure_single_batch_v1"
@@ -135,7 +139,7 @@ class HullConfig(Strict):
     execution_mode: Literal[
         "parent_close", "m1_parent_structure", "paired_structure"
     ] = "parent_close"
-    entry_timing: Literal["confirmed_cross_next_bar"] = CLOSE_TIMING
+    entry_timing: Literal["confirmed_cross_next_bar", "intrabar_cross", "by_route"] = CLOSE_TIMING
     eligible_timeframes: tuple[str, ...] = ()  # no default trading authorization
     entry_route: Literal["market_next_quote", "direct_retest_limit"] = (
         "market_next_quote"
@@ -153,6 +157,18 @@ class HullConfig(Strict):
     magic: int = Field(26111825, gt=0, lt=2**31)
     enabled: tuple[str, ...] = ("XAUUSD",)
     symbols: dict[str, Profile] = Field(min_length=1)
+
+    @property
+    def effective_timing(self):
+        # Old private YAML (including an omitted clock) keeps its old behavior.
+        # The shipped template explicitly selects the route-aware clock.
+        if self.entry_timing == "by_route":
+            return (
+                INTRABAR
+                if self.execution_mode == PAIR_MODE and self.entry_route != RETEST
+                else CLOSE_TIMING
+            )
+        return self.entry_timing
 
     @property
     def new_ticket_breakeven_policy(self) -> str:
@@ -210,6 +226,22 @@ class HullConfig(Strict):
         st = NATIVE_TF.get(self.indicator.structure_timeframe)
         if self.eligible_timeframes:
             self.lanes()  # reject an incompatible allowlist even before terminal initialization
+        if self.effective_timing == INTRABAR:
+            if (
+                self.execution_mode != PAIR_MODE
+                or self.entry_route != "market_next_quote"
+            ):
+                raise ValueError(
+                    "intrabar_cross requires paired_structure and market_next_quote; retest limits require confirmed timing"
+                )
+            supported = {5: {3, 4}, 10: {5, 8}, 15: {10, 12}}
+            if any(
+                p not in supported or c not in supported[p]
+                for p, c in self.pairs.items()
+            ) or any(
+                PAIR_FRAMES[f] not in self.pairs for f in self.eligible_timeframes
+            ):
+                raise ValueError("Unsupported or missing intrabar parent/trigger mapping")
         if self.entry_route == RETEST and self.execution_mode != PAIR_MODE:
             raise ValueError("direct_retest_limit requires paired_structure")
         if self.execution_mode == PAIR_MODE and st:

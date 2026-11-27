@@ -154,6 +154,7 @@ def tape(
     mp.setitem(sys.modules, "MetaTrader5", mt)
     scanner_clock(mp, now, pause)
     cfg = load_yaml(ROOT / "config.yaml")
+    cfg["hull"]["entry_timing"] = "confirmed_cross_next_bar"  # exercise the retained closed route
     cfg["run"]["mode"] = "demo"
     if route:
         cfg["hull"]["entry_route"] = route
@@ -525,6 +526,7 @@ def test_one_coherent_bid_market_and_production_structure_depth(tmp_path, monkey
         monkeypatch, lambda: clock[0], lambda _: clock.__setitem__(0, stamp + 0.125)
     )
     cfg = load_yaml(ROOT / "config.yaml")
+    cfg["hull"]["entry_timing"] = "confirmed_cross_next_bar"  # exercise the retained closed route
     cfg["run"]["mode"] = "demo"
     h = HullConfig.model_validate(cfg["hull"])
     assert h.indicator.swing_len == 3
@@ -626,6 +628,7 @@ def test_restart_requires_compatible_manager_and_never_replays(
     mt, _, _, _ = tape(tmp_path, monkeypatch)
     assert len(mt.requests) == 4
     cfg = load_yaml(ROOT / "config.yaml")
+    cfg["hull"]["entry_timing"] = "confirmed_cross_next_bar"  # exercise the retained closed route
     cfg["run"]["mode"] = "demo"
     cfg["hull"]["indicator"]["swing_len"] = 1
     if change in ("legacy", "m1"):
@@ -865,6 +868,7 @@ def test_occupied_symbol_never_stacks_other_owner_and_does_not_fall_back(hull_de
         update={
             "eligible_timeframes": ("M5", "M10", "M15"),
             "execution_mode": PAIR_MODE,
+            "entry_timing": "confirmed_cross_next_bar",
         }
     )
     p = NS(

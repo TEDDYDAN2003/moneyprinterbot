@@ -5,6 +5,7 @@ and position are reconciled. Legacy/unknown tickets are NEVER assigned by guess.
 """
 
 from .config import PAIRS
+from .intrabar_guard import valid_origin
 from .ladder_desk import opened_ms
 
 
@@ -25,12 +26,21 @@ class Owners:
         self.book = state.setdefault("hull_lane_positions_v1", {})
         self.pairs = pairs
 
-    def bind(self, p, tf, *, minute_source=None, policy_key=None, pair_child=None):
+    def bind(self, p, tf, *, minute_source=None, policy_key=None, pair_child=None, origin=None):
         record = fingerprint(p) | {"tf": int(tf)}
         if pair_child is not None:
             if self.pairs.get(tf) != pair_child or minute_source is not None:
                 return False
             record.update(trigger_tf=pair_child, pair_policy_key=policy_key)
+        if origin is not None:
+            if (
+                not valid_origin(
+                    origin, pair_child, 1 if p.type == 0 else -1, record["opened_msc"]
+                )
+                or origin["status"] != "watch"
+            ):
+                return False
+            record["intrabar_origin"] = dict(origin)
         if minute_source is not None:
             record.update(
                 trigger_tf=1, m1_source=minute_source, m1_policy_key=policy_key

@@ -21,7 +21,7 @@ sessions:                           # additional entry-only blackouts for config
 hull:
   execution_mode: paired_structure  # both the parent and its own trigger must agree
   eligible_timeframes: [M5, M10, M15]  # native parent -> trigger: 5->3, 10->5, 15->10
-  entry_timing: confirmed_cross_next_bar  # entries on fresh post-close quotes only; live crosses still protect
+  entry_timing: by_route  # paired market: intrabar_cross; direct retest and legacy modes: confirmed_cross_next_bar
   entry_route: market_next_quote  # alternative: direct_retest_limit; preflight & observe the chosen route
   retest_fraction: 0.20  # fraction of the body or near wick, measured from the trigger close
   retest_atr_cap: 0.10  # maximum pullback in units of the closed trigger ATR
@@ -36,8 +36,8 @@ hull:
     structure_timeframe: null  # Pine 'Chart': each signal lane's own native timeframe
     exit_opposite: true     # mandatory raw opposite exit, before entry gates
     exit_on_mss: true  # confirmed shift flattens only its symbol/timeframe
-    stop: cross_candle  # completed cross candle low (BUY) / high (SELL), at least one trade tick beyond
-    swing_len: 3          # market structure only; not the stop anchor
+    stop: cross_candle  # closed-mode stop; paired intrabar market uses the confirmed child HL/LH with the same cushion
+    swing_len: 3          # confirmed pivot depth, including the intrabar trigger-range HL/LH
     atr_length: 14
     atr_buffer: 0.1
     extra_pips: 0

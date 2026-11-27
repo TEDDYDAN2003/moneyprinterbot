@@ -9,7 +9,7 @@ assets = Path(__file__).resolve().parent
 root = assets.parent
 sys.path.insert(0, str(root))
 from hull_analytics import REASON_LABELS, REASON_NOTES, SESSIONS
-from ledger import FIELDS
+from ledger import FIELDS, SWING_SHARED
 
 pack = {"fields": FIELDS}
 policy = {"sessions": SESSIONS, "labels": REASON_LABELS, "notes": REASON_NOTES}
@@ -17,7 +17,7 @@ for k in ("tickets", "setups"):
     with (root / "examples" / (k + ".csv")).open(encoding="utf-8-sig", newline="") as f:
         rows = list(csv.DictReader(f))
         assert rows and all(r["account_key"] == "SAMPLE" for r in rows)
-        pack[k] = [[r[x] for x in FIELDS] for r in rows]
+        pack[k] = [[r.get(x, "") if x in (*SWING_SHARED, "trigger_to_submit_ms") else r[x] for x in FIELDS] for r in rows]
 
 
 def js(obj):

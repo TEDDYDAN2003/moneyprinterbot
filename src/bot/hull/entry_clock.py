@@ -45,24 +45,24 @@ class QuoteCheck:
             "quote_too_old",
         )
 
-    def audit(self, tf):
+    def audit(self, tf, *, live=None):
         try:
             tick_utc = utc(self.tick_msc / 1000) if self.tick_msc is not None else None
         except (OverflowError, OSError, ValueError):
             tick_utc = (
                 None  # retain the raw number even for a nonsensical broker timestamp
             )
-        end = self.signal
+        end = live.close_s if live else self.signal
         return {
-            "entry_timing": "confirmed_close",
+            "entry_timing": "intrabar_cross" if live else "confirmed_close",
             "trigger_utc": utc(self.signal),
             "trigger_msc": round(self.signal * 1000),
             "bar_open_utc": utc(end - tf * 60),
             "bar_end_utc": utc(end),
-            "signal_close_utc": utc(self.signal),
+            "signal_close_utc": None if live else utc(self.signal),
             "checked_at_utc": utc(self.checked),
             "checked_unix_s": self.checked,
-            "deadline_utc": utc(self.signal + self.entry_limit),
+            "deadline_utc": utc(min(end, self.signal + self.entry_limit) if live else self.signal + self.entry_limit),
             "tick_time_msc": self.tick_msc,
             "tick_utc": tick_utc,
             "bid": self.bid,
@@ -92,6 +92,7 @@ def check_quote(
     ask,
     *,
     monotonic_expired=False,
+    intrabar=False,
 ):
     """Only confirmed labels may wait for a missing, pre-close or aged-out first tick.
 
@@ -108,7 +109,7 @@ def check_quote(
     elif ms / 1000 > now + CLOCK_SKEW_TOLERANCE_S:
         status = "quote_clock_ahead"
     elif ms / 1000 < signal:
-        status = "quote_precedes_signal_close"
+        status = "quote_precedes_cross_tick" if intrabar else "quote_precedes_signal_close"
     elif now - ms / 1000 > limits.max_quote_age_s:
         status = "quote_too_old"
     else:

@@ -41,6 +41,9 @@ class Structure:
         None  # origin of counter-leg rejected by this epoch's MSS
     )
 
+    # Last classed HL in this bullish range / LH in this bearish range. Never a forming wick.
+    range_swing: Pivot | None = None
+
     @property
     def epoch(self):
         return self.closed_s if abs(self.event_code) == 2 else self.last_mss_s
@@ -64,6 +67,7 @@ class Structure:
 class InternalStructure:
     def __init__(self, depth):
         self.depth = depth
+        self.swing_floor = 0
         self.history = deque(maxlen=2 * depth + 1)
         self.view = Structure()
         self.hi = self.lo = self.last_h = self.last_l = None
@@ -222,6 +226,16 @@ class InternalStructure:
             failed = prior.epoch if established == d and prior.bias == -d else None
         elif abs(ev) in (1, 3):
             established = d
+        swing = prior.range_swing
+        if not contiguous or prior.bias != d:
+            swing, self.swing_floor = None, bar.t
+        # The classifier above keeps the lowest confirmed pullback low, or the
+        # highest confirmed pullback high, until the next directional swing.
+        pivot = pl if d == 1 and lc == 1 else ph if d == -1 and hc == -1 else None
+        if pivot and pivot.bar_s >= self.swing_floor:
+            swing = pivot
+        if swing and d * (bar.c - swing.price) <= 0:
+            swing = None  # broken support/resistance is not a new stop anchor
         self.view = Structure(
             closed,
             d,
@@ -237,5 +251,6 @@ class InternalStructure:
             closed if abs(ev) == 2 else prior.epoch,
             established,
             failed,
+            swing,
         )
         return self.view

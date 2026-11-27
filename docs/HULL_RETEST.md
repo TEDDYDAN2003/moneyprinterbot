@@ -36,7 +36,7 @@ Slow requests **10** when funded, medium **4 or 3**, fast **7 or 6**. Existing c
    retest_atr_cap: 0.10
    ```
 
-   Missing `entry_route` still means `market_next_quote`. The retest route is invalid with M1/legacy execution. The checked-in template is **paper**, with market entry as its default.
+   Use `entry_timing: by_route` or `confirmed_cross_next_bar` for this closed-candle route. Explicit `intrabar_cross` is market-only and is rejected here. Missing `entry_route` still means `market_next_quote`. The retest route is invalid with M1/legacy execution. The checked-in template is **paper**, with market entry as its default.
 3. In the bot root, inspect the explicit profiles in the launcher scripts, then use the same profiles for **read-only** preflight and observation:
 
    ```powershell

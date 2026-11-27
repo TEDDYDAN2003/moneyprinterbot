@@ -50,6 +50,12 @@ MINUTE_TAG = re.compile(r"m(5|15|30|45)_(\d{9,11})_([1-9]\d{0,3})\Z")
 LEGACY_PAIRS = {5: 3, 10: 5, 15: 10}
 PAIR_LANES = {*LEGACY_PAIRS.items(), (5, 4), (10, 8), (15, 12)}
 PAIR_TAG = re.compile(r"[pr](5|10|15)x(3|4|5|8|10|12)_(\d{9,11})_([1-9]\d{0,3})\Z")
+TICK_PAIR_TAG = re.compile(
+    r"q(5|10|15)x(3|4|5|8|10|12)_([1-9]\d{11,13})_([1-9]\d{0,3})\Z"
+)
+TICK_PAIR_ENTRY = "intrabar_pair_structure_cross_v1"
+TICK_PAIR_STOP = "confirmed_trigger_range_hl_lh_v1"
+SWING_SHARED = ("swing_kind", "swing_price", "swing_bar_utc", "swing_known_utc", "frozen_swing_sl", "trigger_source")
 PAIR_STOP = "confirmed_pair_trigger_candle_wick_v1"
 PAIR_ENTRY = "closed_pair_structure_cross_v1"
 RETEST_FIELDS = (
@@ -73,7 +79,7 @@ CROSS_SHARED = (
     "mss_skip_exception",
 )
 SEND_FIELDS = ("send_quote_utc", "send_bid", "send_ask")
-LOG_FORMAT = 8  # incremental index: replay available demo.jsonl once, do not reset broker history
+LOG_FORMAT = 9  # incremental index: replay available demo.jsonl once, do not reset broker history
 CASH = ("gross_profit", "commission", "swap", "fee")
 FIELDS = [
     "schema_version",
@@ -123,6 +129,8 @@ FIELDS = [
     *SEND_FIELDS,
     "trigger_timeframe",
     *PAIR_SHARED,
+    *SWING_SHARED,
+    "trigger_to_submit_ms",
     *RETEST_FIELDS,
 ]
 NUMERIC = {
@@ -147,6 +155,7 @@ NUMERIC = {
     "retest_limit",
     "cross_candle_close",
     "submit_to_fill_ms",
+    "swing_price", "frozen_swing_sl", "trigger_to_submit_ms",
 }
 REASONS = {
     0: "Desktop",
@@ -251,6 +260,7 @@ def db_open(path):
       CREATE TABLE IF NOT EXISTS cross_receipts(id TEXT PRIMARY KEY, wick TEXT NOT NULL, sl TEXT NOT NULL,
           waiver TEXT NOT NULL, send_ms INTEGER NOT NULL, bid TEXT NOT NULL, ask TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS retest_deals(id TEXT PRIMARY KEY,evidence TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS swing_receipts(id TEXT PRIMARY KEY,evidence TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS pair_context(id TEXT PRIMARY KEY,parent_close INTEGER NOT NULL,bias INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS labels(symbol TEXT,tf INTEGER,signal INTEGER,side TEXT,model TEXT,
           PRIMARY KEY(symbol,tf,signal,side));
@@ -330,8 +340,8 @@ def tag(s):
 def _lane_tag(s):
     text = str(s or "")
     child = None
-    if text.startswith(("p", "r")):
-        m = PAIR_TAG.fullmatch(text)
+    if text.startswith(("p", "r", "q")):
+        m = (TICK_PAIR_TAG if text.startswith("q") else PAIR_TAG).fullmatch(text)
         if not m:
             return None
         tf, child, stamp, leg = map(int, m.groups())
@@ -346,7 +356,7 @@ def _lane_tag(s):
         if not m:
             return None
         tf, stamp, leg = map(int, m.groups())
-    maximum = 32_503_680_000 * (1000 if text.startswith("i") else 1)
+    maximum = 32_503_680_000 * (1000 if text.startswith(("i", "q")) else 1)
     return (
         (tf, stamp, leg, child)
         if tf in NATIVE_MINUTES and 0 < stamp < maximum
@@ -454,6 +464,115 @@ def verified_entry_sl(ev, sign, raw, requested, bid, ask, *, pending=False):
             )
         )
     )
+
+
+def index_swing_receipt(c, ev, vals, ref):
+    """A deal+leg match, not a nearby signal. Never fill wick or close-only fields."""
+    did, _, text, side, requested, _ = vals
+    parent, stamp, leg, child = ref
+    sign = 1 if side == "BUY" else -1
+    end = ev["origin_bar_end_s"]
+    start = end - child * 60
+    bar, known = ev["swing_bar_s"], ev["swing_known_s"]
+    parent_end = ev["parent_structure_close_s"]
+    swing, raw, tick, bid, ask, qb, qa = (
+        dec(ev[k])
+        for k in (
+            "swing_price",
+            "frozen_swing_sl",
+            "stop_tick_size",
+            "send_bid",
+            "send_ask",
+            "trigger_bid",
+            "trigger_ask",
+        )
+    )
+    ms, elapsed = ev["send_tick_time_msc"], dec(ev["trigger_to_submit_ms"])
+    entry, age = dec(ev["max_entry_age_s"]), dec(ev["max_quote_age_s"])
+    waiver = ev.get("mss_skip_exception") or ""
+    if not (
+        text.startswith("q")
+        and ev["entry_policy"] == TICK_PAIR_ENTRY
+        and ev["initial_stop_policy"] == TICK_PAIR_STOP
+        and ev["entry_timing"] == "intrabar_cross"
+        and ev.get("signal_close_utc") is None
+        and not any(
+            k in ev
+            for k in ("cross_candle_wick", "frozen_cross_sl", "close_to_submit_ms")
+        )
+        and ev["tf"] == ev["parent_tf"] == parent
+        and ev["trigger_tf"] == child
+        and (parent, child) in PAIR_LANES
+        and ev["leg"] == leg
+        and ev.get("retcode") in (10009, 10010)
+        and ev["entry_side"]
+        == ev["parent_structure_bias"]
+        == ev["trigger_structure_bias"]
+        == sign
+        and ev["trigger_msc"] == dec(ev["signal"]) * 1000 == stamp
+        and all(type(t) is int for t in (end, bar, known, parent_end, ms))
+        and 0 < bar < known <= start == ev["trigger_structure_close_s"]
+        and start * 1000 <= stamp <= ms < end * 1000
+        and 0 <= stamp - parent_end * 1000 < parent * 60000
+        and 0 < entry <= 30
+        and 0 < age <= 15
+        and 0 <= ms - stamp <= elapsed <= entry * 1000
+        and elapsed - (ms - stamp) <= age * 1000
+        and stamp + elapsed < end * 1000
+        and (ms != stamp or (qb, qa) == (bid, ask))
+        and 0 < qb <= qa
+        and 0 < bid <= ask
+        and sign * (qb - swing) > 0
+        and sign * (bid - swing) > 0
+        and ev["swing_kind"] == ("HL" if sign == 1 else "LH")
+        and ev["trigger_source"]
+        in ("low", "high", "open", "close", "hlc3", "hl2", "ohlc4")
+        and min(raw, swing, tick) > 0
+        and sign * (swing - raw) >= tick
+        and raw % tick == 0
+        and type(ev["opening_order"]) is int
+        and ev["opening_order"] > 0
+        and 0 < dec(ev["fill_volume"]) <= dec(ev["request"]["volume"])
+        and dec(ev["price"]) > 0
+        and ev["stop_spread_policy"] == "sell_ask_entry_only_exact_risk_v2"
+        and verified_entry_sl(ev, sign, raw, dec(requested), bid, ask)
+        and waiver in ("", "failed_counter_mss_return")
+        and c.execute("SELECT * FROM receipts WHERE id=?", (did,)).fetchone() == vals
+    ):
+        raise ValueError("Inconsistent live paired swing receipt")
+    evidence = {
+        "initial_stop_policy": TICK_PAIR_STOP,
+        "mss_skip_exception": waiver,
+        "swing_kind": ev["swing_kind"],
+        "swing_price": plain(swing),
+        "swing_bar_utc": iso(bar * 1000),
+        "swing_known_utc": iso(known * 1000),
+        "frozen_swing_sl": plain(raw),
+        "trigger_source": ev["trigger_source"],
+        "trigger_bid": plain(qb),
+        "trigger_ask": plain(qa),
+        "signal_bar_open_utc": iso(start * 1000),
+        "signal_bar_end_utc": iso(end * 1000),
+        "parent_structure_close_utc": iso(parent_end * 1000),
+        "confirmed_pair_bias": "bullish" if sign == 1 else "bearish",
+        "send_quote_utc": iso(ms),
+        "send_bid": plain(bid),
+        "send_ask": plain(ask),
+    }
+    evidence["trigger_to_submit_ms"] = plain(elapsed)
+    value = enc(
+        {
+            "fields": evidence,
+            "order": str(ev["opening_order"]),
+            "price": plain(ev["price"]),
+            "volume": plain(ev["fill_volume"]),
+            "send_ms": ms,
+        }
+    )
+    old = c.execute("SELECT evidence FROM swing_receipts WHERE id=?", (did,)).fetchone()
+    if old and old[0] != value:
+        value = "null"  # contradictory proof never becomes authoritative on replay
+    c.execute("INSERT OR REPLACE INTO swing_receipts VALUES(?,?)", (did, value))
 
 
 def index_cross_receipt(c, ev, vals, ref):
@@ -829,7 +948,10 @@ def import_log(c, path, magic):
                         c.execute(
                             "INSERT OR IGNORE INTO receipts VALUES(?,?,?,?,?,?)", vals
                         )
-                        index_cross_receipt(c, ev, vals, parsed)
+                        if q["comment"].startswith("q"):
+                            index_swing_receipt(c, ev, vals, parsed)
+                        else:
+                            index_cross_receipt(c, ev, vals, parsed)
                 elif (
                     typ == "exit_request"
                     and ev.get("retcode") in (10009, 10010)
@@ -850,7 +972,7 @@ def import_log(c, path, magic):
                 elif typ in ("closed_label", "live_hull_cross") and ev.get(
                     "entry_side"
                 ) in (1, -1):
-                    if ev.get("entry_policy") == PAIR_ENTRY:
+                    if ev.get("entry_policy") in (PAIR_ENTRY, TICK_PAIR_ENTRY):
                         continue  # paired setup evidence is joined by receipt/deal, not proximity to a label
                     tf, end = int(ev["tf"]), int(ev["close_s"])
                     side = "BUY" if ev["entry_side"] == 1 else "SELL"
@@ -895,10 +1017,10 @@ def import_log(c, path, magic):
                     tf = int(ev["tf"])
                     stamp = int(
                         ev["trigger_msc"]
-                        if ev.get("entry_timing") == "live_hull_cross"
+                        if ev.get("entry_timing") in ("live_hull_cross", "intrabar_cross")
                         else ev["close_s"]
                     )
-                    if ev.get("entry_policy") == PAIR_ENTRY:
+                    if ev.get("entry_policy") in (PAIR_ENTRY, TICK_PAIR_ENTRY):
                         child = ev.get("trigger_tf")
                         if (tf, child) not in PAIR_LANES:
                             raise ValueError("Invalid finished pair")
@@ -1239,6 +1361,7 @@ def make_views(c):
         )
         if did in receipts
     }
+    swings = {did: json.loads(blob) for did, blob in c.execute("SELECT id,evidence FROM swing_receipts WHERE evidence != 'null'")}
     contexts = {
         did: (iso(end * 1000), "bullish" if sign == 1 else "bearish")
         for did, end, sign in c.execute("SELECT * FROM pair_context")
@@ -1319,13 +1442,25 @@ def make_views(c):
                 tag_kinds.add(meta[1][0])
                 sources.add("Bot receipt")
                 brackets.append((meta[3], meta[4]))
+                swing = swings.get(d["id"])
+                if (
+                    k
+                    and swing
+                    and meta[1].startswith("q")
+                    and d["magic"] == who["magic"]
+                    and d["ms"] >= swing["send_ms"]
+                    and d["order"] == swing["order"]
+                    and (d["price"], d["volume"]) == (swing["price"], swing["volume"])
+                ):
+                    proofs.append(swing["fields"])
                 if k and d["id"] in cross:
                     proofs.append(cross[d["id"]])
         start = a["ms"]
         link = next(iter(refs)) if len(refs) == 1 and len(tag_kinds) == 1 else None
         is_minute = tag_kinds == {"m"}
         pending = tag_kinds == {"r"}
-        paired = tag_kinds == {"p"} or pending
+        tick_pair = tag_kinds == {"q"}
+        paired = tag_kinds == {"p"} or pending or tick_pair
         model = ""
         gid = ""
         r = None
@@ -1337,7 +1472,7 @@ def make_views(c):
             gid = f"{sy}|{lane}|{stamp}|{side}"
             model = (
                 (
-                    ("direct_retest_limit" if pending else "paired_structure_cross")
+                    ("direct_retest_limit" if pending else "intrabar_pair_swing" if tick_pair else "paired_structure_cross")
                     if len(proofs) == len(ins)
                     else ""
                 )
@@ -1419,7 +1554,7 @@ def make_views(c):
             if link:
                 is_live = stamp >= LIVE_KEY_MIN
                 r["entry_timing"] = (
-                    "live_hull_cross"
+                    "intrabar_pair_cross" if tick_pair else "live_hull_cross"
                     if is_live
                     else "confirmed_pair_retest_limit"
                     if pending
@@ -1445,6 +1580,13 @@ def make_views(c):
                                 r[k] = vs.pop()
                     r["signal_close_utc"] = r["signal_trigger_utc"]
                     bar_end = stamp
+                elif tick_pair:
+                    bar_end = None
+                    if len(proofs) == len(ins):
+                        for key in proofs[0]:
+                            vs = {proof[key] for proof in proofs}
+                            if len(vs) == 1:
+                                r[key] = vs.pop()
                 else:
                     bar_end, r["trigger_bid"], r["trigger_ask"] = live_triggers.get(
                         (sy, tf, stamp, side), (None, "", "")
@@ -1486,12 +1628,12 @@ def make_views(c):
             if not link:
                 unlinked += 1
         if link:
-            members[(sy, tf, child, stamp, side, "r" if pending else paired)].append(r)
+            members[(sy, tf, child, stamp, side, "r" if pending else "q" if tick_pair else paired)].append(r)
     missing = defaultdict(set)
     for did, (sy, comment, side, _, _) in receipts.items():
         ref = _lane_tag(comment)
         if ref and did not in seen_deals:
-            missing[(sy, ref[0], ref[3], ref[1], side, comment.startswith("p"))].add(
+            missing[(sy, ref[0], ref[3], ref[1], side, "q" if comment.startswith("q") else comment.startswith("p"))].add(
                 did
             )
     wait = 0
@@ -1561,7 +1703,7 @@ def make_views(c):
             or all(
                 x["setup_type"]
                 == (
-                    "direct_retest_limit" if paired == "r" else "paired_structure_cross"
+                    "direct_retest_limit" if paired == "r" else "intrabar_pair_swing" if paired == "q" else "paired_structure_cross"
                 )
                 for x in rs
             )
@@ -1597,6 +1739,7 @@ def make_views(c):
         shared = (
             *CROSS_SHARED,
             *PAIR_SHARED,
+            *(SWING_SHARED if paired == "q" else ()),
             *(RETEST_FIELDS[:-1] if paired == "r" else ()),
         )
         frozen = {tuple(x[k] for k in shared) for x in rs}

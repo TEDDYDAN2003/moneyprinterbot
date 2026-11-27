@@ -23,14 +23,15 @@ from bot.hull.hours import Hours
 from .config import (
     COUNTS,
     FIXED,
+    INTRABAR,
     LADDER,
     PAIR_MODE,
-    PAIRS,
     RETEST,
     TARGET_POLICY,
     TF_NAME,
 )
 from .entry_clock import FAST_POLL_S, WAITING, TimingBlock, check_quote, utc
+from .intrabar_guard import OriginGuards
 from .ladder import Protection, executable, inside
 from .ladder_desk import TicketLadders, opened_ms
 from .orders import (
@@ -134,6 +135,7 @@ class Desk:
         )
         self.exits = self.state.setdefault("opposite_exits", {})
         self.owners = Owners(state, pairs=h.pairs)
+        self.origins = OriginGuards(self)
         self.mss_book = state.setdefault("last_lane_mss_exit", {})
         self.retest = RetestDesk(self) if h.entry_route == RETEST else None
         if armed and self.retest is None and state.get("retest_batches_v1"):
@@ -199,7 +201,12 @@ class Desk:
             getattr(q, "bid", None),
             getattr(q, "ask", None),
             monotonic_expired=time.monotonic() > window.end_mono,
+            intrabar=d.intrabar,
         )
+        if d.intrabar and (
+            check.checked >= d.close_s or (check.tick_msc or 0) >= d.close_s * 1000
+        ):
+            raise Block("origin_candle_expired")
         if check.reason != "ready":
             # Even a missing quote cannot park a signal across the closing edge.
             gate.require(stage, decision=check.checked)
@@ -217,7 +224,7 @@ class Desk:
             verified = self.verify_signal(name, d, q)
             gate.require(stage, decision=check.checked, quote=check.tick_msc / 1000)
             if not verified:
-                raise Block("next_bar_quote_or_context_unverified")
+                raise Block("live_cross_or_context_unverified" if d.intrabar else "next_bar_quote_or_context_unverified")
             check = self._quote_clock(gate, window, q, stage)
         gate.require(stage, decision=check.checked, quote=check.tick_msc / 1000)
         if stage == "first_plan":
@@ -231,7 +238,7 @@ class Desk:
                 disposition="fresh_quote",
                 previous_wait=window.last_wait_reason,
                 **({"trigger_tf": d.candle_tf} if d.paired else {}),
-                **check.audit(d.candle_tf),
+                **check.audit(d.candle_tf, live=d if d.intrabar else None),
             )
         return q, check.checked
 
@@ -291,7 +298,7 @@ class Desk:
                 deal.symbol != name
                 or deal.entry
                 not in (mt.DEAL_ENTRY_OUT, mt.DEAL_ENTRY_OUT_BY, mt.DEAL_ENTRY_INOUT)
-                or deal.type != closing_type
+                or (not reading.intrabar and deal.type != closing_type)
             ):
                 continue
             # MT5 can assign a manual or server exit a different magic. Resolve the
@@ -309,7 +316,7 @@ class Desk:
             if not isinstance(ms, int) or ms <= 0:
                 raise Block("entry_deal_history_unavailable")
             if ms >= reading.signal_msc:
-                raise Block("same_side_batch_at_signal_close")
+                raise Block("prior_batch_not_flat_at_cross" if reading.intrabar else "same_side_batch_at_signal_close")
 
     def prepare(
         self, name, d, window, stage, expected=None, remaining=None, *, force_market=False
@@ -327,6 +334,12 @@ class Desk:
             raise Block("opposite_after_m1_cross")
         if self.mss_book.get(name, {}).get(str(d.tf), -1) >= d.signal_s:
             raise Block("confirmed_mss_exit")
+        if (
+            d.intrabar
+            and self.state.get("intrabar_flat_through_ms", {}).get(name, -1)
+            >= d.signal_msc
+        ):
+            raise Block("prior_batch_not_flat_at_cross")
         if any(
             x["symbol"] == name
             and (d.trigger_tf is not None or x.get("tf") in (None, d.tf))
@@ -518,6 +531,16 @@ class Desk:
             and p.price_open == x["open"]
         )
 
+    def _mark_flat_check(self, x):
+        if self.h.effective_timing == INTRABAR:
+            book = self.state.setdefault("intrabar_flat_through_ms", {})
+            name = x["symbol"]
+            rec = self.owners.book.get(str(x.get("identifier")))
+            moment = max(int(time.time() * 1000), x.get("last_tick", -1))
+            book[name] = max(book.get(name, -1), moment)
+            if rec and rec.get("intrabar_origin"):
+                rec["flat_verified_msc"] = moment
+
     def _service_exit(self, p, x):
         key = str(p.ticket)
         if not self.owned(p) or not self._matches_exit(p, x):
@@ -538,6 +561,7 @@ class Desk:
             after = self.mt.positions_get(ticket=p.ticket)
             if after is not None and not after:
                 self.exits.pop(key, None)
+                self._mark_flat_check(x)
                 self.persist()
                 self.emit(
                     "lane_exit_confirmed",
@@ -569,6 +593,15 @@ class Desk:
             or (reading.trigger is not None and now >= reading.close_s)
         ):
             return 0
+        if self.h.effective_timing == INTRABAR:
+            fences = self.state.setdefault(
+                "intrabar_parent_opposite_ms", {}
+            ).setdefault(name, {})
+            key = f"{reading.tf}:{reading.label}"
+            if fences.get(key, -1) >= reading.signal_msc:
+                return 0
+            fences[key] = reading.signal_msc
+            self.persist()
         return self._protect(name, reading.tf, reading.signal_msc, reading.label)
 
     def minute_fence(self, name, src, opposite):
@@ -736,7 +769,7 @@ class Desk:
         close = stamp // 1000
         ps = self.mt.positions_get() if self.armed else ()
         if ps is None:
-            if shift or child is not None:
+            if shift or child is not None or self.h.effective_timing == INTRABAR:
                 self.emit(
                     "lane_mss_await_inventory"
                     if shift
@@ -848,10 +881,20 @@ class Desk:
                     if child and self.h.pairs.get(tf) == child
                     else -1
                 )
-                if 0 < opened_ms(p) <= pairstamp:
+                parstamp = (
+                    self.state.get("intrabar_parent_opposite_ms", {})
+                    .get(p.symbol, {})
+                    .get(f"{tf}:{opp}", -1)
+                )
+                if self.origins.reserve(p):
+                    recovered = True
+                elif 0 < opened_ms(p) <= pairstamp:
                     self._reserve_exit(
                         p, tf, "opposite_pair_trigger_hull", pairstamp, child=child
                     )
+                    recovered = True
+                elif tf is not None and 0 < opened_ms(p) <= parstamp:
+                    self._reserve_exit(p, tf, "opposite_hull_label", parstamp)
                     recovered = True
                 elif src and 0 < opened_ms(p) <= m1stamp:
                     self._reserve_exit(p, tf, "opposite_m1_hull", m1stamp)
@@ -885,6 +928,7 @@ class Desk:
                 self.ladders.supervise(p, quotes, grids, plans)
         for key in set(self.exits) - active:
             pending = self.exits.pop(key)
+            self._mark_flat_check(pending)
             self.persist()
             self.emit(
                 "lane_exit_confirmed",
@@ -898,9 +942,18 @@ class Desk:
                 ),
                 ticket=int(key),
             )
-        if self.owners.prune(
-            {str(getattr(p, "identifier", p.ticket)) for p in ps}, time.time()
-        ):
+        active_ids = {str(getattr(p, "identifier", p.ticket)) for p in ps}
+        if self.h.effective_timing == INTRABAR:
+            # A broker SL/TP/manual closure first discovered on this very tick
+            # cannot turn an overlapping cross into an after-flat recross.
+            for key, rec in self.owners.book.items():
+                if (
+                    rec.get("intrabar_origin")
+                    and key not in active_ids
+                    and not rec.get("flat_verified_msc")
+                ):
+                    self._mark_flat_check(rec)
+        if self.owners.prune(active_ids, time.time()):
             self.persist()
         self.ladders.prune(active)
         if stale := set(goals) - active:
@@ -910,10 +963,20 @@ class Desk:
         self.last_service = time.monotonic()
 
     def finalize(
-        self, name, tf, plan, res, expected, *, minute_source=None, pair_child=None
+        self, name, tf, plan, res, expected, *, minute_source=None, pair_child=None, origin=None
     ):
         mt = self.mt
         self.account()
+        if (
+            origin
+            and res is not None
+            and res.retcode in (mt.TRADE_RETCODE_DONE, 10010)
+            and 0 < (getattr(res, "volume", None) or 0) < plan.lots - 1e-8
+        ):
+            # Do not top up or enroll a full-size ladder for a partial. Only an
+            # exact opening order + deal + position can inherit the tick guard.
+            self._bind_partial(name, tf, pair_child, origin, plan, res, expected)
+            return None, "uncertain_or_partial_fill"
         if (
             res is None
             or res.retcode != mt.TRADE_RETCODE_DONE
@@ -949,7 +1012,63 @@ class Desk:
             os,
             minute_source=minute_source,
             pair_child=pair_child,
+            origin=origin,
         )
+
+    def _bind_partial(self, name, tf, child, origin, plan, res, expected):
+        order, did = getattr(res, "order", 0), getattr(res, "deal", 0)
+        if not order or not did:
+            return
+        mt = self.mt
+        deals = mt.history_deals_get(ticket=did)
+        ps = mt.positions_get()
+        if deals is None or len(deals) != 1 or ps is None:
+            return
+        z = deals[0]
+        matching = [
+            p
+            for p in ps
+            if self.owned(p)
+            and p.symbol == name
+            and p.ticket not in expected
+            and order in (p.ticket, getattr(p, "identifier", p.ticket))
+            and getattr(p, "identifier", p.ticket) == z.position_id
+        ]
+        if (
+            len(matching) != 1
+            or z.ticket != did
+            or z.order != order
+            or z.entry != mt.DEAL_ENTRY_IN
+            or z.symbol != name
+            or z.magic != self.h.magic
+            or z.type != self.typ(plan.side)
+            or z.time_msc < origin["ms"]
+            or abs(z.volume - res.volume) > 1e-8
+        ):
+            return
+        p = matching[0]
+        if (
+            p.type == z.type
+            and p.price_open == z.price
+            and abs(p.volume - z.volume) <= 1e-8
+            and p.sl == plan.sl
+            and p.tp == plan.tp
+            and self.owners.lane(p) is None
+            and self.owners.bind(
+                p, tf, pair_child=child, origin=origin, policy_key=self.indicator_key
+            )
+        ):
+            self.open_lanes.add((name, tf))
+            self.persist()
+            self.emit(
+                "intrabar_partial_guarded",
+                symbol=name,
+                tf=tf,
+                trigger_tf=child,
+                ticket=p.ticket,
+                trigger_msc=origin["ms"],
+                volume=p.volume,
+            )
 
     def enroll_fill(
         self,
@@ -962,6 +1081,7 @@ class Desk:
         *,
         minute_source=None,
         pair_child=None,
+        origin=None,
         target_policy=TARGET_POLICY,
     ):
         mt = self.mt
@@ -980,6 +1100,7 @@ class Desk:
             minute_source=minute_source,
             policy_key=self.indicator_key,
             pair_child=pair_child,
+            origin=origin,
         ):
             return None, "lane_identity_not_reconciled"
         self.persist()
@@ -1094,6 +1215,43 @@ class Desk:
             return "execution_mode_mismatch"
         if not d.entry_side:
             return d.entry_reason
+        if d.intrabar != (self.h.effective_timing == INTRABAR):
+            return "entry_timing_mismatch"
+        if d.intrabar:
+            if (
+                self.verify_signal is None
+                or self.h.pairs.get(d.tf) != d.candle_tf
+                or d.detected_s is None
+                or self.retest
+                or d.cross_bar is not None
+            ):
+                return "intrabar_signal_unverified"
+            seen = self.state.setdefault("intrabar_reserved_ms", {})
+            if (
+                seen.get(name, -1) >= d.signal_msc
+                or self._live_reserved(name, d)
+                or self.state.get("pair_consumed", {}).get(name, -1) >= d.signal_s
+                or self.state.get("consumed", {}).get(name, -1) >= d.signal_s
+            ):
+                return "already_consumed"
+            seen[name] = d.signal_msc  # consume the episode, not the candle
+            self.state.setdefault("intrabar_origin_ends", {}).setdefault(name, {})[
+                f"{d.tf}:{d.candle_tf}"
+            ] = d.close_s
+            self.persist()
+            deadline = min(d.signal_s + self.lim.max_entry_age_s, d.close_s)
+            return self._attempt(
+                name,
+                FirstQuoteWindow(d, time.monotonic() + deadline - time.time(), raw_tf),
+            )
+        if (
+            d.paired
+            and self.state.get("intrabar_origin_ends", {})
+            .get(name, {})
+            .get(f"{d.tf}:{d.candle_tf}", -1)
+            >= d.close_s
+        ):
+            return "already_consumed"
         if self.retest and (reason := self.retest.blocked(name)):
             return reason
         if d.trigger_tf is not None:
@@ -1153,7 +1311,7 @@ class Desk:
         sent = 0
         recheck = None  # bounded *unsent* reprice per leg, never a send retry
         reprices = 0
-        flexible_quote = force_market or self.h.retest_market_fallback
+        flexible_quote = force_market or (self.h.retest_market_fallback and not d.intrabar)
         max_reprices = 10 if flexible_quote else 1
         try:
             while True:
@@ -1369,7 +1527,7 @@ class Desk:
                         ):
                             raise Block(why)
                         if (
-                            final_check.checked >= d.close_s + d.candle_tf * 60
+                            final_check.checked >= d.close_s + (0 if d.intrabar else d.candle_tf * 60)
                             or self.kill.exists()
                             or (
                                 self.pair_fence(name, d.tf, d.trigger_tf, -d.label)
@@ -1400,7 +1558,7 @@ class Desk:
                     **d.entry_audit(),
                     **(
                         {
-                            "close_to_submit_ms": round((submit - d.close_s) * 1000, 3),
+                            ("trigger_to_submit_ms" if d.intrabar else "close_to_submit_ms"): round((submit - d.signal_s) * 1000, 3),
                             "order_send_roundtrip_ms": round(call_ms, 3),
                             "submit_utc": utc(submit),
                         }
@@ -1432,6 +1590,7 @@ class Desk:
                     initial_goal_usd=plan.goal_usd,
                     planned_tp_profit_usd=plan.reward_usd,
                     retcode=getattr(res, "retcode", None),
+                    **({"opening_order": getattr(res, "order", None), "fill_volume": getattr(res, "volume", None)} if d.intrabar else {}),
                     price=getattr(res, "price", None),
                     deal=getattr(res, "deal", None),
                 )
@@ -1443,7 +1602,12 @@ class Desk:
                     expected,
                     minute_source=d.active_source if d.trigger_tf == 1 else None,
                     pair_child=d.trigger_tf if d.paired else None,
+                    origin=d.guard() if d.intrabar else None,
                 )
+                # A synchronous send/ack can itself span an uncross. Sample
+                # after enrollment before another leg, including a verified
+                # partial; unknown acknowledgments never authorize a re-send.
+                intact = not d.intrabar or self.verify_signal(name, d, self.mt.symbol_info_tick(name))
                 if ticket is None:
                     return status + "_manual_hold"
                 expected.add(ticket)
@@ -1457,10 +1621,14 @@ class Desk:
                     if self.watch_other_symbols is not None:
                         self.watch_other_symbols(name)
                     return "demo_batch_sent"
+                if not intact:
+                    raise Block("live_cross_or_context_unverified")
+                if d.intrabar and self.watch_other_symbols is not None:
+                    self.watch_other_symbols(name)
         except TimingBlock as exc:
             check = exc.check
             wait = (
-                exc.stage == "first_plan" and n is None and not sent and check.waitable
+                not d.intrabar and exc.stage == "first_plan" and n is None and not sent and check.waitable
             )
             if not wait or window.last_wait_reason != check.reason:
                 self.emit(
@@ -1473,7 +1641,7 @@ class Desk:
                     disposition="wait" if wait else "reject",
                     previous_wait=window.last_wait_reason,
                     **({"trigger_tf": d.candle_tf} if d.paired else {}),
-                    **check.audit(d.candle_tf),
+                    **check.audit(d.candle_tf, live=d if d.intrabar else None),
                 )
             if wait:
                 window.last_wait_reason = check.reason

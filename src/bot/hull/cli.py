@@ -23,7 +23,7 @@ def register(sub):
         modes.add_argument(
             "--paired-confirm",
             action="store_true",
-            help="Use M5/M4, M10/M8, M15/M12 with both structures aligned. Never expands the parent allowlist or arms orders.",
+            help="Use configured parent/trigger pairs with both closed structures aligned; timing comes from YAML. Never expands the parent allowlist or arms orders.",
         )
         modes.add_argument(
             "--m1-confirm",
@@ -68,9 +68,9 @@ def handle(args, cfg, model: RootConfig):
 
     h = model.hull
     if getattr(args, "m1_confirm", False):
-        h = h.model_copy(update={"execution_mode": M1_MODE})
+        h = type(h).model_validate(cfg["hull"] | {"execution_mode": M1_MODE})
     elif getattr(args, "paired_confirm", False):
-        h = h.model_copy(update={"execution_mode": PAIR_MODE})
+        h = type(h).model_validate(cfg["hull"] | {"execution_mode": PAIR_MODE})
     frames = h.lanes(
         ((SIGNAL_TF | PAIR_FRAMES)[args.timeframe],) if args.timeframe else None
     )

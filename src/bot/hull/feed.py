@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from bisect import bisect_right
 from copy import deepcopy
+from datetime import UTC, datetime
 from math import ceil
 
 from bot.broker import DemoSafetyError
@@ -12,7 +13,7 @@ from bot.hull.bar import Bar
 from .config import TF_NAME
 from .curves import LiveTick
 from .entry_clock import CLOCK_SKEW_TOLERANCE_S
-from .m45 import BASE, rates8, rates45
+from .m45 import BASE, DAY, aggregate, rates8, rates45
 from .signal import Hull
 from .structure import InternalStructure, Structure
 
@@ -110,6 +111,10 @@ class Stream:
         self.rebaseline_close = False
         self.history_fence = 0  # never trade a close that predates attachment/recovery
         self.last_label = None
+        self.capture_ends = (
+            set()
+        )  # original candles of live-entry tickets, including on a warm reload
+        self.captured = []
         self.shifts = []  # incremental confirmed exits, independent of Hull labels
         self.observed = {}  # live protective notification and confirmed cross have separate keys
         self.baseline_due = True
@@ -123,6 +128,7 @@ class Stream:
 
     def refresh(self, mt, name, now):
         self.shifts = []
+        self.captured = []
         step = self.tf * 60
         reload = self.h.prev is None or now - self.h.prev.t > step * 4
         rows = rates(
@@ -166,6 +172,8 @@ class Stream:
             # discarded merely because an entry is late, paused or has no Hull cross.
             if not reload and not self.ext and decision.confirmed_mss:
                 self.shifts.append(decision)
+            if decision.close_s in self.capture_ends:
+                self.captured.append(decision)  # exit evidence only; never replay an entry
             if decision.label:
                 self.last_label = decision
             updates += 1
@@ -184,6 +192,53 @@ class Stream:
         ):
             return None, "history_unavailable"
         return decision, "updated" if decision else "unchanged"
+
+    def original_close(self, mt, name, end):
+        """Repair a missing origin close by date, never by the last available bar.
+
+        WMA on either A source and B has finite memory. Rebuild only the price
+        curves, never structure/first-cross state or historical entry decisions.
+        """
+        read = getattr(mt, "copy_rates_from", None)
+        if not read:
+            return None
+        start = end - self.tf * 60
+        # A by-date read may still return index zero at the wall-clock
+        # boundary. Require a published CLOSED broker slot at or beyond it.
+        if self.h.prev is None or self.h.prev.t < start:
+            published = rates(mt, name, self.tf, 1, 1)
+            if published is None or not len(published) or int(published[-1]["time"]) < start:
+                return None
+        n = self.min_bars + 1
+        at = lambda t: datetime.fromtimestamp(t, UTC)
+        if self.tf == 8:
+            base = 240
+            rows = read(name, mt.TIMEFRAME_M4, at(end - base), min(999, n * 2 + 1))
+            if rows is None or not len(rows):
+                return None
+            days = mt.copy_rates_range(
+                name, mt.TIMEFRAME_D1, at(int(rows[0]["time"]) - DAY), at(end - base)
+            )
+            rows = (
+                aggregate(rows, days, base=base, period=480, bars=2, last_key="last_m4")
+                if days is not None
+                else None
+            )
+        else:
+            rows = read(
+                name, getattr(mt, "TIMEFRAME_" + TF_NAME[self.tf]), at(start), n
+            )
+        if rows is None or len(rows) < n or int(rows[-1]["time"]) != start:
+            return None
+        h = Hull(self.tf, self.cfg, self.pip, tick_size=self.tick_size, price_only=True)
+        try:
+            for row in rows[-n:]:
+                r = h.update(candle(row))
+        except (ValueError, KeyError, TypeError, OverflowError):
+            return (
+                None  # never guess the final relation from incomplete or revised data
+            )
+        return r if r.close_s == end else None
 
     def boundary_shifts(self, mt, name, now):
         """An order precheck may run across another lane's close. Inspect just

@@ -19,11 +19,14 @@ from .config import (
     BATCH_ENTRY_POLICY,
     COUNTS,
     EXECUTION_INFO,
+    INTRA_ENTRY,
+    INTRA_QUOTE,
+    INTRA_STOP,
+    INTRABAR,
     LADDER,
     M1_MODE,
     NATIVE_TF,
     PAIR_MODE,
-    PAIRS,
     RETEST,
     RETIRED_LIMITS,
     STOP_SPREAD_POLICY,
@@ -34,6 +37,8 @@ from .curves import LiveTick
 from .desk import Desk, identity_check, resolve
 from .entry_clock import CLOCK_SKEW_TOLERANCE_S, QUOTE_POLICY, WAITING, poll_delay
 from .feed import Stream, StructureTape, sample, verify_before_leg
+from .intrabar_book import IntrabarBook
+from .intrabar_guard import valid_origin
 from .ladder import cash_levels
 from .minute import MinuteBook
 from .orders import Block, Grid, spread_goal
@@ -323,6 +328,9 @@ def run(
         raise ValueError(
             "Paired execution needs native M5/M10/M15 parent structure and structure_timeframe: null"
         )
+    live_pair = h.effective_timing == INTRABAR
+    if live_pair and (not paired or h.entry_route == RETEST):
+        raise ValueError("intrabar_cross requires paired market execution")
     limits_mode = h.entry_route == RETEST
     if limits_mode and not paired:
         raise ValueError("direct_retest_limit requires paired_structure")
@@ -435,22 +443,38 @@ def run(
                     "parent_to_trigger": {
                         TF_NAME[p]: TF_NAME[c] for p, c in pairs.items()
                     },
-                    "structure_alignment": "own_parent_and_trigger_at_trigger_close",
+                    "structure_alignment": "last_closed_parent_and_trigger_at_cross_tick"
+                    if live_pair
+                    else "own_parent_and_trigger_at_trigger_close",
                 }
                 if paired
                 else {}
             ),
-            "entry_policy": EXECUTION_INFO[h.execution_mode][0],
+            "entry_policy": INTRA_ENTRY
+            if live_pair
+            else EXECUTION_INFO[h.execution_mode][0],
             "entry_sessions": sessions.identity(),
             "signal_policy": h.indicator.signal_policy,
             "batch_entry_policy": "single_symbol_highest_qualifying_parent"
             if minute_mode or paired
             else BATCH_ENTRY_POLICY,
-            "entry_timing": h.entry_timing,
-            "entry_quote_policy": QUOTE_POLICY,
-            "new_ticket_stop_policy": EXECUTION_INFO[h.execution_mode][1],
+            "entry_timing": h.effective_timing,
+            "entry_quote_policy": INTRA_QUOTE if live_pair else QUOTE_POLICY,
+            "new_ticket_stop_policy": INTRA_STOP
+            if live_pair
+            else EXECUTION_INFO[h.execution_mode][1],
             "stop_spread_policy": STOP_SPREAD_POLICY,
-            "live_cross_role": "protective_exit_only",
+            "live_cross_role": "paired_market_entry_and_protection"
+            if live_pair
+            else "protective_exit_only",
+            **(
+                {
+                    "origin_cross_exit": "own_source_through_original_close_including_equality",
+                    "same_candle_reentry": "new_edge_after_verified_flat_only",
+                }
+                if live_pair
+                else {}
+            ),
             "opposite_exit": "own_trigger_only_plus_parent_protection"
             if paired
             else "symbol_wide_opposing_m1_for_verified_m1_tickets_plus_parent_protection"
@@ -466,7 +490,9 @@ def run(
                 else {}
             ),
             "choch_entry": "never_standalone",
-            "post_mss_entry": "skip_first_except_failed_counter_mss_return",
+            "post_mss_entry": "first_aligned_cross_allowed"
+            if paired and not h.skip_first_cross_after_mss
+            else "skip_first_except_failed_counter_mss_return",
             "failed_mss_return": "confirmed_MSS_back_to_established_bias_without_counter_BOS; fresh_cross_after_close_only",
             "price_zone_filter": False,
             **source_build(),
@@ -576,6 +602,13 @@ def run(
                             native_history_ready=lane.h.n >= lane.min_bars
                             and asof(active, tf, now),
                         )
+                        if live_pair and tf in pairs.values():
+                            checks[TF_NAME[tf]]["last_confirmed_trigger_swing"] = (
+                                asdict(active.range_swing)
+                                | {"kind": "HL" if active.bias == 1 else "LH"}
+                                if active.range_swing
+                                else None
+                            )
                         if not asof(active, tf, now):
                             issues.append(
                                 f"{name} {TF_NAME[tf]}: no current closed structure bar"
@@ -696,8 +729,9 @@ def run(
                 records = state.setdefault("pair_parent_first_cross", {}).setdefault(
                     policy_key, {}
                 )
+                book_type = IntrabarBook if live_pair else PairBook
                 trigger_books = {
-                    name: PairBook(
+                    name: book_type(
                         frames,
                         lanes,
                         records.setdefault(name, {}),
@@ -770,6 +804,17 @@ def run(
                             "Unverified Hull ticket identity; do not switch managers while open"
                         )
                     child = (origin or {}).get("trigger_tf")
+                    if (
+                        origin
+                        and "intrabar_origin" in origin
+                        and not valid_origin(
+                            origin["intrabar_origin"],
+                            child,
+                            1 if pos.type == mt.POSITION_TYPE_BUY else -1,
+                            origin["opened_msc"],
+                        )
+                    ):
+                        raise DemoSafetyError("Open intrabar-origin ticket has unverified cross identity; reconcile before changing managers while open")
                     covered = (
                         pos.magic == h.magic
                         and pos.symbol in syms
@@ -789,6 +834,7 @@ def run(
                         and covered
                         and pairs.get(origin["tf"]) == child
                         and origin.get("pair_policy_key") == policy_key
+                        and (not origin.get("intrabar_origin") or live_pair)
                     ):
                         raise DemoSafetyError(
                             "Open paired-origin ticket needs its original symbol, parent/trigger and indicator settings; do not change managers while open"

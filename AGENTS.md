@@ -2,13 +2,13 @@
 
 **Entry route:** market orders remain the default. For paired candle-relative BUY/SELL limits, use the [direct retest guide](docs/HULL_RETEST.md). Changes and tests do not authorize arming.
 
-**Active Python desk:** [paired entries, child exits and private-YAML migration](docs/HULL_PAIRS.md). M5 → M3, M10 → M5, M15 → M10. No M1 trigger; M30/M45 are historical/study frames, not active parents. [Previous M1 release](docs/HULL_M1.md).
+**Active Python desk:** [intrabar market entries, trigger swing stops and private-YAML timing](docs/HULL_INTRABAR.md). M5 → M3, M10 → M5, M15 → M10. No M1 trigger; M30/M45 are historical/study frames, not active parents. [Previous M1 release](docs/HULL_M1.md).
 
 **Wickless is a separate bot:** for `WICKLESS OBSERVE`, use the pasted Wickless JSON and the [Wickless operator guide](docs/WICKLESS.md), not Hull profiles, tickets or commands. Ordinary setup, implementation and test requests never send orders.
 
-**Dynamic Hull:** authorize only the selected parents from `[M5, M10, M15]`. Each uses its own fixed trigger and both charts’ closed structure. At most one batch per symbol; same-close same-side ties go to the highest qualifying parent; opposing eligible pairs skip. A timeframe approval does not authorize arming. `structure_timeframe: null`. A confirmed parent MSS closes only that parent’s verified tickets.
+**Dynamic Hull:** authorize only the selected parents from `[M5, M10, M15]`. Each uses its own fixed trigger and both charts’ closed structure. At most one batch per symbol; same-tick same-side ties go to the highest qualifying parent; opposing eligible pairs skip. A timeframe approval does not authorize arming. `structure_timeframe: null`. A confirmed parent MSS closes only that parent’s verified tickets.
 
-**Hull first-cross rule:** skip an ordinary first aligned cross. Waive the skip only on a confirmed return to the lane's established direction if the intervening counter-MSS leg never made a continuation BOS. Require a fresh **confirmed** cross after the return close; no time limit, no counter-leg trade prerequisite. No change to immediate MSS exits, sessions, Wickless or chart-study rules.
+**Hull first-cross rule:** skip an ordinary first aligned cross. Waive the skip only on a confirmed return to the lane's established direction if the intervening counter-MSS leg never made a continuation BOS. Require a fresh aligned cross after the confirmed return close; no time limit, no counter-leg trade prerequisite. No change to immediate MSS exits, sessions, Wickless or chart-study rules.
 
 **Mandatory entry hours (both Python bots):** use the [shared instrument schedule](docs/ENTRY_SESSIONS.md), not the chart statistics buckets or a global killzone. Validate exact broker names; check `entry_sessions.version`, `sha256` and each symbol’s `entry_session` in preflight. A normally closed window is not a reason to widen hours. An unmapped symbol cannot enter. Never disable protection, arm a scanner or change selections to test this filter.
 
@@ -63,7 +63,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Invalid config. Do not arm.' }
 if ($LASTEXITCODE -ne 0) { throw 'Preflight failed. Do not arm.' }
 ```
 
-Verify the demo account, trading permissions, symbols, batch sizes, history on the approved timeframes, positions/orders and `review_before_demo`. Look for `new_ticket_target_policy: base_plus_entry_spread_v1`; each symbol’s `target_preview_by_side` shows the indicative BUY and SELL goals on the current quote. Verify `timeframes: [M5, M10, M15]` (or the selected subset), the correct `parent_to_trigger` mapping, `pair_history_ready: true`, `mss_exit: flatten_own_lane_on_confirmed_shift`, `batch_entry_policy: single_symbol_highest_qualifying_parent`, `entry_policy: closed_pair_structure_cross_v1`, `entry_timing: confirmed_cross_next_bar`, `new_ticket_stop_policy: confirmed_pair_trigger_candle_wick_v1`, `stop_spread_policy: sell_ask_entry_only_exact_risk_v2`, and `choch_entry: never_standalone`. Do **not** arm with an unexplained warning.
+Verify the demo account, trading permissions, symbols, batch sizes, history on the approved timeframes, positions/orders and `review_before_demo`. Look for `new_ticket_target_policy: base_plus_entry_spread_v1`; each symbol’s `target_preview_by_side` shows the indicative BUY and SELL goals on the current quote. Verify `timeframes: [M5, M10, M15]` (or the selected subset), the correct `parent_to_trigger` mapping, `pair_history_ready: true`, `mss_exit: flatten_own_lane_on_confirmed_shift`, `batch_entry_policy: single_symbol_highest_qualifying_parent`, `entry_policy: intrabar_pair_structure_cross_v1`, `entry_timing: intrabar_cross`, `new_ticket_stop_policy: confirmed_trigger_range_hl_lh_v1`, `stop_spread_policy: sell_ask_entry_only_exact_risk_v2`, and `choch_entry: never_standalone`. Do **not** arm with an unexplained warning.
 
 Want to watch first? Run `& $py -m bot.cli trade-all --config $cfg --paired-confirm @profiles` **without** the arm flag. It must say `READ ONLY`. Stop **that observer** with Ctrl+C before step 4. If the account or profiles change, repeat preflight.
 
@@ -126,7 +126,7 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" 
    if (-not (Test-Path .\config.demo.local.yaml)) { Copy-Item .\config.yaml .\config.demo.local.yaml }
    notepad .\config.demo.local.yaml
    ```
-   In its **existing `run:` section**, set `mode: demo`. In `hull` set `execution_mode: paired_structure`, `entry_timing: confirmed_cross_next_bar` and verify `eligible_timeframes: [M5, M10, M15]`; in `hull.indicator` set `stop: cross_candle` and verify `hull_len: 16`, `source: dynamic`, `structure_timeframe: null`, `exit_opposite: true` and `exit_on_mss: true`. Save the private copy; do not guess the timeframe of legacy tickets or erase state. Leave the tracked `config.yaml` in `paper` mode. Go to [A](#a-start-the-demo-manually).
+   In its **existing `run:` section**, set `mode: demo`. In `hull` set `execution_mode: paired_structure`, `entry_timing: intrabar_cross` and verify `eligible_timeframes: [M5, M10, M15]`; in `hull.indicator` set `stop: cross_candle` and verify `hull_len: 16`, `source: dynamic`, `structure_timeframe: null`, `exit_opposite: true` and `exit_on_mss: true`. Save the private copy; do not guess the timeframe of legacy tickets or erase state. Leave the tracked `config.yaml` in `paper` mode. Go to [A](#a-start-the-demo-manually).
 
 ## When does the signal appear?
 

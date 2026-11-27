@@ -1,6 +1,6 @@
 # Hull Ledger | Analytics edition · Windows quick start
 
-**Active Python desk:** [paired entries, child exits and private-YAML migration](../docs/HULL_PAIRS.md). The journal recognizes both generations of paired ticket tags (see below), not a list of authorized lanes. No M1 trigger in paired mode; M30/M45 are historical/study frames, not active parents. [Previous M1 release](../docs/HULL_M1.md).
+**Active Python desk:** [intrabar market entries, trigger swing stops and private-YAML timing](../docs/HULL_INTRABAR.md). The journal recognizes both generations of paired ticket tags (see below), not a list of authorized lanes. No M1 trigger in paired mode; M30/M45 are historical/study frames, not active parents. [Previous M1 release](../docs/HULL_M1.md).
 
 A read-only journal for the Hull bot’s **actual MT5 hedging-demo fills**. It does not send orders, subscribe to TradingView, change the scanner, or require a cloud/database account. A BUY arrow, shadow plan or attempted order is never a trade in this ledger.
 
@@ -34,6 +34,10 @@ py -3 .\journal.py --open-browser
 **Timezone support:** If your existing Windows environment lacks IANA rules, install `tzdata` in that interpreter (e.g. `& $python -m pip install tzdata`). If unavailable the reporter still journals cash and writes `Timezone data unavailable`; the dashboard can derive sessions from UTC using the browser’s timezone database. It never substitutes a guessed fixed London/New York offset.
 
 `--repo` is optional: it only reads the account-specific `reports/hull_runtime/<account-key>/demo.jsonl`. Without it, intact Hull entry comments supply the timeframe/leg. Extra log details, such as an initial requested SL/TP and the market-structure setup, may be blank. No account credentials go in the code or the CSV. With multiple terminals, pass `--terminal-path 'C:\…\terminal64.exe'` for the actual installation. Use `--magic` if you changed the default Hull entry magic **26111825**; do not reuse a magic shared with other strategies.
+
+## Intrabar paired market fills
+
+`q<parent>x<child>_<trigger-ms>_<leg>` is an intrabar paired market fill group, not a closed cross or a retest. `entry_timing: intrabar_pair_cross` distinguishes it from older `i…` trades. Verified rows show the originating tick, source, confirmed trigger swing and confirmation time, frozen raw swing SL and actual broker request. A recross millisecond is a distinct setup, even in the same candle. The journal does not manufacture a signal close or a wick. Keep the existing checkpoint.
 
 ## Direct-retest fills
 

@@ -2,21 +2,23 @@
 
 **Entry route:** market orders remain the default. For paired candle-relative BUY/SELL limits, use the [direct retest guide](HULL_RETEST.md). Changes and tests do not authorize arming.
 
-**Active Python desk:** [paired entries, child exits and private-YAML migration](HULL_PAIRS.md). M5 → M3, M10 → M5, M15 → M10. No M1 trigger; M30/M45 are historical/study frames, not active parents. [Previous M1 release](HULL_M1.md).
+**Active Python desk:** [intrabar market entries, trigger swing stops and private-YAML timing](HULL_INTRABAR.md). M5 → M3, M10 → M5, M15 → M10. No M1 trigger; M30/M45 are historical/study frames, not active parents. [Previous M1 release](HULL_M1.md).
 
 `trade`, `demo` and `trade-all` run the Python companion for Windows MT5 Desktop, not an Expert Advisor. No webhook or database is required. The template selects M5/M10/M15 as parents; M3/M5/M10 supply their respective triggers. The descriptions of historical parent-close trades are not an extra source of entries. Install only when flat, with no unresolved exposure or running manager to interrupt.
 
 ## What triggers an entry?
 
-Use the [exact paired rules and migration](HULL_PAIRS.md). Require the completed trigger cross, its own structure and its own parent’s structure to agree. One batch per symbol; no M1 or parent-close adds. A verified opposite child cross protects its own parent/child tickets; the parent retains its protective opposite cross and MSS. No price-zone or additional BOS requirement. Market hours, spread, quote freshness, risk, funding and broker checks still apply.
+The shipped paired market clock uses the [intrabar rules](HULL_INTRABAR.md): a fresh trigger cross, both confirmed structures aligned and a confirmed trigger-range HL/LH. Opposite and originating-cross invalidation are independent exits. Market hours, spread, quote freshness, risk, funding and broker checks still apply.
 
-## How to read an entry timeline
+## Historical / explicit confirmed-close timing and stop
+
+The next two sections describe `confirmed_cross_next_bar`, **not** the shipped intrabar market route. Use them to interpret closed and retest receipts. For `q…` market receipts see [intrabar audit](HULL_INTRABAR.md#audit-and-limits).
 
 **Entries: close → next candle.** `closed_label` records the completed native cross; `trigger_msc` is its close, not the fill. For example, an M15-owned BUY on the 10:00–10:10 M10 candle can be submitted on the first usable quote observed at or after 10:10:00 in the immediate successor candle. The executable BUY opens at ask, SELL at bid. This is **not** a guaranteed opening price, and it does **not** wait for the *next* candle to close. The shipped timing budget is 8 seconds after signal close and 4 seconds for quote age. A missing/pre-close/stale first quote may wait briefly within that original deadline; an out-of-window, unsafe or expired opportunity is not carried forward.
 
 `pair_trigger_exit_signal` records a verified trigger cross as `phase: live` or `closed`, with its owning parent and trigger. A live cross is exit-only. It can close opposing owned tickets but never open an order, reserve the next candle, spend the MSS skip or suppress a separately confirmed close. A cross that disappears by the close produces **no entry**. An MSS still flattens its own lane. Inspect `label_decision.outcome`; an exit request or an entry setup is not a broker fill.
 
-## Which candle supplies the stop?
+## Which candle supplies the closed-mode stop?
 
 **Use the completed candle on which the Hull crossed, on the same symbol and timeframe.** Never use the entry candle's developing wick, the earlier seven-bar pullback or a previous swing. For historical parent-close M45 trades the wick is the extreme of **all three** consecutive M15 components, not just the third. Each new ticket carries the initial SL and TP in the opening request.
 
